@@ -1,0 +1,36 @@
+{
+  "name": "backend_hnalms",
+  "version": "1.0.0",
+  "description": "Backend of Hoang Nam Apartment Lease Management System (HNALMS), developed with Node.js (ExpressJS) and MongoDB, supporting web and mobile applications.",
+  "main": "index.js",
+  "scripts": {
+    "start": "nodemon server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/QuangZuy11/Backend_HNALMS.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/QuangZuy11/Backend_HNALMS/issues"
+  },
+  "homepage": "https://github.com/QuangZuy11/Backend_HNALMS#readme",
+  "dependencies": {
+    "body-parser": "^2.2.2",
+    "dotenv": "^17.2.3",
+    "ejs": "^4.0.1",
+    "express": "^5.2.1",
+    "express-handlebars": "^8.0.3",
+    "http": "^0.0.1-security",
+    "http-errors": "^2.0.1",
+    "mongodb": "^7.0.0",
+    "mongoose": "^9.1.4",
+    "morgan": "^1.10.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.11"
+  }
+}
