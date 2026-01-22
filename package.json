@@ -19,6 +19,7 @@
   },
   "homepage": "https://github.com/QuangZuy11/Backend_HNALMS#readme",
   "dependencies": {
+    "bcryptjs": "^3.0.3",
     "body-parser": "^2.2.2",
     "dotenv": "^17.2.3",
     "ejs": "^4.0.1",
@@ -26,8 +27,9 @@
     "express-handlebars": "^8.0.3",
     "http": "^0.0.1-security",
     "http-errors": "^2.0.1",
+    "jsonwebtoken": "^9.0.3",
     "mongodb": "^7.0.0",
-    "mongoose": "^9.1.4",
+    "mongoose": "^9.1.5",
     "morgan": "^1.10.1"
   },
   "devDependencies": {

@@ -2,6 +2,7 @@ const express = require("express");
 const db = require("../models");
 
 const ApiRouter = express.Router();
+const authRoutes = require("../../modules/authentication/routes/auth.routes");
 
 // Health check
 ApiRouter.get("/health", (req, res) => {
@@ -32,8 +33,7 @@ ApiRouter.get("/users", async (req, res) => {
     }
 });
 
-// TODO: Import và mount các routes từ modules
-// const authRoutes = require("../modules/authentication/routes/auth.routes");
-// ApiRouter.use("/auth", authRoutes);
+//login
+ApiRouter.use("/auth", authRoutes);
 
 module.exports = ApiRouter;
