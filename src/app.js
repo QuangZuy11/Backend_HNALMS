@@ -1,6 +1,7 @@
 const express = require('express');
 const bodyParser = require("body-parser");
 const morgan = require("morgan");
+const cors = require("cors");
 require("dotenv").config();
 
 const connectDB = require("./shared/config/database");
@@ -8,6 +9,14 @@ const db = require("./shared/models/index");
 const ApiRouter = require("./shared/routes/api.routes");
 
 const app = express();
+
+// CORS Configuration
+app.use(cors({
+    origin: ['http://localhost:5173', 'http://localhost:3000'], // Frontend URLs
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
 // Middlewares
 app.use(bodyParser.json());

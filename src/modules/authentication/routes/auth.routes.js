@@ -1,12 +1,27 @@
-// Routes: POST /register, /login, /logout, /forgot-password, /change-password
-const  express = require("express");
+const express = require("express");
 const router = express.Router();
 const authController = require("../controllers/auth.controller");
+const { authenticate } = require("../middlewares");
+const { validateRegister, validateLogin, validateChangePassword, validateForgotPassword } = require("../validators/auth.validator");
 
+// Public routes (không cần authentication)
 // Register route - Đăng ký tài khoản mới
-router.post("/register", authController.register);
+router.post("/register", validateRegister, authController.register);
 
 // Login route - Đăng nhập
-router.post("/login", authController.login);
+router.post("/login", validateLogin, authController.login);
+
+// Forgot password route - Quên mật khẩu
+router.post("/forgot-password", validateForgotPassword, authController.forgotPassword);
+
+// Protected routes (require authentication)
+// Get current user profile
+router.get("/me", authenticate, authController.getProfile);
+
+// Change password
+router.post("/change-password", authenticate, validateChangePassword, authController.changePassword);
+
+// Logout
+router.post("/logout", authenticate, authController.logout);
 
 module.exports = router;
