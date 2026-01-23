@@ -1,23 +1,4 @@
-/**
- * Middleware kiểm tra quyền theo role
- * Phải sử dụng sau middleware authenticate
- * 
- * Roles trong hệ thống:
- * - admin: Quản trị viên hệ thống (toàn quyền)
- * - manager: Quản lý tòa nhà (quản lý phòng, hợp đồng, hóa đơn)
- * - owner: Chủ căn hộ (xem thông tin căn hộ, doanh thu)
- * - tenant: Người thuê (xem phòng, thanh toán hóa đơn, gửi yêu cầu)
- * 
- * Usage:
- * // Chỉ admin được truy cập
- * router.delete('/users/:id', authenticate, authorize('admin'), controller.deleteUser);
- * 
- * // Admin và manager được truy cập
- * router.get('/reports', authenticate, authorize('admin', 'manager'), controller.getReports);
- * 
- * // Tất cả role đã đăng nhập
- * router.get('/profile', authenticate, authorize('admin', 'manager', 'owner', 'tenant'), controller.getProfile);
- */
+
 
 /**
  * Tạo middleware authorize với các role được phép

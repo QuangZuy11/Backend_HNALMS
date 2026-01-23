@@ -35,7 +35,7 @@ const registerUser = async (userData) => {
     fullname,
     email,
     password: hashedPassword,
-    role: role || "tenant", // Default role is tenant
+    role: role || "tenant", 
     status: "active"
   });
 
