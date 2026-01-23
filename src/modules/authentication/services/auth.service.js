@@ -35,7 +35,7 @@ const registerUser = async (userData) => {
     fullname,
     email,
     password: hashedPassword,
-    role: role || "tenant", 
+    role: role || "tenant",
     status: "active"
   });
 
@@ -69,18 +69,18 @@ const loginUser = async (email, password) => {
   // Find user by email
   const user = await User.findOne({ email });
   if (!user) {
-    throw new Error("Email or password is incorrect");
+    throw new Error("Email hoặc mật khẩu không chính xác");
   }
 
   // Check account status
   if (user.status !== "active") {
-    throw new Error("Account is not active");
+    throw new Error("Tài khoản chưa được kích hoạt");
   }
 
   // Compare password
   const isMatch = await bcrypt.compare(password, user.password);
   if (!isMatch) {
-    throw new Error("Email or password is incorrect");
+    throw new Error("Email hoặc mật khẩu không chính xác");
   }
 
   // Generate JWT token
