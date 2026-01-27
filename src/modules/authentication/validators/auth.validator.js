@@ -204,7 +204,7 @@ const validateForgotPassword = (req, res, next) => {
  * Middleware to validate update profile input
  */
 const validateUpdateProfile = (req, res, next) => {
-  const { fullname, citizen_id, permanent_address, dob, gender } = req.body;
+  const { fullname, citizen_id, permanent_address, dob, gender, phone } = req.body;
 
   // Validate fullname if provided
   if (fullname !== undefined && fullname !== null && fullname.trim().length < 2) {
@@ -237,6 +237,17 @@ const validateUpdateProfile = (req, res, next) => {
       return res.status(400).json({
         success: false,
         message: "Ngày sinh không hợp lệ"
+      });
+    }
+  }
+
+  // Validate phone if provided (đơn giản, giống logic trên frontend)
+  if (phone !== undefined && phone !== null) {
+    const phoneTrimmed = String(phone).trim();
+    if (phoneTrimmed && !/^0\d{9,10}$/.test(phoneTrimmed)) {
+      return res.status(400).json({
+        success: false,
+        message: "Số điện thoại không hợp lệ (bắt đầu bằng 0 và có 10–11 số)"
       });
     }
   }
