@@ -101,6 +101,9 @@ const loginUser = async (email, password) => {
     );
   }
 
+  // Lấy thông tin UserInfo (nếu có) để trả thêm fullname, phone, ...
+  const userInfo = await UserInfo.findOne({ user: user._id });
+
   // Generate JWT token
   const token = generateToken({
     userId: user.user_id,
@@ -120,7 +123,13 @@ const loginUser = async (email, password) => {
       role: user.role,
       isactive: user.isactive,
       create_at: user.create_at,
-    },
+      fullname: userInfo?.fullname || null,
+      citizen_id: userInfo?.citizen_id || null,
+      permanent_address: userInfo?.permanent_address || null,
+      dob: userInfo?.dob || null,
+      gender: userInfo?.gender || null,
+      phone: userInfo?.phone || null
+    }
   };
 };
 
@@ -167,6 +176,7 @@ const getUserProfile = async (userId) => {
     permanent_address: userInfo?.permanent_address || null,
     dob: userInfo?.dob || null,
     gender: userInfo?.gender || null,
+    phone: userInfo?.phone || null
   };
 };
 
@@ -211,6 +221,7 @@ const updateProfile = async (userId, profileData) => {
     permanent_address: userInfo.permanent_address || null,
     dob: userInfo.dob || null,
     gender: userInfo.gender || null,
+    phone: userInfo.phone || null
   };
 };
 

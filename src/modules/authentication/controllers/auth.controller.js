@@ -119,7 +119,7 @@ exports.getProfile = async (req, res) => {
  */
 exports.updateProfile = async (req, res) => {
   try {
-    const { fullname, citizen_id, permanent_address, dob, gender } = req.body;
+    const { fullname, citizen_id, permanent_address, dob, gender, phone } = req.body;
 
     // Call service to update profile
     const updatedProfile = await authService.updateProfile(req.user.userId, {
@@ -127,7 +127,8 @@ exports.updateProfile = async (req, res) => {
       citizen_id,
       permanent_address,
       dob: dob ? new Date(dob) : null,
-      gender
+      gender,
+      phone
     });
 
     res.json({
