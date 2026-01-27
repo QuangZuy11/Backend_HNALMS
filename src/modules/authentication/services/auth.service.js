@@ -69,6 +69,14 @@ const loginUser = async (email, password) => {
     throw new Error("Email hoặc mật khẩu không chính xác");
   }
 
+  console.log("🔍 Login Service - User found:", {
+    _id: user._id,
+    user_id: user.user_id,
+    email: user.email,
+    role: user.role,
+    isactive: user.isactive
+  });
+
   // Check account status (ERD: isactive)
   if (!user.isactive) {
     throw new Error("Tài khoản chưa được kích hoạt");
@@ -85,10 +93,16 @@ const loginUser = async (email, password) => {
     const mongoose = require("mongoose");
     user.user_id = new mongoose.Types.ObjectId().toString();
     await user.save();
+    console.log("🔍 Login Service - Created new user_id for existing user:", user.user_id);
   }
 
   // Generate JWT token
   const token = generateToken({
+    userId: user.user_id,
+    role: user.role
+  });
+
+  console.log("🔍 Login Service - Generated token with payload:", {
     userId: user.user_id,
     role: user.role
   });
