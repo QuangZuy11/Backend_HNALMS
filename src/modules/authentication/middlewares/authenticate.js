@@ -5,7 +5,7 @@ const User = require("../models/user.model");
  * Middleware kiểm tra token hợp lệ
  * Xác thực JWT token từ header Authorization
  * Gắn thông tin user vào req.user nếu token hợp lệ
- * 
+ *
  * Usage:
  * router.get('/protected', authenticate, controller.method);
  */
@@ -13,11 +13,11 @@ const authenticate = async (req, res, next) => {
   try {
     // 1. Lấy token từ header Authorization
     const authHeader = req.headers.authorization;
-    
+
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
       return res.status(401).json({
         success: false,
-        message: "No token provided. Please login to access this resource"
+        message: "No token provided. Please login to access this resource",
       });
     }
 
@@ -30,7 +30,7 @@ const authenticate = async (req, res, next) => {
       userId: decoded.userId,
       role: decoded.role,
       iat: decoded.iat,
-      exp: decoded.exp
+      exp: decoded.exp,
     });
 
     // 4. Kiểm tra user còn tồn tại trong database
@@ -38,21 +38,27 @@ const authenticate = async (req, res, next) => {
     // Cần tìm user bằng cả hai cách
     let user = null;
     const mongoose = require("mongoose");
-    
+
     if (!decoded.userId) {
       return res.status(401).json({
         success: false,
-        message: "Invalid token: missing userId"
+        message: "Invalid token: missing userId",
       });
     }
-    
+
     const searchUserId = String(decoded.userId).trim();
-    console.log("🔍 Auth Middleware - Searching for user with userId:", searchUserId);
-    
+    console.log(
+      "🔍 Auth Middleware - Searching for user with userId:",
+      searchUserId,
+    );
+
     // Strategy 1: Tìm bằng user_id (string) - cho token mới
     user = await User.findOne({ user_id: searchUserId }).select("-password");
-    console.log("🔍 Auth Middleware - Strategy 1 (user_id field) result:", user ? "FOUND" : "NOT FOUND");
-    
+    console.log(
+      "🔍 Auth Middleware - Strategy 1 (user_id field) result:",
+      user ? "FOUND" : "NOT FOUND",
+    );
+
     // Strategy 2: Tìm bằng _id (ObjectId) - cho token cũ
     if (!user) {
       console.log("🔍 Auth Middleware - Trying Strategy 2 (_id field)...");
@@ -60,26 +66,40 @@ const authenticate = async (req, res, next) => {
         if (mongoose.Types.ObjectId.isValid(searchUserId)) {
           // Thử tìm bằng findById
           user = await User.findById(searchUserId).select("-password");
-          console.log("🔍 Auth Middleware - Strategy 2a (findById) result:", user ? "FOUND" : "NOT FOUND");
-          
+          console.log(
+            "🔍 Auth Middleware - Strategy 2a (findById) result:",
+            user ? "FOUND" : "NOT FOUND",
+          );
+
           // Nếu không tìm thấy, thử tìm bằng findOne với _id
           if (!user) {
-            user = await User.findOne({ _id: new mongoose.Types.ObjectId(searchUserId) }).select("-password");
-            console.log("🔍 Auth Middleware - Strategy 2b (findOne with ObjectId) result:", user ? "FOUND" : "NOT FOUND");
+            user = await User.findOne({
+              _id: new mongoose.Types.ObjectId(searchUserId),
+            }).select("-password");
+            console.log(
+              "🔍 Auth Middleware - Strategy 2b (findOne with ObjectId) result:",
+              user ? "FOUND" : "NOT FOUND",
+            );
           }
-          
+
           // Nếu vẫn không tìm thấy, tìm tất cả và so sánh thủ công
           if (!user) {
             const allUsers = await User.find({}).select("-password");
-            console.log("🔍 Auth Middleware - Strategy 2c: Checking all users manually. Total users:", allUsers.length);
-            user = allUsers.find(u => {
+            console.log(
+              "🔍 Auth Middleware - Strategy 2c: Checking all users manually. Total users:",
+              allUsers.length,
+            );
+            user = allUsers.find((u) => {
               const userIdStr = String(u._id);
               const userIdHex = u._id.toString();
               return userIdStr === searchUserId || userIdHex === searchUserId;
             });
-            console.log("🔍 Auth Middleware - Strategy 2c result:", user ? "FOUND" : "NOT FOUND");
+            console.log(
+              "🔍 Auth Middleware - Strategy 2c result:",
+              user ? "FOUND" : "NOT FOUND",
+            );
           }
-          
+
           // Đảm bảo user có user_id (nếu chưa có thì tạo)
           if (user && !user.user_id) {
             user.user_id = new mongoose.Types.ObjectId().toString();
@@ -87,29 +107,37 @@ const authenticate = async (req, res, next) => {
           }
         }
       } catch (err) {
-        console.error("Auth middleware - Error trying to find user by _id:", err);
+        console.error(
+          "Auth middleware - Error trying to find user by _id:",
+          err,
+        );
       }
     }
-    
+
     // Strategy 3: Fallback - tìm tất cả users và match thủ công
     if (!user) {
-      console.log("🔍 Auth Middleware - Trying Strategy 3 (fallback search)...");
+      console.log(
+        "🔍 Auth Middleware - Trying Strategy 3 (fallback search)...",
+      );
       try {
         const allUsers = await User.find({}).select("-password");
-        console.log("🔍 Auth Middleware - Total users in database:", allUsers.length);
-        
+        console.log(
+          "🔍 Auth Middleware - Total users in database:",
+          allUsers.length,
+        );
+
         // Log để debug
         if (allUsers.length > 0) {
           console.log("🔍 Auth Middleware - Sample user structure:", {
             _id: allUsers[0]._id,
             user_id: allUsers[0].user_id,
             email: allUsers[0].email,
-            role: allUsers[0].role
+            role: allUsers[0].role,
           });
         }
-        
+
         // Tìm user bằng cách so sánh _id.toString() hoặc user_id
-        user = allUsers.find(u => {
+        user = allUsers.find((u) => {
           const matchById = u._id && String(u._id.toString()) === searchUserId;
           const matchByUserId = u.user_id && String(u.user_id) === searchUserId;
           if (matchById || matchByUserId) {
@@ -118,12 +146,12 @@ const authenticate = async (req, res, next) => {
               user_id: u.user_id,
               email: u.email,
               matchById,
-              matchByUserId
+              matchByUserId,
             });
           }
           return matchById || matchByUserId;
         });
-        
+
         // Đảm bảo user có user_id
         if (user && !user.user_id) {
           user.user_id = new mongoose.Types.ObjectId().toString();
@@ -133,32 +161,32 @@ const authenticate = async (req, res, next) => {
         console.error("Auth middleware - Error in fallback user search:", err);
       }
     }
-    
+
     if (!user) {
       console.log("❌ Auth Middleware - User NOT FOUND after all strategies");
       console.log("❌ Auth Middleware - Debug info:", {
         searchUserId,
         decodedUserId: decoded.userId,
-        decodedRole: decoded.role
+        decodedRole: decoded.role,
       });
       return res.status(401).json({
         success: false,
-        message: "User not found. Token is invalid"
+        message: "User not found. Token is invalid",
       });
     }
-    
+
     console.log("✅ Auth Middleware - User found successfully:", {
       user_id: user.user_id,
       email: user.email,
       role: user.role,
-      isactive: user.isactive
+      isactive: user.isactive,
     });
 
     // 5. Kiểm tra trạng thái tài khoản (ERD: isactive)
     if (!user.isactive) {
       return res.status(403).json({
         success: false,
-        message: "Account is not active. Please contact administrator"
+        message: "Account is not active. Please contact administrator",
       });
     }
 
@@ -166,27 +194,26 @@ const authenticate = async (req, res, next) => {
     req.user = {
       userId: user.user_id,
       role: user.role,
-      email: user.email
+      email: user.email,
     };
 
     // 7. Cho phép request tiếp tục
     next();
-
   } catch (error) {
     console.error("Authentication error:", error);
-    
+
     // Xử lý lỗi token
     if (error.message.includes("token")) {
       return res.status(401).json({
         success: false,
-        message: "Invalid or expired token. Please login again"
+        message: "Invalid or expired token. Please login again",
       });
     }
 
     // Lỗi server
     res.status(500).json({
       success: false,
-      message: "Authentication failed. Server error"
+      message: "Authentication failed. Server error",
     });
   }
 };
@@ -195,7 +222,7 @@ const authenticate = async (req, res, next) => {
  * Optional authentication - không bắt buộc phải có token
  * Nếu có token hợp lệ thì gắn user vào req.user
  * Nếu không có token hoặc token không hợp lệ thì vẫn cho phép request tiếp tục
- * 
+ *
  * Usage:
  * router.get('/public', optionalAuth, controller.method);
  * // Trong controller có thể check: if (req.user) { ... }
@@ -203,7 +230,7 @@ const authenticate = async (req, res, next) => {
 const optionalAuth = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
-    
+
     // Không có token -> cho phép tiếp tục
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
       return next();
@@ -212,19 +239,20 @@ const optionalAuth = async (req, res, next) => {
     const token = authHeader.substring(7);
     const decoded = verifyToken(token);
 
-    const user = await User.findOne({ user_id: decoded.userId }).select("-password");
-    
+    const user = await User.findOne({ user_id: decoded.userId }).select(
+      "-password",
+    );
+
     // Chỉ gắn user nếu tìm thấy và active
     if (user && user.isactive) {
       req.user = {
         userId: user.user_id,
         role: user.role,
-        email: user.email
+        email: user.email,
       };
     }
 
     next();
-
   } catch (error) {
     // Có lỗi nhưng vẫn cho phép request tiếp tục (optional auth)
     next();
@@ -233,5 +261,5 @@ const optionalAuth = async (req, res, next) => {
 
 module.exports = {
   authenticate,
-  optionalAuth
+  optionalAuth,
 };

@@ -12,7 +12,9 @@ const registerUser = async (userData) => {
   const { email, password, role } = userData;
 
   // Check if user already exists
-  const existingUser = await User.findOne({ email: String(email).toLowerCase() });
+  const existingUser = await User.findOne({
+    email: String(email).toLowerCase(),
+  });
   if (existingUser) {
     throw new Error("Email already exists");
   }
@@ -28,7 +30,7 @@ const registerUser = async (userData) => {
     password: hashedPassword,
     role: role || "tenant",
     isactive: true,
-    create_at: new Date()
+    create_at: new Date(),
   });
 
   await newUser.save();
@@ -41,7 +43,7 @@ const registerUser = async (userData) => {
   // Generate JWT token
   const token = generateToken({
     userId: newUser.user_id,
-    role: newUser.role
+    role: newUser.role,
   });
 
   return {
@@ -51,8 +53,8 @@ const registerUser = async (userData) => {
       email: newUser.email,
       role: newUser.role,
       isactive: newUser.isactive,
-      create_at: newUser.create_at
-    }
+      create_at: newUser.create_at,
+    },
   };
 };
 
@@ -74,7 +76,7 @@ const loginUser = async (email, password) => {
     user_id: user.user_id,
     email: user.email,
     role: user.role,
-    isactive: user.isactive
+    isactive: user.isactive,
   });
 
   // Check account status (ERD: isactive)
@@ -93,18 +95,21 @@ const loginUser = async (email, password) => {
     const mongoose = require("mongoose");
     user.user_id = new mongoose.Types.ObjectId().toString();
     await user.save();
-    console.log("🔍 Login Service - Created new user_id for existing user:", user.user_id);
+    console.log(
+      "🔍 Login Service - Created new user_id for existing user:",
+      user.user_id,
+    );
   }
 
   // Generate JWT token
   const token = generateToken({
     userId: user.user_id,
-    role: user.role
+    role: user.role,
   });
 
   console.log("🔍 Login Service - Generated token with payload:", {
     userId: user.user_id,
-    role: user.role
+    role: user.role,
   });
 
   return {
@@ -114,8 +119,8 @@ const loginUser = async (email, password) => {
       email: user.email,
       role: user.role,
       isactive: user.isactive,
-      create_at: user.create_at
-    }
+      create_at: user.create_at,
+    },
   };
 };
 
@@ -155,13 +160,13 @@ const getUserProfile = async (userId) => {
     role: user.role,
     isactive: user.isactive,
     create_at: user.create_at,
-    
+
     // Từ UserInfo model (có thể null nếu chưa tạo UserInfo)
     fullname: userInfo?.fullname || null,
     citizen_id: userInfo?.citizen_id || null,
     permanent_address: userInfo?.permanent_address || null,
     dob: userInfo?.dob || null,
-    gender: userInfo?.gender || null
+    gender: userInfo?.gender || null,
   };
 };
 
@@ -185,7 +190,7 @@ const updateProfile = async (userId, profileData) => {
     // Nếu chưa có UserInfo, tạo mới
     userInfo = new UserInfo({
       user: user._id,
-      ...profileData
+      ...profileData,
     });
   } else {
     // Nếu đã có, cập nhật
@@ -205,7 +210,7 @@ const updateProfile = async (userId, profileData) => {
     citizen_id: userInfo.citizen_id || null,
     permanent_address: userInfo.permanent_address || null,
     dob: userInfo.dob || null,
-    gender: userInfo.gender || null
+    gender: userInfo.gender || null,
   };
 };
 
@@ -251,7 +256,8 @@ const verifyEmail = async () => {
  * @returns {string} Random password
  */
 const generateRandomPassword = (length = 10) => {
-  const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*";
+  const charset =
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*";
   let password = "";
   for (let i = 0; i < length; i++) {
     password += charset.charAt(Math.floor(Math.random() * charset.length));
@@ -291,9 +297,9 @@ const forgotPassword = async (email) => {
   return {
     user: {
       user_id: user.user_id,
-      email: user.email
+      email: user.email,
     },
-    newPassword
+    newPassword,
   };
 };
 
@@ -305,5 +311,5 @@ module.exports = {
   updateProfile,
   changePassword,
   verifyEmail,
-  forgotPassword
+  forgotPassword,
 };
