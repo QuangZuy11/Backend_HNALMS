@@ -37,6 +37,7 @@ ApiRouter.get("/users", async (req, res) => {
 const roomRoutes = require("../../modules/room-floor-management/routes/room-floor.routes");
 
 // Mount routes
+ApiRouter.use("/auth", authRoutes);
 ApiRouter.use("/", roomRoutes);
 
 module.exports = ApiRouter;

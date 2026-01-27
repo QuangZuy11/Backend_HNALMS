@@ -21,27 +21,6 @@ const validatePassword = (password) => {
     };
   }
 
-  // Optional: Add more password requirements
-  // if (!/[A-Z]/.test(password)) {
-  //   return {
-  //     valid: false,
-  //     message: "Password must contain at least one uppercase letter"
-  //   };
-  // }
-
-  // if (!/[a-z]/.test(password)) {
-  //   return {
-  //     valid: false,
-  //     message: "Password must contain at least one lowercase letter"
-  //   };
-  // }
-
-  // if (!/[0-9]/.test(password)) {
-  //   return {
-  //     valid: false,
-  //     message: "Password must contain at least one number"
-  //   };
-  // }
 
   return { valid: true };
 };
@@ -81,30 +60,21 @@ const validateUsername = (username) => {
  * Middleware to validate registration input
  */
 const validateRegister = (req, res, next) => {
-  const { username, fullname, email, password, role } = req.body;
+  const { email, password, role } = req.body;
 
   // Check required fields
-  if (!username || !fullname || !email || !password) {
+  if (!email || !password) {
     return res.status(400).json({
       success: false,
-      message: "Username, fullname, email and password are required"
+      message: "Email and password are required"
     });
   }
 
-  // Validate email
+  // Validate email format
   if (!isValidEmail(email)) {
     return res.status(400).json({
       success: false,
-      message: "Invalid email format"
-    });
-  }
-
-  // Validate username
-  const usernameValidation = validateUsername(username);
-  if (!usernameValidation.valid) {
-    return res.status(400).json({
-      success: false,
-      message: usernameValidation.message
+      message: "Email không đúng định dạng"
     });
   }
 
@@ -117,16 +87,8 @@ const validateRegister = (req, res, next) => {
     });
   }
 
-  // Validate fullname
-  if (fullname.trim().length < 2) {
-    return res.status(400).json({
-      success: false,
-      message: "Full name must be at least 2 characters long"
-    });
-  }
-
   // Validate role if provided
-  if (role && !["admin", "manager", "owner", "tenant"].includes(role)) {
+  if (role && !["admin", "manager", "owner", "tenant", "accountant"].includes(role)) {
     return res.status(400).json({
       success: false,
       message: "Invalid role. Must be one of: admin, manager, owner, tenant"
@@ -238,6 +200,50 @@ const validateForgotPassword = (req, res, next) => {
   next();
 };
 
+/**
+ * Middleware to validate update profile input
+ */
+const validateUpdateProfile = (req, res, next) => {
+  const { fullname, citizen_id, permanent_address, dob, gender } = req.body;
+
+  // Validate fullname if provided
+  if (fullname !== undefined && fullname !== null && fullname.trim().length < 2) {
+    return res.status(400).json({
+      success: false,
+      message: "Họ và tên phải có ít nhất 2 ký tự"
+    });
+  }
+
+  // Validate citizen_id if provided
+  if (citizen_id !== undefined && citizen_id !== null && citizen_id.trim().length < 9) {
+    return res.status(400).json({
+      success: false,
+      message: "CCCD/CMND không hợp lệ"
+    });
+  }
+
+  // Validate gender if provided
+  if (gender !== undefined && gender !== null && !['male', 'female', 'other'].includes(gender)) {
+    return res.status(400).json({
+      success: false,
+      message: "Giới tính không hợp lệ. Phải là: male, female, hoặc other"
+    });
+  }
+
+  // Validate dob if provided
+  if (dob !== undefined && dob !== null) {
+    const date = new Date(dob);
+    if (isNaN(date.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: "Ngày sinh không hợp lệ"
+      });
+    }
+  }
+
+  next();
+};
+
 module.exports = {
   isValidEmail,
   validatePassword,
@@ -245,5 +251,6 @@ module.exports = {
   validateRegister,
   validateLogin,
   validateChangePassword,
-  validateForgotPassword
+  validateForgotPassword,
+  validateUpdateProfile
 };

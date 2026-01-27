@@ -6,12 +6,10 @@ const emailService = require("../../notification-management/services/email.servi
  */
 exports.register = async (req, res) => {
   try {
-    const { username, fullname, email, password, role } = req.body;
+    const { email, password, role } = req.body;
 
     // Call service to register user
     const result = await authService.registerUser({
-      username,
-      fullname,
       email,
       password,
       role
@@ -91,30 +89,70 @@ exports.login = async (req, res) => {
  */
 exports.getProfile = async (req, res) => {
   try {
-    // req.user is set by auth middleware
-    const user = await authService.getUserById(req.user.userId);
+    // req.user.userId đã được set bởi authenticate middleware
+    const profile = await authService.getUserProfile(req.user.userId);
 
     res.json({
       success: true,
-      user: {
-        id: user._id,
-        username: user.username,
-        email: user.email,
-        fullname: user.fullname,
-        role: user.role,
-        avatarURL: user.avatarURL,
-        status: user.status
-      }
+      data: profile
     });
-
   } catch (error) {
     console.error("Get profile error:", error);
+    
+    if (error.message.includes("not found")) {
+      return res.status(404).json({
+        success: false,
+        message: error.message
+      });
+    }
+
     res.status(500).json({
       success: false,
       message: "Server error"
     });
   }
 };
+
+/**
+ * Update current user profile
+ * PUT /api/auth/profile
+ */
+exports.updateProfile = async (req, res) => {
+  try {
+    const { fullname, citizen_id, permanent_address, dob, gender } = req.body;
+
+    // Call service to update profile
+    const updatedProfile = await authService.updateProfile(req.user.userId, {
+      fullname,
+      citizen_id,
+      permanent_address,
+      dob: dob ? new Date(dob) : null,
+      gender
+    });
+
+    res.json({
+      success: true,
+      message: "Cập nhật thông tin thành công",
+      data: updatedProfile
+    });
+  } catch (error) {
+    console.error("Update profile error:", error);
+    
+    if (error.message.includes("not found")) {
+      return res.status(404).json({
+        success: false,
+        message: error.message
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: "Server error"
+    });
+  }
+};
+
+
 
 /**
  * Change password
@@ -187,7 +225,7 @@ exports.forgotPassword = async (req, res) => {
     // Send email with new password
     await emailService.sendForgotPasswordEmail(
       result.user.email,
-      result.user.fullname,
+      result.user.email,
       result.newPassword
     );
 

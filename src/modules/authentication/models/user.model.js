@@ -2,14 +2,19 @@ const mongoose = require("mongoose");
 const { Schema } = mongoose;
 
 const UserSchema = new Schema({
-    username: { type: String, required: true, unique: true },
-    fullname: { type: String, required: true },
-    email: { type: String, required: true, unique: true },
+    user_id: {
+        type: String,
+        required: true,
+        unique: true,
+        index: true,
+        default: () => new mongoose.Types.ObjectId().toString()
+    },
+    email: { type: String, required: true, unique: true, index: true, trim: true, lowercase: true },
     password: { type: String, required: true },
     role: { type: String, enum: ['admin', 'manager', 'owner', 'tenant', 'accountant'], default: 'tenant' },
-    avatarURL: { type: String },
-    status: { type: String, enum: ['active', 'inactive', 'locked'], default: 'active' }
-}, { timestamps: true });
+    isactive: { type: Boolean, default: true },
+    create_at: { type: Date, default: Date.now }
+}, { timestamps: false });
 
 const User = mongoose.model("User", UserSchema, "user");
 

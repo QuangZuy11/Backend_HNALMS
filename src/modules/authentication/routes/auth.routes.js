@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 const authController = require("../controllers/auth.controller");
 const { authenticate } = require("../middlewares");
-const { validateRegister, validateLogin, validateChangePassword, validateForgotPassword } = require("../validators/auth.validator");
+const { validateRegister, validateLogin, validateChangePassword, validateForgotPassword, validateUpdateProfile } = require("../validators/auth.validator");
 
 // Public routes (không cần authentication)
 // Register route - Đăng ký tài khoản mới
@@ -17,6 +17,9 @@ router.post("/forgot-password", validateForgotPassword, authController.forgotPas
 // Protected routes (require authentication)
 // Get current user profile
 router.get("/me", authenticate, authController.getProfile);
+
+// Update profile
+router.put("/profile", authenticate, validateUpdateProfile, authController.updateProfile);
 
 // Change password
 router.post("/change-password", authenticate, validateChangePassword, authController.changePassword);
