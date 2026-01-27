@@ -2,6 +2,7 @@ const express = require("express");
 const db = require("../models");
 
 const ApiRouter = express.Router();
+const authRoutes = require("../../modules/authentication/routes/auth.routes");
 
 // Health check
 ApiRouter.get("/health", (req, res) => {
@@ -37,6 +38,7 @@ const roomRoutes = require("../../modules/room-floor-management/routes/room-floo
 const buildingRoutes = require("../../modules/building-information/routes/building.routes");
 
 // Mount routes
+ApiRouter.use("/auth", authRoutes);
 ApiRouter.use("/", roomRoutes);
 ApiRouter.use("/buildings", buildingRoutes);
 

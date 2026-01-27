@@ -11,12 +11,12 @@ const ApiRouter = require("./shared/routes/api.routes");
 const app = express();
 
 // CORS Configuration
-app.use(
-  cors({
-    origin: ["http://localhost:5173", "http://localhost:3000"],
+app.use(cors({
+    origin: ['http://localhost:5173', 'http://localhost:3000'], // Frontend URLs
     credentials: true,
-  }),
-);
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
 // Middlewares
 app.use(bodyParser.json());
@@ -24,7 +24,7 @@ app.use(morgan("dev"));
 
 // Routes
 app.use("/api", ApiRouter);
-
+//login
 // Home route
 app.get("/", async (req, res) => {
   try {
