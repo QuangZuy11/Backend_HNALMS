@@ -187,15 +187,23 @@ const updateProfile = async (userId, profileData) => {
   // 2. Tìm hoặc tạo UserInfo
   let userInfo = await UserInfo.findOne({ userId: user._id });
 
+  // Filter profileData để chỉ lấy những field có giá trị (không null/undefined)
+  const filteredData = {};
+  Object.keys(profileData).forEach(key => {
+    if (profileData[key] !== null && profileData[key] !== undefined) {
+      filteredData[key] = profileData[key];
+    }
+  });
+
   if (!userInfo) {
     // Nếu chưa có UserInfo, tạo mới
     userInfo = new UserInfo({
       userId: user._id,
-      ...profileData,
+      ...filteredData,
     });
   } else {
     // Nếu đã có, cập nhật
-    Object.assign(userInfo, profileData);
+    Object.assign(userInfo, filteredData);
   }
 
   await userInfo.save();

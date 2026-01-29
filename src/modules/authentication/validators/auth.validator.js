@@ -225,10 +225,10 @@ const validateUpdateProfile = (req, res, next) => {
   }
 
   // Validate gender if provided
-  if (gender !== undefined && gender !== null && !["M", "F", "Other"].includes(gender)) {
+  if (gender !== undefined && gender !== null && !["Male", "Female", "Other"].includes(gender)) {
     return res.status(400).json({
       success: false,
-      message: "Giới tính không hợp lệ. Phải là: M, F, hoặc Other"
+      message: "Giới tính không hợp lệ. Phải là: Male, Female, hoặc Other"
     });
   }
 

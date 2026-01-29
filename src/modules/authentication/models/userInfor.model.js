@@ -11,8 +11,7 @@ const userInfoSchema = new mongoose.Schema(
 
     fullname: {
       type: String,
-      trim: true,
-      required: true
+      trim: true
     },
 
     cccd: {
@@ -32,7 +31,7 @@ const userInfoSchema = new mongoose.Schema(
 
     gender: {
       type: String,
-      enum: ['M', 'F', 'Other']
+      enum: ['Male', 'Female', 'Other']
     }
   },
   {
