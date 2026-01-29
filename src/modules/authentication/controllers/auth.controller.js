@@ -202,14 +202,31 @@ exports.updateProfile = async (req, res) => {
  */
 exports.changePassword = async (req, res) => {
   try {
+    const userId = req.user?.userId;
+    
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized - User ID not found"
+      });
+    }
+
     const { oldPasswordHash, newPasswordHash } = req.body;
 
+    // Validate input
+    if (!oldPasswordHash || !newPasswordHash) {
+      return res.status(400).json({
+        success: false,
+        message: "Old password and new password are required"
+      });
+    }
+
     // Call service to change password
-    await authService.changePassword(req.user.userId, oldPasswordHash, newPasswordHash);
+    await authService.changePassword(userId, oldPasswordHash, newPasswordHash);
 
     res.json({
       success: true,
-      message: "Password changed successfully"
+      message: "Đổi mật khẩu thành công"
     });
 
   } catch (error) {
@@ -218,13 +235,20 @@ exports.changePassword = async (req, res) => {
     if (error.message.includes("incorrect")) {
       return res.status(400).json({
         success: false,
-        message: error.message
+        message: "Mật khẩu hiện tại không chính xác"
+      });
+    }
+
+    if (error.message.includes("not found")) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
       });
     }
 
     res.status(500).json({
       success: false,
-      message: "Server error"
+      message: "Lỗi server"
     });
   }
 };
