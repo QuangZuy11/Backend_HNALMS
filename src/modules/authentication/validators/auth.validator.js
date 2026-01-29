@@ -60,13 +60,22 @@ const validateUsername = (username) => {
  * Middleware to validate registration input
  */
 const validateRegister = (req, res, next) => {
-  const { email, password, role } = req.body;
+  const { username, phoneNumber, email, passwordHash, role } = req.body || {};
 
   // Check required fields
-  if (!email || !password) {
+  if (!username || !phoneNumber || !email || !passwordHash) {
     return res.status(400).json({
       success: false,
-      message: "Email and password are required"
+      message: "Username, phone number, email and password are required"
+    });
+  }
+
+  // Validate username
+  const usernameValidation = validateUsername(username);
+  if (!usernameValidation.valid) {
+    return res.status(400).json({
+      success: false,
+      message: usernameValidation.message
     });
   }
 
@@ -79,7 +88,7 @@ const validateRegister = (req, res, next) => {
   }
 
   // Validate password
-  const passwordValidation = validatePassword(password);
+  const passwordValidation = validatePassword(passwordHash);
   if (!passwordValidation.valid) {
     return res.status(400).json({
       success: false,
@@ -88,10 +97,10 @@ const validateRegister = (req, res, next) => {
   }
 
   // Validate role if provided
-  if (role && !["admin", "manager", "owner", "tenant", "accountant"].includes(role)) {
+  if (role && !["admin", "manager", "owner", "Tenant", "accountant"].includes(role)) {
     return res.status(400).json({
       success: false,
-      message: "Invalid role. Must be one of: admin, manager, owner, tenant"
+      message: "Invalid role. Must be one of: admin, manager, owner, Tenant, accountant"
     });
   }
 
@@ -102,21 +111,22 @@ const validateRegister = (req, res, next) => {
  * Middleware to validate login input
  */
 const validateLogin = (req, res, next) => {
-  const { email, password } = req.body;
+  const { username, passwordHash } = req.body || {};
 
   // Check required fields
-  if (!email || !password) {
+  if (!username || !passwordHash) {
     return res.status(400).json({
       success: false,
-      message: "Email and password are required"
+      message: "Username and password are required"
     });
   }
 
-  // Validate email format
-  if (!isValidEmail(email)) {
+  // Validate username
+  const usernameValidation = validateUsername(username);
+  if (!usernameValidation.valid) {
     return res.status(400).json({
       success: false,
-      message: "Email không đúng định dạng"
+      message: usernameValidation.message
     });
   }
 
@@ -127,10 +137,10 @@ const validateLogin = (req, res, next) => {
  * Middleware to validate change password input
  */
 const validateChangePassword = (req, res, next) => {
-  const { oldPassword, newPassword, confirmPassword } = req.body;
+  const { oldPasswordHash, newPasswordHash } = req.body || {};
 
   // Check required fields
-  if (!oldPassword || !newPassword) {
+  if (!oldPasswordHash || !newPasswordHash) {
     return res.status(400).json({
       success: false,
       message: "Old password and new password are required"
@@ -138,7 +148,7 @@ const validateChangePassword = (req, res, next) => {
   }
 
   // Validate new password
-  const passwordValidation = validatePassword(newPassword);
+  const passwordValidation = validatePassword(newPasswordHash);
   if (!passwordValidation.valid) {
     return res.status(400).json({
       success: false,
@@ -147,18 +157,10 @@ const validateChangePassword = (req, res, next) => {
   }
 
   // Check if new password is different from old password
-  if (oldPassword === newPassword) {
+  if (oldPasswordHash === newPasswordHash) {
     return res.status(400).json({
       success: false,
       message: "New password must be different from old password"
-    });
-  }
-
-  // Check password confirmation if provided
-  if (confirmPassword && newPassword !== confirmPassword) {
-    return res.status(400).json({
-      success: false,
-      message: "New password and confirmation do not match"
     });
   }
 
@@ -179,7 +181,7 @@ module.exports = {
  * Middleware to validate forgot password input
  */
 const validateForgotPassword = (req, res, next) => {
-  const { email } = req.body;
+  const { email } = req.body || {};
 
   // Check required field
   if (!email) {
@@ -204,7 +206,7 @@ const validateForgotPassword = (req, res, next) => {
  * Middleware to validate update profile input
  */
 const validateUpdateProfile = (req, res, next) => {
-  const { fullname, citizen_id, permanent_address, dob, gender, phone } = req.body;
+  const { fullname, cccd, address, dob, gender } = req.body || {};
 
   // Validate fullname if provided
   if (fullname !== undefined && fullname !== null && fullname.trim().length < 2) {
@@ -214,8 +216,8 @@ const validateUpdateProfile = (req, res, next) => {
     });
   }
 
-  // Validate citizen_id if provided
-  if (citizen_id !== undefined && citizen_id !== null && citizen_id.trim().length < 9) {
+  // Validate cccd if provided
+  if (cccd !== undefined && cccd !== null && cccd.trim().length < 9) {
     return res.status(400).json({
       success: false,
       message: "CCCD/CMND không hợp lệ"
@@ -223,10 +225,10 @@ const validateUpdateProfile = (req, res, next) => {
   }
 
   // Validate gender if provided
-  if (gender !== undefined && gender !== null && !['male', 'female', 'other'].includes(gender)) {
+  if (gender !== undefined && gender !== null && !["M", "F", "Other"].includes(gender)) {
     return res.status(400).json({
       success: false,
-      message: "Giới tính không hợp lệ. Phải là: male, female, hoặc other"
+      message: "Giới tính không hợp lệ. Phải là: M, F, hoặc Other"
     });
   }
 
@@ -237,17 +239,6 @@ const validateUpdateProfile = (req, res, next) => {
       return res.status(400).json({
         success: false,
         message: "Ngày sinh không hợp lệ"
-      });
-    }
-  }
-
-  // Validate phone if provided (đơn giản, giống logic trên frontend)
-  if (phone !== undefined && phone !== null) {
-    const phoneTrimmed = String(phone).trim();
-    if (phoneTrimmed && !/^0\d{9,10}$/.test(phoneTrimmed)) {
-      return res.status(400).json({
-        success: false,
-        message: "Số điện thoại không hợp lệ (bắt đầu bằng 0 và có 10–11 số)"
       });
     }
   }

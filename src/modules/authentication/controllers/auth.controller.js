@@ -6,12 +6,14 @@ const emailService = require("../../notification-management/services/email.servi
  */
 exports.register = async (req, res) => {
   try {
-    const { email, password, role } = req.body;
+    const { username, phoneNumber, email, passwordHash, role } = req.body;
 
     // Call service to register user
     const result = await authService.registerUser({
+      username,
+      phoneNumber,
       email,
-      password,
+      passwordHash,
       role
     });
 
@@ -47,10 +49,10 @@ exports.register = async (req, res) => {
  */
 exports.login = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { username, passwordHash } = req.body;
 
     // Call service to login user
-    const result = await authService.loginUser(email, password);
+    const result = await authService.loginUser(username, passwordHash);
 
     // Response
     res.json({
@@ -90,11 +92,24 @@ exports.login = async (req, res) => {
 exports.getProfile = async (req, res) => {
   try {
     // req.user.userId đã được set bởi authenticate middleware
-    const profile = await authService.getUserProfile(req.user.userId);
+    const userId = req.user?.userId;
+    
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized - User ID not found"
+      });
+    }
+
+    const profile = await authService.getUserProfile(userId);
 
     res.json({
       success: true,
-      data: profile
+      message: "Get profile successful",
+      data: {
+        ...profile,
+        _id: userId
+      }
     });
   } catch (error) {
     console.error("Get profile error:", error);
@@ -119,28 +134,54 @@ exports.getProfile = async (req, res) => {
  */
 exports.updateProfile = async (req, res) => {
   try {
-    const { fullname, citizen_id, permanent_address, dob, gender, phone } = req.body;
+    const userId = req.user?.userId;
+    
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized - User ID not found"
+      });
+    }
+
+    const { fullname, cccd, address, dob, gender } = req.body;
+
+    // Validate input
+    if (!fullname && !cccd && !address && !dob && !gender) {
+      return res.status(400).json({
+        success: false,
+        message: "At least one field is required"
+      });
+    }
 
     // Call service to update profile
-    const updatedProfile = await authService.updateProfile(req.user.userId, {
+    const updatedProfile = await authService.updateProfile(userId, {
       fullname,
-      citizen_id,
-      permanent_address,
+      cccd,
+      address,
       dob: dob ? new Date(dob) : null,
-      gender,
-      phone
+      gender
     });
 
     res.json({
       success: true,
       message: "Cập nhật thông tin thành công",
-      data: updatedProfile
+      data: {
+        ...updatedProfile,
+        _id: userId
+      }
     });
   } catch (error) {
     console.error("Update profile error:", error);
     
     if (error.message.includes("not found")) {
       return res.status(404).json({
+        success: false,
+        message: error.message
+      });
+    }
+
+    if (error.message.includes("validation")) {
+      return res.status(400).json({
         success: false,
         message: error.message
       });
@@ -161,10 +202,10 @@ exports.updateProfile = async (req, res) => {
  */
 exports.changePassword = async (req, res) => {
   try {
-    const { oldPassword, newPassword } = req.body;
+    const { oldPasswordHash, newPasswordHash } = req.body;
 
     // Call service to change password
-    await authService.changePassword(req.user.userId, oldPassword, newPassword);
+    await authService.changePassword(req.user.userId, oldPasswordHash, newPasswordHash);
 
     res.json({
       success: true,

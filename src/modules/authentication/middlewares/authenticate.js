@@ -176,14 +176,15 @@ const authenticate = async (req, res, next) => {
     }
 
     console.log("✅ Auth Middleware - User found successfully:", {
-      user_id: user.user_id,
+      _id: user._id,
+      username: user.username,
       email: user.email,
       role: user.role,
-      isactive: user.isactive,
+      status: user.status,
     });
 
-    // 5. Kiểm tra trạng thái tài khoản (ERD: isactive)
-    if (!user.isactive) {
+    // 5. Kiểm tra trạng thái tài khoản (status field)
+    if (user.status !== "active") {
       return res.status(403).json({
         success: false,
         message: "Account is not active. Please contact administrator",
@@ -192,9 +193,10 @@ const authenticate = async (req, res, next) => {
 
     // 6. Gắn thông tin user vào request để sử dụng ở các middleware/controller tiếp theo
     req.user = {
-      userId: user.user_id,
+      userId: user._id,
       role: user.role,
       email: user.email,
+      username: user.username,
     };
 
     // 7. Cho phép request tiếp tục

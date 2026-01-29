@@ -9,137 +9,127 @@ const { generateToken } = require("../../../shared/config/jwt");
  * @returns {Object} Created user and token
  */
 const registerUser = async (userData) => {
-  const { email, password, role } = userData;
+  const { username, phoneNumber, email, passwordHash, role } = userData;
 
   // Check if user already exists
   const existingUser = await User.findOne({
-    email: String(email).toLowerCase(),
+    $or: [
+      { username },
+      { email: String(email).toLowerCase() },
+      { phoneNumber }
+    ]
   });
   if (existingUser) {
-    throw new Error("Email already exists");
+    throw new Error("Username, email hoặc số điện thoại đã tồn tại");
   }
 
   // Hash password
-  const hashedPassword = await bcrypt.hash(password, 10);
+  const hashedPassword = await bcrypt.hash(passwordHash, 10);
 
   // Create new user
-  const mongoose = require("mongoose");
   const newUser = new User({
-    user_id: new mongoose.Types.ObjectId().toString(), // tạo user mới với điều kiện
+    username,
+    phoneNumber,
     email: String(email).toLowerCase(),
-    password: hashedPassword,
-    role: role || "tenant",
-    isactive: true,
-    create_at: new Date(),
+    passwordHash: hashedPassword,
+    role: role || "Tenant",
+    status: "active",
+    createdAt: new Date(),
   });
 
   await newUser.save();
 
-  // Verify user_id exists
-  if (!newUser.user_id) {
-    throw new Error("Failed to create user_id");
-  }
-
   // Generate JWT token
   const token = generateToken({
-    userId: newUser.user_id,
+    userId: newUser._id,
     role: newUser.role,
   });
 
   return {
     token,
     user: {
-      user_id: newUser.user_id,
+      _id: newUser._id,
+      username: newUser.username,
       email: newUser.email,
       role: newUser.role,
-      isactive: newUser.isactive,
-      create_at: newUser.create_at,
+      status: newUser.status,
+      createdAt: newUser.createdAt,
     },
   };
 };
 
 /**
  * Login user
- * @param {string} email - Email
- * @param {string} password - User password
+ * @param {string} username - Username
+ * @param {string} passwordHash - User password (raw, will be hashed for comparison)
  * @returns {Object} User data and token
  */
-const loginUser = async (email, password) => {
-  // Find user by email
-  const user = await User.findOne({ email: String(email).toLowerCase() });
+const loginUser = async (username, passwordHash) => {
+  // Find user by username
+  const user = await User.findOne({ username });
   if (!user) {
-    throw new Error("Email hoặc mật khẩu không chính xác");
+    throw new Error("Tên đăng nhập hoặc mật khẩu không chính xác");
   }
 
   console.log("🔍 Login Service - User found:", {
     _id: user._id,
-    user_id: user.user_id,
+    username: user.username,
     email: user.email,
     role: user.role,
-    isactive: user.isactive,
+    status: user.status,
   });
 
-  // Check account status (ERD: isactive)
-  if (!user.isactive) {
+  // Check account status
+  if (user.status !== "active") {
     throw new Error("Tài khoản chưa được kích hoạt");
   }
 
-  // Compare password
-  const isMatch = await bcrypt.compare(password, user.password);
+  // Compare password with hash
+  const isMatch = await bcrypt.compare(passwordHash, user.passwordHash);
   if (!isMatch) {
-    throw new Error("Email hoặc mật khẩu không chính xác");
+    throw new Error("Tên đăng nhập hoặc mật khẩu không chính xác");
   }
 
-  // Ensure user_id exists - if not, create it (for old users)
-  if (!user.user_id) {
-    const mongoose = require("mongoose");
-    user.user_id = new mongoose.Types.ObjectId().toString();
-    await user.save();
-    console.log(
-      "🔍 Login Service - Created new user_id for existing user:",
-      user.user_id,
-    );
-  }
-
-  // Lấy thông tin UserInfo (nếu có) để trả thêm fullname, phone, ...
-  const userInfo = await UserInfo.findOne({ user: user._id });
+  // Lấy thông tin UserInfo (nếu có)
+  const userInfo = await UserInfo.findOne({ userId: user._id });
 
   // Generate JWT token
   const token = generateToken({
-    userId: user.user_id,
+    userId: user._id,
     role: user.role,
   });
 
   console.log("🔍 Login Service - Generated token with payload:", {
-    userId: user.user_id,
+    userId: user._id,
     role: user.role,
   });
 
   return {
     token,
     user: {
-      user_id: user.user_id,
+      _id: user._id,
+      username: user.username,
       email: user.email,
+      phoneNumber: user.phoneNumber,
       role: user.role,
-      isactive: user.isactive,
-      create_at: user.create_at,
+      status: user.status,
+      createdAt: user.createdAt,
       fullname: userInfo?.fullname || null,
-      citizen_id: userInfo?.citizen_id || null,
-      permanent_address: userInfo?.permanent_address || null,
+      cccd: userInfo?.cccd || null,
+      address: userInfo?.address || null,
       dob: userInfo?.dob || null,
-      gender: userInfo?.gender || null,
-      phone: userInfo?.phone || null
+      gender: userInfo?.gender || null
     }
   };
 };
 
 /**
  * Get user by ID
- * @param {string} userId - User ID
+ * @param {string} userId - User ID (MongoDB ObjectId)
  * @returns {Object} User data
  */
 const getUserById = async (userId) => {
-  const user = await User.findOne({ user_id: userId }).select("-password");
+  const user = await User.findById(userId).select("-passwordHash");
   if (!user) {
     throw new Error("User not found");
   }
@@ -148,58 +138,59 @@ const getUserById = async (userId) => {
 
 /**
  * Get user profile (User + UserInfo)
- * @param {string} userId - User ID (user_id string)
+ * @param {string} userId - User ID (MongoDB ObjectId)
  * @returns {Object} Combined user profile data
  */
 const getUserProfile = async (userId) => {
-  // 1. Tìm User theo user_id (string)
-  const user = await User.findOne({ user_id: userId }).select("-password");
+  // 1. Tìm User theo _id (ObjectId)
+  const user = await User.findById(userId).select("-passwordHash");
   if (!user) {
     throw new Error("User not found");
   }
 
-  // 2. Tìm UserInfo theo user._id (ObjectId)
-  const userInfo = await UserInfo.findOne({ user: user._id });
+  // 2. Tìm UserInfo theo userId
+  const userInfo = await UserInfo.findOne({ userId: user._id });
 
   // 3. Merge thông tin từ User và UserInfo
   return {
     // Từ User model
-    user_id: user.user_id,
+    _id: user._id,
+    username: user.username,
     email: user.email,
+    phoneNumber: user.phoneNumber,
     role: user.role,
-    isactive: user.isactive,
-    create_at: user.create_at,
+    status: user.status,
+    createdAt: user.createdAt,
 
     // Từ UserInfo model (có thể null nếu chưa tạo UserInfo)
     fullname: userInfo?.fullname || null,
-    citizen_id: userInfo?.citizen_id || null,
-    permanent_address: userInfo?.permanent_address || null,
+    cccd: userInfo?.cccd || null,
+    address: userInfo?.address || null,
     dob: userInfo?.dob || null,
-    gender: userInfo?.gender || null,
-    phone: userInfo?.phone || null
+    gender: userInfo?.gender || null
   };
 };
 
 /**
  * Update user profile (UserInfo)
- * @param {string} userId - User ID (user_id string)
+ * @param {string} userId - User ID (MongoDB ObjectId)
  * @param {Object} profileData - Profile data to update
  * @returns {Object} Updated profile data
  */
 const updateProfile = async (userId, profileData) => {
-  // 1. Tìm User theo user_id
-  const user = await User.findOne({ user_id: userId });
+  // 1. Tìm User theo _id
+  const user = await User.findById(userId);
   if (!user) {
     throw new Error("User not found");
   }
 
   // 2. Tìm hoặc tạo UserInfo
-  let userInfo = await UserInfo.findOne({ user: user._id });
+  let userInfo = await UserInfo.findOne({ userId: user._id });
 
   if (!userInfo) {
     // Nếu chưa có UserInfo, tạo mới
     userInfo = new UserInfo({
-      user: user._id,
+      userId: user._id,
       ...profileData,
     });
   } else {
@@ -211,42 +202,43 @@ const updateProfile = async (userId, profileData) => {
 
   // 3. Trả về profile đã cập nhật
   return {
-    user_id: user.user_id,
+    _id: user._id,
+    username: user.username,
     email: user.email,
+    phoneNumber: user.phoneNumber,
     role: user.role,
-    isactive: user.isactive,
-    create_at: user.create_at,
+    status: user.status,
+    createdAt: user.createdAt,
     fullname: userInfo.fullname || null,
-    citizen_id: userInfo.citizen_id || null,
-    permanent_address: userInfo.permanent_address || null,
+    cccd: userInfo.cccd || null,
+    address: userInfo.address || null,
     dob: userInfo.dob || null,
-    gender: userInfo.gender || null,
-    phone: userInfo.phone || null
+    gender: userInfo.gender || null
   };
 };
 
 /**
  * Update user password
- * @param {string} userId - User ID
- * @param {string} oldPassword - Current password
- * @param {string} newPassword - New password
+ * @param {string} userId - User ID (MongoDB ObjectId)
+ * @param {string} oldPasswordHash - Current password (raw, will be hashed for comparison)
+ * @param {string} newPasswordHash - New password (raw, will be hashed)
  * @returns {boolean} Success status
  */
-const changePassword = async (userId, oldPassword, newPassword) => {
-  const user = await User.findOne({ user_id: userId });
+const changePassword = async (userId, oldPasswordHash, newPasswordHash) => {
+  const user = await User.findById(userId);
   if (!user) {
     throw new Error("User not found");
   }
 
   // Verify old password
-  const isMatch = await bcrypt.compare(oldPassword, user.password);
+  const isMatch = await bcrypt.compare(oldPasswordHash, user.passwordHash);
   if (!isMatch) {
     throw new Error("Current password is incorrect");
   }
 
   // Hash new password
-  const hashedPassword = await bcrypt.hash(newPassword, 10);
-  user.password = hashedPassword;
+  const hashedPassword = await bcrypt.hash(newPasswordHash, 10);
+  user.passwordHash = hashedPassword;
   await user.save();
 
   return true;
@@ -291,7 +283,7 @@ const forgotPassword = async (email) => {
   }
 
   // Check account status
-  if (!user.isactive) {
+  if (user.status !== "active") {
     throw new Error("Account is not active");
   }
 
@@ -302,12 +294,12 @@ const forgotPassword = async (email) => {
   const hashedPassword = await bcrypt.hash(newPassword, 10);
 
   // Update user password
-  user.password = hashedPassword;
+  user.passwordHash = hashedPassword;
   await user.save();
 
   return {
     user: {
-      user_id: user.user_id,
+      _id: user._id,
       email: user.email,
     },
     newPassword,

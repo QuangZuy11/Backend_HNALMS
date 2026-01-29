@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 const User = require('./user.model');
 const userInfoSchema = new mongoose.Schema(
   {
-    user: {
+    userId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
       required: true,
@@ -11,15 +11,17 @@ const userInfoSchema = new mongoose.Schema(
 
     fullname: {
       type: String,
-      trim: true
+      trim: true,
+      required: true
     },
 
-    citizen_id: {
+    cccd: {
       type: String,
-      trim: true
+      trim: true,
+      unique: true
     },
 
-    permanent_address: {
+    address: {
       type: String,
       trim: true
     },
@@ -30,12 +32,7 @@ const userInfoSchema = new mongoose.Schema(
 
     gender: {
       type: String,
-      enum: ['male', 'female', 'other']
-    },
-
-    phone: {
-      type: String,
-      trim: true
+      enum: ['M', 'F', 'Other']
     }
   },
   {
