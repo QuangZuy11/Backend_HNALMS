@@ -9,7 +9,7 @@ const { generateToken } = require("../../../shared/config/jwt");
  * @returns {Object} Created user and token
  */
 const registerUser = async (userData) => {
-  const { username, phoneNumber, email, passwordHash, role } = userData;
+  const { username, phoneNumber, email, password, role } = userData;
 
   // Check if user already exists
   const existingUser = await User.findOne({
@@ -24,14 +24,14 @@ const registerUser = async (userData) => {
   }
 
   // Hash password
-  const hashedPassword = await bcrypt.hash(passwordHash, 10);
+  const hashedPassword = await bcrypt.hash(password, 10);
 
   // Create new user
   const newUser = new User({
     username,
     phoneNumber,
     email: String(email).toLowerCase(),
-    passwordHash: hashedPassword,
+    password: hashedPassword,
     role: role || "Tenant",
     status: "active",
     createdAt: new Date(),
@@ -61,10 +61,10 @@ const registerUser = async (userData) => {
 /**
  * Login user
  * @param {string} username - Username
- * @param {string} passwordHash - User password (raw, will be hashed for comparison)
+ * @param {string} password - User password (raw, will be hashed for comparison)
  * @returns {Object} User data and token
  */
-const loginUser = async (username, passwordHash) => {
+const loginUser = async (username, password) => {
   // Find user by username
   const user = await User.findOne({ username });
   if (!user) {
@@ -85,7 +85,7 @@ const loginUser = async (username, passwordHash) => {
   }
 
   // Compare password with hash
-  const isMatch = await bcrypt.compare(passwordHash, user.passwordHash);
+  const isMatch = await bcrypt.compare(password, user.password);
   if (!isMatch) {
     throw new Error("Tên đăng nhập hoặc mật khẩu không chính xác");
   }
@@ -129,7 +129,7 @@ const loginUser = async (username, passwordHash) => {
  * @returns {Object} User data
  */
 const getUserById = async (userId) => {
-  const user = await User.findById(userId).select("-passwordHash");
+  const user = await User.findById(userId).select("-password");
   if (!user) {
     throw new Error("User not found");
   }
@@ -143,7 +143,7 @@ const getUserById = async (userId) => {
  */
 const getUserProfile = async (userId) => {
   // 1. Tìm User theo _id (ObjectId)
-  const user = await User.findById(userId).select("-passwordHash");
+  const user = await User.findById(userId).select("-password");
   if (!user) {
     throw new Error("User not found");
   }
@@ -228,25 +228,25 @@ const updateProfile = async (userId, profileData) => {
 /**
  * Update user password
  * @param {string} userId - User ID (MongoDB ObjectId)
- * @param {string} oldPasswordHash - Current password (raw, will be hashed for comparison)
- * @param {string} newPasswordHash - New password (raw, will be hashed)
+ * @param {string} oldPassword - Current password (raw, will be hashed for comparison)
+ * @param {string} newPassword - New password (raw, will be hashed)
  * @returns {boolean} Success status
  */
-const changePassword = async (userId, oldPasswordHash, newPasswordHash) => {
+const changePassword = async (userId, oldPassword, newPassword) => {
   const user = await User.findById(userId);
   if (!user) {
     throw new Error("User not found");
   }
 
   // Verify old password
-  const isMatch = await bcrypt.compare(oldPasswordHash, user.passwordHash);
+  const isMatch = await bcrypt.compare(oldPassword, user.password);
   if (!isMatch) {
     throw new Error("Current password is incorrect");
   }
 
   // Hash new password
-  const hashedPassword = await bcrypt.hash(newPasswordHash, 10);
-  user.passwordHash = hashedPassword;
+  const hashedPassword = await bcrypt.hash(newPassword, 10);
+  user.password = hashedPassword;
   await user.save();
 
   return true;
@@ -302,7 +302,7 @@ const forgotPassword = async (email) => {
   const hashedPassword = await bcrypt.hash(newPassword, 10);
 
   // Update user password
-  user.passwordHash = hashedPassword;
+  user.password = hashedPassword;
   await user.save();
 
   return {
