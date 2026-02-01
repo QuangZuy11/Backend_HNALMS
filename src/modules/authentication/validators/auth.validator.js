@@ -111,10 +111,10 @@ const validateRegister = (req, res, next) => {
  * Middleware to validate login input
  */
 const validateLogin = (req, res, next) => {
-  const { username, passwordHash } = req.body || {};
+  const { username, password } = req.body || {};
 
   // Check required fields
-  if (!username || !passwordHash) {
+  if (!username || !password) {
     return res.status(400).json({
       success: false,
       message: "Username and password are required"
@@ -137,10 +137,10 @@ const validateLogin = (req, res, next) => {
  * Middleware to validate change password input
  */
 const validateChangePassword = (req, res, next) => {
-  const { oldPasswordHash, newPasswordHash } = req.body || {};
+  const { oldPassword, newPassword } = req.body || {};
 
   // Check required fields
-  if (!oldPasswordHash || !newPasswordHash) {
+  if (!oldPassword || !newPassword) {
     return res.status(400).json({
       success: false,
       message: "Old password and new password are required"
@@ -148,7 +148,7 @@ const validateChangePassword = (req, res, next) => {
   }
 
   // Validate new password
-  const passwordValidation = validatePassword(newPasswordHash);
+  const passwordValidation = validatePassword(newPassword);
   if (!passwordValidation.valid) {
     return res.status(400).json({
       success: false,
@@ -157,7 +157,7 @@ const validateChangePassword = (req, res, next) => {
   }
 
   // Check if new password is different from old password
-  if (oldPasswordHash === newPasswordHash) {
+  if (oldPassword === newPassword) {
     return res.status(400).json({
       success: false,
       message: "New password must be different from old password"

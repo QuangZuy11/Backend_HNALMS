@@ -6,14 +6,14 @@ const emailService = require("../../notification-management/services/email.servi
  */
 exports.register = async (req, res) => {
   try {
-    const { username, phoneNumber, email, passwordHash, role } = req.body;
+    const { username, phoneNumber, email, password, role } = req.body;
 
     // Call service to register user
     const result = await authService.registerUser({
       username,
       phoneNumber,
       email,
-      passwordHash,
+      password,
       role
     });
 
@@ -49,10 +49,10 @@ exports.register = async (req, res) => {
  */
 exports.login = async (req, res) => {
   try {
-    const { username, passwordHash } = req.body;
+    const { username, password } = req.body;
 
     // Call service to login user
-    const result = await authService.loginUser(username, passwordHash);
+    const result = await authService.loginUser(username, password);
 
     // Response
     res.json({
@@ -211,10 +211,10 @@ exports.changePassword = async (req, res) => {
       });
     }
 
-    const { oldPasswordHash, newPasswordHash } = req.body;
+    const { oldPassword, newPassword } = req.body;
 
     // Validate input
-    if (!oldPasswordHash || !newPasswordHash) {
+    if (!oldPassword || !newPassword) {
       return res.status(400).json({
         success: false,
         message: "Old password and new password are required"
@@ -222,7 +222,7 @@ exports.changePassword = async (req, res) => {
     }
 
     // Call service to change password
-    await authService.changePassword(userId, oldPasswordHash, newPasswordHash);
+    await authService.changePassword(userId, oldPassword, newPassword);
 
     res.json({
       success: true,
