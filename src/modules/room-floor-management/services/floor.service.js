@@ -1,9 +1,10 @@
 const Floor = require("../models/floor.model");
+const Room = require("../models/room.model"); // [QUAN TRỌNG] Import model Room để kiểm tra
 
 class FloorService {
-  // Lấy danh sách tất cả các tầng (có thể dùng cho dropdown chọn tầng)
+  // Lấy danh sách tất cả các tầng
   async getAllFloors() {
-    return await Floor.find().sort({ name: 1 }); // Sắp xếp theo tên
+    return await Floor.find().sort({ name: 1 });
   }
 
   // Lấy chi tiết 1 tầng theo ID
@@ -13,19 +14,33 @@ class FloorService {
 
   // Chức năng THÊM mới tầng
   async createFloor(data) {
-    // data bao gồm: name, description, status
     const floor = new Floor(data);
     return await floor.save();
   }
 
   // Chức năng SỬA tầng
   async updateFloor(id, data) {
-    // { new: true } để trả về dữ liệu mới sau khi update thay vì dữ liệu cũ
+    // 1. Kiểm tra xem có phòng nào thuộc tầng này không
+    // Lưu ý: Nếu bạn chỉ muốn chặn khi có người ở (Occupied), hãy thêm điều kiện { status: 'occupied' }
+    const hasActiveRooms = await Room.exists({ floorId: id });
+
+    if (hasActiveRooms) {
+      // Ném ra lỗi để Controller bắt được và trả về client
+      throw new Error("Không thể cập nhật thông tin tầng vì đang có phòng hoạt động tại tầng này.");
+    }
+
     return await Floor.findByIdAndUpdate(id, data, { new: true });
   }
 
   // Chức năng XÓA tầng
   async deleteFloor(id) {
+    // 1. Kiểm tra xem có phòng nào thuộc tầng này không
+    const hasActiveRooms = await Room.exists({ floorId: id });
+
+    if (hasActiveRooms) {
+      throw new Error("Không thể xóa tầng này vì vẫn còn phòng trực thuộc.");
+    }
+
     return await Floor.findByIdAndDelete(id);
   }
 }
