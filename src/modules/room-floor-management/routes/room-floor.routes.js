@@ -4,9 +4,6 @@ const floorController = require("../controllers/floor.controller");
 const roomTypeController = require("../controllers/roomtype.controller");
 const router = express.Router();
 
-// --- ROOM ROUTES (Cũ) ---
-router.get("/rooms", roomController.getRooms);
-router.get("/rooms/:id", roomController.getRoomById);
 
 // --- FLOOR ROUTES (Mới thêm vào) ---
 
@@ -30,6 +27,24 @@ router.get("/roomtypes/:id", roomTypeController.getRoomTypeById);
 router.post("/roomtypes", roomTypeController.createRoomType);
 router.put("/roomtypes/:id", roomTypeController.updateRoomType);
 router.delete("/roomtypes/:id", roomTypeController.deleteRoomType);
+
+// POST /api/rooms - Tạo phòng mới (Chỉ Owner/Admin)
+router.post("/room", roomController.createRoom);
+
+// GET /api/rooms - Lấy danh sách (Có thể lọc theo ?floorId=...&status=...)
+router.get("/room", roomController.getRooms);
+
+// GET /api/rooms/:id - Lấy chi tiết
+router.get("/room/:id", roomController.getRoomById);
+
+// PUT /api/rooms/:id - Cập nhật thông tin (Có check Occupied)
+router.put("/room/:id", roomController.updateRoom);
+
+// DELETE /api/rooms/:id - Xóa phòng (Có check Occupied)
+router.delete("/room/:id", roomController.deleteRoom);
+
+// PATCH /api/rooms/:id/toggle - Bật/Tắt hoạt động (Soft Delete)
+router.patch("/room/:id/toggle", roomController.toggleRoomStatus);
 
 
 module.exports = router;
