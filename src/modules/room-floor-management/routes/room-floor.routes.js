@@ -3,7 +3,7 @@ const roomController = require("../controllers/room.controller");
 const floorController = require("../controllers/floor.controller");
 const roomTypeController = require("../controllers/roomtype.controller");
 const router = express.Router();
-
+const upload = require('../middlewares/upload');
 
 // --- FLOOR ROUTES (Mới thêm vào) ---
 
@@ -24,8 +24,10 @@ router.delete("/floors/:id", floorController.deleteFloor);
 
 router.get("/roomtypes", roomTypeController.getRoomTypes);
 router.get("/roomtypes/:id", roomTypeController.getRoomTypeById);
-router.post("/roomtypes", roomTypeController.createRoomType);
-router.put("/roomtypes/:id", roomTypeController.updateRoomType);
+// CREATE: upload.array('images', 10) -> Cho phép upload tối đa 10 ảnh, field name là 'images'
+router.post('/roomtypes', upload.array('images', 10), roomTypeController.createRoomType);
+// UPDATE: Cũng cần upload middleware để thêm ảnh mới
+router.put('/roomtypes/:id', upload.array('images', 10), roomTypeController.updateRoomType);
 router.delete("/roomtypes/:id", roomTypeController.deleteRoomType);
 
 // POST /api/rooms - Tạo phòng mới (Chỉ Owner/Admin)
