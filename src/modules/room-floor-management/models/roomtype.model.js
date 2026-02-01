@@ -4,13 +4,23 @@ const roomTypeSchema = new mongoose.Schema(
   {
     typeName: { type: String, required: true, unique: true },
     description: { type: String, default: "" },
+    
+    personMax: { 
+      type: Number, 
+      required: true, 
+      default: 1,
+      min: [1, "Số người tối đa phải ít nhất là 1"] 
+    },
+
     // Giá hiển thị hiện tại (để query nhanh)
     currentPrice: { 
       type: mongoose.Schema.Types.Decimal128, 
       required: true, 
       default: 0 
     },
+    
     images: [{ type: String }],
+    
     status: { 
       type: String, 
       enum: ["active", "inactive"], 

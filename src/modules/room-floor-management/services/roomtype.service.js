@@ -10,14 +10,14 @@ class RoomTypeService {
       name: reason || "Cập nhật giá",
       price: price,
       relatedId: relatedId,
-      onModel: 'RoomType', // Định danh loại đối tượng
+      onModel: 'RoomType',
       startDate: new Date(),
       endDate: null
     });
     await history.save({ session });
   }
 
-  // 1. Lấy danh sách (Kèm lịch sử)
+  // 1. Lấy danh sách
   async getAllRoomTypes() {
     return await RoomType.find().sort({ currentPrice: 1 }).populate("histories");
   }
@@ -37,6 +37,9 @@ class RoomTypeService {
         typeName: data.typeName,
         description: data.description,
         currentPrice: data.currentPrice,
+        // --- [MỚI] THÊM DÒNG NÀY ---
+        personMax: data.personMax, 
+        // --------------------------
         images: data.images,
         status: data.status
       });
@@ -58,7 +61,7 @@ class RoomTypeService {
     }
   }
 
-  // 4. SỬA LOẠI PHÒNG (Cập nhật giá thông minh)
+  // 4. SỬA LOẠI PHÒNG
   async updateRoomType(id, data) {
     const session = await mongoose.startSession();
     session.startTransaction();
@@ -67,18 +70,17 @@ class RoomTypeService {
       if (!roomType) throw new Error("Room Type not found");
 
       // KIỂM TRA BIẾN ĐỘNG GIÁ
-      // So sánh giá mới và giá cũ (chuyển về float để so sánh)
       if (data.currentPrice !== undefined && 
           parseFloat(roomType.currentPrice.toString()) !== parseFloat(data.currentPrice)) {
         
-        // B1: Đóng lịch sử cũ (Tìm bản ghi đang active của RoomType này)
+        // B1: Đóng lịch sử cũ
         await PriceHistory.findOneAndUpdate(
           { 
             relatedId: id, 
             onModel: 'RoomType', 
             endDate: null 
           },
-          { endDate: new Date() }, // Đóng lại bằng thời điểm hiện tại
+          { endDate: new Date() },
           { session }
         );
 
@@ -89,9 +91,14 @@ class RoomTypeService {
         roomType.currentPrice = data.currentPrice;
       }
 
-      // Cập nhật các thông tin khác (nếu có)
+      // Cập nhật các thông tin khác
       if (data.typeName) roomType.typeName = data.typeName;
       if (data.description) roomType.description = data.description;
+      
+      // --- [MỚI] THÊM DÒNG NÀY ĐỂ UPDATE SỐ NGƯỜI ---
+      if (data.personMax) roomType.personMax = data.personMax;
+      // ---------------------------------------------
+
       if (data.images) roomType.images = data.images;
       if (data.status) roomType.status = data.status;
 
@@ -113,11 +120,9 @@ class RoomTypeService {
     const session = await mongoose.startSession();
     session.startTransaction();
     try {
-      // B1: Xóa RoomType
       const deletedRoomType = await RoomType.findByIdAndDelete(id, { session });
       if (!deletedRoomType) throw new Error("Room Type not found");
 
-      // B2: Xóa sạch lịch sử giá liên quan (Clean up)
       await PriceHistory.deleteMany({ relatedId: id, onModel: 'RoomType' }, { session });
 
       await session.commitTransaction();
