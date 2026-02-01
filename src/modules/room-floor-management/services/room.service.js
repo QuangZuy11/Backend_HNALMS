@@ -41,6 +41,9 @@
 // services/room.service.js
 const Room = require("../models/room.model");
 const RoomDevice = require("../models/roomdevices.model");
+const Floor = require("../models/floor.model");      // [MỚI]
+const RoomType = require("../models/roomtype.model"); // [MỚI]
+const xlsx = require("xlsx");                        // [MỚI] Nhớ chạy: npm install xlsx
 
 /**
  * Tạo phòng mới
@@ -113,9 +116,7 @@ exports.updateRoom = async (roomId, updates) => {
   return await room.save();
 };
 
-// ... (Các hàm getAllRooms, getRoomDetail, deleteRoom, toggleStatus giữ nguyên như cũ)
-// Bạn nhớ copy lại các hàm đó vào đây hoặc giữ nguyên phần dưới của file cũ
-exports.getAllRooms = async (filters) => { /* Code cũ... */ 
+exports.getAllRooms = async (filters) => {
   const { floorId, roomTypeId, status, isActive } = filters;
   let query = {};
   if (floorId) query.floorId = floorId;
@@ -125,14 +126,14 @@ exports.getAllRooms = async (filters) => { /* Code cũ... */
 
   return await Room.find(query)
     .populate("floorId", "name")
-    .populate("roomTypeId", "name price")
+    .populate("roomTypeId", "typeName currentPrice images") // [SỬA] Populate đủ field để FE hiển thị
     .sort({ name: 1 });
 };
 
-exports.getRoomDetail = async (roomId) => { /* Code cũ... */
+exports.getRoomDetail = async (roomId) => {
   const room = await Room.findById(roomId)
     .populate("floorId", "name")
-    .populate("roomTypeId", "name price description");
+    .populate("roomTypeId", "typeName currentPrice description images");
 
   if (!room) throw { status: 404, message: "Không tìm thấy phòng" };
 
@@ -144,7 +145,7 @@ exports.getRoomDetail = async (roomId) => { /* Code cũ... */
   return roomData;
 };
 
-exports.deleteRoom = async (roomId) => { /* Code cũ... */
+exports.deleteRoom = async (roomId) => {
   const room = await Room.findById(roomId);
   if (!room) throw { status: 404, message: "Không tìm thấy phòng" };
   if (room.status === "Occupied") {
@@ -153,7 +154,7 @@ exports.deleteRoom = async (roomId) => { /* Code cũ... */
   return await Room.findByIdAndDelete(roomId);
 };
 
-exports.toggleStatus = async (roomId, isActive) => { /* Code cũ... */
+exports.toggleStatus = async (roomId, isActive) => {
   const room = await Room.findById(roomId);
   if (!room) throw { status: 404, message: "Không tìm thấy phòng" };
   if (room.status === "Occupied" && isActive === false) {
@@ -161,4 +162,123 @@ exports.toggleStatus = async (roomId, isActive) => { /* Code cũ... */
   }
   room.isActive = isActive;
   return await room.save();
+};
+
+// ==========================================
+//          [MỚI] TÍNH NĂNG EXCEL
+// ==========================================
+
+/**
+ * 1. Tạo Buffer file mẫu Excel
+ */
+exports.generateTemplateBuffer = async () => {
+  const headers = [
+    ["Mã phòng", "Tên phòng", "Tên tầng", "Tên loại phòng", "Mô tả"]
+  ];
+
+  const wb = xlsx.utils.book_new();
+  const ws = xlsx.utils.aoa_to_sheet(headers);
+
+  // Data mẫu
+  xlsx.utils.sheet_add_aoa(ws, [
+    ["P101", "Phòng 101 View Biển", "Tầng 1", "Studio Cao Cấp", "Gần thang máy"]
+  ], { origin: "A2" });
+
+  // Độ rộng cột
+  ws['!cols'] = [{wch:15}, {wch:25}, {wch:15}, {wch:20}, {wch:30}];
+  xlsx.utils.book_append_sheet(wb, ws, "Mau_Nhap_Phong");
+
+  return xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
+};
+
+/**
+ * 2. Xử lý logic nhập file Excel
+ */
+exports.importRoomsFromFile = async (file) => {
+  if (!file) throw { status: 400, message: "Vui lòng tải lên file Excel" };
+
+  // Đọc file
+  const workbook = xlsx.read(file.path || file.buffer, { type: file.path ? 'file' : 'buffer' });
+  const sheetName = workbook.SheetNames[0];
+  const rawData = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
+
+  if (rawData.length === 0) throw { status: 400, message: "File rỗng, không có dữ liệu." };
+
+  // Lấy dữ liệu tham chiếu
+  const floors = await Floor.find();
+  const roomTypes = await RoomType.find();
+
+  // Map: "tên tầng" -> "id" (Chuẩn hóa chữ thường)
+  const floorMap = new Map();
+  floors.forEach(f => floorMap.set(f.name.trim().toLowerCase(), f._id));
+
+  const typeMap = new Map();
+  roomTypes.forEach(t => typeMap.set(t.typeName.trim().toLowerCase(), t._id));
+
+  const validRooms = [];
+  const errors = [];
+
+  // Duyệt dữ liệu
+  for (let i = 0; i < rawData.length; i++) {
+    const row = rawData[i];
+    const rowIndex = i + 2;
+
+    const roomCode = row["Mã phòng"];
+    const name = row["Tên phòng"];
+    const floorName = row["Tên tầng"];
+    const typeName = row["Tên loại phòng"];
+    const desc = row["Mô tả"] || "";
+
+    if (!roomCode || !name || !floorName || !typeName) {
+      errors.push(`Dòng ${rowIndex}: Thiếu thông tin bắt buộc.`);
+      continue;
+    }
+
+    const floorId = floorMap.get(String(floorName).trim().toLowerCase());
+    const roomTypeId = typeMap.get(String(typeName).trim().toLowerCase());
+
+    if (!floorId) {
+      errors.push(`Dòng ${rowIndex}: Không tìm thấy tầng "${floorName}".`);
+      continue;
+    }
+    if (!roomTypeId) {
+      errors.push(`Dòng ${rowIndex}: Không tìm thấy loại phòng "${typeName}".`);
+      continue;
+    }
+
+    // Check trùng trong file
+    if (validRooms.some(r => r.roomCode === String(roomCode))) {
+      errors.push(`Dòng ${rowIndex}: Mã phòng "${roomCode}" bị trùng lặp trong file.`);
+      continue;
+    }
+
+    validRooms.push({
+      roomCode: String(roomCode),
+      name: String(name),
+      floorId,
+      roomTypeId,
+      description: desc,
+      status: 'Available',
+      isActive: true
+    });
+  }
+
+  if (errors.length > 0) {
+    // Ném lỗi về Controller với chi tiết lỗi
+    const error = new Error("Dữ liệu không hợp lệ");
+    error.status = 400;
+    error.details = errors; 
+    throw error;
+  }
+
+  // Insert DB
+  try {
+    await Room.insertMany(validRooms, { ordered: false });
+    return { count: validRooms.length };
+  } catch (dbError) {
+    if (dbError.code === 11000) {
+       throw { status: 400, message: "Lỗi: Một số Mã phòng trong file đã tồn tại trên hệ thống." };
+    }
+    throw dbError;
+  }
 };

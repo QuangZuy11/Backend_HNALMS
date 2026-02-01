@@ -53,6 +53,15 @@ const RoomService = require("../services/room.service");
 // Helper function để xử lý lỗi tập trung
 const handleError = (res, error) => {
   const status = error.status || 500;
+  
+  // Nếu có danh sách lỗi chi tiết (từ Excel service)
+  if (error.details) {
+    return res.status(status).json({ 
+      message: error.message, 
+      errors: error.details // Trả về mảng lỗi chi tiết cho FE hiển thị
+    });
+  }
+
   const message = error.message || "Lỗi server";
   res.status(status).json({ message, error: error.toString() });
 };
@@ -118,6 +127,36 @@ exports.toggleRoomStatus = async (req, res) => {
     res.status(200).json({
       message: `Đã cập nhật trạng thái hoạt động thành: ${isActive}`,
       data: room,
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+// ==========================================
+//          [MỚI] CONTROLLER EXCEL
+// ==========================================
+
+exports.downloadTemplate = async (req, res) => {
+  try {
+    const buffer = await RoomService.generateTemplateBuffer();
+    
+    res.setHeader('Content-Disposition', 'attachment; filename="Mau_Nhap_Phong.xlsx"');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.send(buffer);
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+exports.importRooms = async (req, res) => {
+  try {
+    // req.file được multer xử lý (cần config route upload)
+    const result = await RoomService.importRoomsFromFile(req.file);
+    
+    res.status(200).json({ 
+      success: true, 
+      message: `Đã nhập thành công ${result.count} phòng.` 
     });
   } catch (error) {
     handleError(res, error);

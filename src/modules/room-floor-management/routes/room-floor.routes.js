@@ -48,5 +48,10 @@ router.delete("/room/:id", roomController.deleteRoom);
 // PATCH /api/rooms/:id/toggle - Bật/Tắt hoạt động (Soft Delete)
 router.patch("/room/:id/toggle", roomController.toggleRoomStatus);
 
+// // Route tải mẫu
+// router.get('/template', roomController.downloadTemplate);
+
+// // Route import (key file là 'file')
+// router.post('/import', upload.single('file'), roomController.importRooms);
 
 module.exports = router;
