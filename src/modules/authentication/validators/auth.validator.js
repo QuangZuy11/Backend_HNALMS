@@ -60,10 +60,10 @@ const validateUsername = (username) => {
  * Middleware to validate registration input
  */
 const validateRegister = (req, res, next) => {
-  const { username, phoneNumber, email, passwordHash, role } = req.body || {};
+  const { username, phoneNumber, email, password, role } = req.body || {};
 
-  // Check required fields
-  if (!username || !phoneNumber || !email || !passwordHash) {
+  // Check required fields (client gửi field "password", không phải passwordHash)
+  if (!username || !phoneNumber || !email || !password) {
     return res.status(400).json({
       success: false,
       message: "Username, phone number, email and password are required"
@@ -87,8 +87,8 @@ const validateRegister = (req, res, next) => {
     });
   }
 
-  // Validate password
-  const passwordValidation = validatePassword(passwordHash);
+  // Validate password (plain password từ client)
+  const passwordValidation = validatePassword(password);
   if (!passwordValidation.valid) {
     return res.status(400).json({
       success: false,
