@@ -49,10 +49,58 @@ const isManagerOrAdmin = authorize('admin', 'manager');
 const isOwnerOrAdmin = authorize('admin', 'owner');
 
 /**
- * Middleware kiểm tra user có phải là tenant không
- * Shortcut cho authorize('tenant')
+ * Middleware kiểm tra user có phải là Tenant không
+ * Shortcut cho authorize('Tenant')
  */
-const isTenant = authorize('tenant');
+const isTenant = authorize('Tenant');
+
+/**
+ * Ma trận quyền tạo tài khoản:
+ * - Admin -> Owner
+ * - Owner -> Manager, Accountant
+ * - Manager -> Tenant
+ */
+const ALLOWED_CREATE_ROLES = {
+  admin: ['owner'],
+  owner: ['manager', 'accountant'],
+  manager: ['Tenant']
+};
+
+/**
+ * Middleware kiểm tra user có quyền tạo tài khoản với role được chỉ định
+ * Đặt sau authenticate, trước controller
+ * req.body.role phải chứa role cần tạo
+ */
+const canCreateAccount = (req, res, next) => {
+  const creatorRole = req.user?.role;
+  const targetRole = req.body?.role;
+
+  if (!creatorRole) {
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized. Please login first"
+    });
+  }
+
+  if (!targetRole) {
+    return res.status(400).json({
+      success: false,
+      message: "Role is required"
+    });
+  }
+
+  const allowedRoles = ALLOWED_CREATE_ROLES[creatorRole];
+  if (!allowedRoles || !allowedRoles.includes(targetRole)) {
+    return res.status(403).json({
+      success: false,
+      message: `Bạn không có quyền tạo tài khoản với role "${targetRole}". Role của bạn (${creatorRole}) chỉ được tạo: ${allowedRoles ? allowedRoles.join(', ') : 'không có'}`,
+      creatorRole,
+      targetRole
+    });
+  }
+
+  next();
+};
 
 /**
  * Middleware kiểm tra user có quyền truy cập resource của chính họ
@@ -98,5 +146,6 @@ module.exports = {
   isManagerOrAdmin,
   isOwnerOrAdmin,
   isTenant,
-  isResourceOwner
+  isResourceOwner,
+  canCreateAccount
 };

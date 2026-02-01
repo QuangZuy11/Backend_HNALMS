@@ -167,16 +167,6 @@ const validateChangePassword = (req, res, next) => {
   next();
 };
 
-module.exports = {
-  isValidEmail,
-  validatePassword,
-  validateUsername,
-  validateRegister,
-  validateLogin,
-  validateChangePassword
-};
-
-
 /**
  * Middleware to validate forgot password input
  */
@@ -246,6 +236,54 @@ const validateUpdateProfile = (req, res, next) => {
   next();
 };
 
+/**
+ * Middleware to validate create account input (role-based account creation)
+ * Admin -> Owner | Owner -> Manager, Accountant | Manager -> Tenant
+ */
+const validateCreateAccount = (req, res, next) => {
+  const { username, phoneNumber, email, password, role } = req.body || {};
+
+  if (!username || !phoneNumber || !email || !password || !role) {
+    return res.status(400).json({
+      success: false,
+      message: "Username, phone number, email, password and role are required"
+    });
+  }
+
+  const usernameValidation = validateUsername(username);
+  if (!usernameValidation.valid) {
+    return res.status(400).json({
+      success: false,
+      message: usernameValidation.message
+    });
+  }
+
+  if (!isValidEmail(email)) {
+    return res.status(400).json({
+      success: false,
+      message: "Email không đúng định dạng"
+    });
+  }
+
+  const passwordValidation = validatePassword(password);
+  if (!passwordValidation.valid) {
+    return res.status(400).json({
+      success: false,
+      message: passwordValidation.message
+    });
+  }
+
+  const allowedRoles = ["owner", "manager", "accountant", "Tenant"];
+  if (!allowedRoles.includes(role)) {
+    return res.status(400).json({
+      success: false,
+      message: `Invalid role. Must be one of: ${allowedRoles.join(", ")}`
+    });
+  }
+
+  next();
+};
+
 module.exports = {
   isValidEmail,
   validatePassword,
@@ -254,5 +292,6 @@ module.exports = {
   validateLogin,
   validateChangePassword,
   validateForgotPassword,
-  validateUpdateProfile
+  validateUpdateProfile,
+  validateCreateAccount
 };

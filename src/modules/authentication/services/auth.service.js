@@ -314,6 +314,129 @@ const forgotPassword = async (email) => {
   };
 };
 
+/**
+ * Create account by role (Admin/Owner/Manager tạo tài khoản cho cấp dưới)
+ * Không trả về token - người tạo vẫn đăng nhập
+ * @param {Object} userData - { username, phoneNumber, email, password, role }
+ * @param {string} createdBy - userId của người tạo (optional, cho audit)
+ * @returns {Object} Created user (without password, no token)
+ */
+const createAccountByRole = async (userData, createdBy = null) => {
+  const { username, phoneNumber, email, password, role } = userData;
+
+  const existingUser = await User.findOne({
+    $or: [
+      { username },
+      { email: String(email).toLowerCase() },
+      { phoneNumber }
+    ]
+  });
+  if (existingUser) {
+    throw new Error("Username, email hoặc số điện thoại đã tồn tại");
+  }
+
+  const hashedPassword = await bcrypt.hash(password, 10);
+
+  const newUser = new User({
+    username,
+    phoneNumber,
+    email: String(email).toLowerCase(),
+    password: hashedPassword,
+    role: role || "Tenant",
+    status: "active",
+    createdBy: createdBy || null,
+    createdAt: new Date(),
+  });
+
+  await newUser.save();
+
+  return {
+    _id: newUser._id,
+    username: newUser.username,
+    email: newUser.email,
+    phoneNumber: newUser.phoneNumber,
+    role: newUser.role,
+    status: newUser.status,
+    createdAt: newUser.createdAt,
+  };
+};
+
+/**
+ * Lấy danh sách tài khoản do user hiện tại tạo
+ * @param {string} userId - User ID của người tạo
+ * @returns {Array} Danh sách user (không có password)
+ */
+const getCreatedAccounts = async (userId) => {
+  const users = await User.find({ createdBy: userId })
+    .select("-password")
+    .sort({ createdAt: -1 })
+    .lean();
+  return users;
+};
+
+/**
+ * Đóng tài khoản - Chỉ chuyển status sang inactive, không xóa DB
+ * Chỉ cho phép đóng tài khoản do chính user hiện tại tạo
+ * @param {string} accountId - ID tài khoản cần đóng
+ * @param {string} currentUserId - ID user đang thực hiện (người tạo)
+ * @returns {Object} User đã cập nhật
+ */
+/**
+ * Xem chi tiết tài khoản do user hiện tại tạo
+ * @param {string} accountId - ID tài khoản
+ * @param {string} currentUserId - ID user đang xem (người tạo)
+ * @returns {Object} User + UserInfo
+ */
+const getCreatedAccountDetail = async (accountId, currentUserId) => {
+  const user = await User.findById(accountId).select("-password").lean();
+  if (!user) {
+    throw new Error("Tài khoản không tồn tại");
+  }
+
+  if (String(user.createdBy) !== String(currentUserId)) {
+    throw new Error("Bạn không có quyền xem chi tiết tài khoản này");
+  }
+
+  const userInfo = await UserInfo.findOne({ userId: user._id }).lean();
+
+  return {
+    ...user,
+    fullname: userInfo?.fullname || null,
+    cccd: userInfo?.cccd || null,
+    address: userInfo?.address || null,
+    dob: userInfo?.dob || null,
+    gender: userInfo?.gender || null,
+  };
+};
+
+const disableAccount = async (accountId, currentUserId) => {
+  const user = await User.findById(accountId);
+  if (!user) {
+    throw new Error("Tài khoản không tồn tại");
+  }
+
+  if (String(user.createdBy) !== String(currentUserId)) {
+    throw new Error("Bạn không có quyền đóng tài khoản này");
+  }
+
+  if (user.status === "inactive") {
+    throw new Error("Tài khoản đã bị đóng trước đó");
+  }
+
+  user.status = "inactive";
+  await user.save();
+
+  return {
+    _id: user._id,
+    username: user.username,
+    email: user.email,
+    phoneNumber: user.phoneNumber,
+    role: user.role,
+    status: user.status,
+    createdAt: user.createdAt,
+  };
+};
+
 module.exports = {
   registerUser,
   loginUser,
@@ -323,4 +446,8 @@ module.exports = {
   changePassword,
   verifyEmail,
   forgotPassword,
+  createAccountByRole,
+  getCreatedAccounts,
+  getCreatedAccountDetail,
+  disableAccount,
 };

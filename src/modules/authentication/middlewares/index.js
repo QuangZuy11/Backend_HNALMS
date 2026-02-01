@@ -13,7 +13,8 @@ const {
   isManagerOrAdmin, 
   isOwnerOrAdmin,
   isTenant,
-  isResourceOwner 
+  isResourceOwner,
+  canCreateAccount
 } = require('./authorize');
 
 module.exports = {
@@ -27,5 +28,6 @@ module.exports = {
   isManagerOrAdmin,
   isOwnerOrAdmin,
   isTenant,
-  isResourceOwner
+  isResourceOwner,
+  canCreateAccount
 };
