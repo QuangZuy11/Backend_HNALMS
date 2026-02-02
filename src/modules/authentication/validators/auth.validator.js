@@ -238,7 +238,7 @@ const validateUpdateProfile = (req, res, next) => {
 
 /**
  * Middleware to validate create account input (role-based account creation)
- * Admin -> Owner | Owner -> Manager, Accountant | Manager -> Tenant
+ * Admin -> Owner | Owner -> Manager, Accountant
  */
 const validateCreateAccount = (req, res, next) => {
   const { username, phoneNumber, email, password, role } = req.body || {};
@@ -273,7 +273,7 @@ const validateCreateAccount = (req, res, next) => {
     });
   }
 
-  const allowedRoles = ["owner", "manager", "accountant", "Tenant"];
+  const allowedRoles = ["owner", "manager", "accountant"];
   if (!allowedRoles.includes(role)) {
     return res.status(400).json({
       success: false,

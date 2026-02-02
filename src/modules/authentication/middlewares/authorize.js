@@ -58,12 +58,10 @@ const isTenant = authorize('Tenant');
  * Ma trận quyền tạo tài khoản:
  * - Admin -> Owner
  * - Owner -> Manager, Accountant
- * - Manager -> Tenant
  */
 const ALLOWED_CREATE_ROLES = {
   admin: ['owner'],
-  owner: ['manager', 'accountant'],
-  manager: ['Tenant']
+  owner: ['manager', 'accountant']
 };
 
 /**

@@ -1,9 +1,9 @@
 const authService = require("../services/auth.service");
 const emailService = require("../../notification-management/services/email.service");
 /**
- * Create Account - Tạo tài khoản theo role (Admin/Owner/Manager)
+ * Create Account - Tạo tài khoản theo role (Admin/Owner)
  * POST /api/auth/create-account
- * Admin -> Owner | Owner -> Manager, Accountant | Manager -> Tenant
+ * Admin -> Owner | Owner -> Manager, Accountant
  */
 exports.createAccount = async (req, res) => {
   try {
@@ -44,6 +44,7 @@ exports.createAccount = async (req, res) => {
 exports.getCreatedAccounts = async (req, res) => {
   try {
     const userId = req.user?.userId;
+    const creatorRole = req.user?.role;
     if (!userId) {
       return res.status(401).json({
         success: false,
@@ -51,7 +52,7 @@ exports.getCreatedAccounts = async (req, res) => {
       });
     }
 
-    const accounts = await authService.getCreatedAccounts(userId);
+    const accounts = await authService.getCreatedAccounts(userId, creatorRole);
 
     res.json({
       success: true,
@@ -76,6 +77,7 @@ exports.getAccountDetail = async (req, res) => {
   try {
     const { accountId } = req.params;
     const currentUserId = req.user?.userId;
+    const creatorRole = req.user?.role;
 
     if (!currentUserId) {
       return res.status(401).json({
@@ -84,7 +86,7 @@ exports.getAccountDetail = async (req, res) => {
       });
     }
 
-    const account = await authService.getCreatedAccountDetail(accountId, currentUserId);
+    const account = await authService.getCreatedAccountDetail(accountId, currentUserId, creatorRole);
 
     res.json({
       success: true,
@@ -123,6 +125,7 @@ exports.disableAccount = async (req, res) => {
   try {
     const { accountId } = req.params;
     const currentUserId = req.user?.userId;
+    const creatorRole = req.user?.role;
 
     if (!currentUserId) {
       return res.status(401).json({
@@ -131,7 +134,7 @@ exports.disableAccount = async (req, res) => {
       });
     }
 
-    const user = await authService.disableAccount(accountId, currentUserId);
+    const user = await authService.disableAccount(accountId, currentUserId, creatorRole);
 
     res.json({
       success: true,

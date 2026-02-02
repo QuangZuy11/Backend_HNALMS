@@ -315,7 +315,8 @@ const forgotPassword = async (email) => {
 };
 
 /**
- * Create account by role (Admin/Owner/Manager tạo tài khoản cho cấp dưới)
+ * Create account by role (Admin/Owner tạo tài khoản cho cấp dưới)
+ * Admin -> Owner | Owner -> Manager, Accountant
  * Không trả về token - người tạo vẫn đăng nhập
  * @param {Object} userData - { username, phoneNumber, email, password, role }
  * @param {string} createdBy - userId của người tạo (optional, cho audit)
@@ -361,13 +362,29 @@ const createAccountByRole = async (userData, createdBy = null) => {
   };
 };
 
+// Admin chỉ xem Owner | Owner chỉ xem Manager, Accountant
+const ALLOWED_VIEW_ROLES = {
+  admin: ['owner'],
+  owner: ['manager', 'accountant']
+};
+
 /**
- * Lấy danh sách tài khoản do user hiện tại tạo
+ * Lấy danh sách tài khoản do user hiện tại tạo (theo đúng quyền)
+ * Admin chỉ xem Owner | Owner chỉ xem Manager, Accountant
  * @param {string} userId - User ID của người tạo
+ * @param {string} creatorRole - Role của người xem (admin, owner)
  * @returns {Array} Danh sách user (không có password)
  */
-const getCreatedAccounts = async (userId) => {
-  const users = await User.find({ createdBy: userId })
+const getCreatedAccounts = async (userId, creatorRole) => {
+  const allowedRoles = ALLOWED_VIEW_ROLES[creatorRole];
+  if (!allowedRoles || allowedRoles.length === 0) {
+    return [];
+  }
+
+  const users = await User.find({
+    createdBy: userId,
+    role: { $in: allowedRoles }
+  })
     .select("-password")
     .sort({ createdAt: -1 })
     .lean();
@@ -382,12 +399,14 @@ const getCreatedAccounts = async (userId) => {
  * @returns {Object} User đã cập nhật
  */
 /**
- * Xem chi tiết tài khoản do user hiện tại tạo
+ * Xem chi tiết tài khoản do user hiện tại tạo (theo đúng quyền)
+ * Admin chỉ xem Owner | Owner chỉ xem Manager, Accountant
  * @param {string} accountId - ID tài khoản
  * @param {string} currentUserId - ID user đang xem (người tạo)
+ * @param {string} creatorRole - Role của người xem (admin, owner)
  * @returns {Object} User + UserInfo
  */
-const getCreatedAccountDetail = async (accountId, currentUserId) => {
+const getCreatedAccountDetail = async (accountId, currentUserId, creatorRole) => {
   const user = await User.findById(accountId).select("-password").lean();
   if (!user) {
     throw new Error("Tài khoản không tồn tại");
@@ -395,6 +414,11 @@ const getCreatedAccountDetail = async (accountId, currentUserId) => {
 
   if (String(user.createdBy) !== String(currentUserId)) {
     throw new Error("Bạn không có quyền xem chi tiết tài khoản này");
+  }
+
+  const allowedRoles = ALLOWED_VIEW_ROLES[creatorRole];
+  if (!allowedRoles || !allowedRoles.includes(user.role)) {
+    throw new Error("Bạn không có quyền xem tài khoản với vai trò này");
   }
 
   const userInfo = await UserInfo.findOne({ userId: user._id }).lean();
@@ -409,7 +433,7 @@ const getCreatedAccountDetail = async (accountId, currentUserId) => {
   };
 };
 
-const disableAccount = async (accountId, currentUserId) => {
+const disableAccount = async (accountId, currentUserId, creatorRole) => {
   const user = await User.findById(accountId);
   if (!user) {
     throw new Error("Tài khoản không tồn tại");
@@ -417,6 +441,11 @@ const disableAccount = async (accountId, currentUserId) => {
 
   if (String(user.createdBy) !== String(currentUserId)) {
     throw new Error("Bạn không có quyền đóng tài khoản này");
+  }
+
+  const allowedRoles = ALLOWED_VIEW_ROLES[creatorRole];
+  if (!allowedRoles || !allowedRoles.includes(user.role)) {
+    throw new Error("Bạn không có quyền đóng tài khoản với vai trò này");
   }
 
   if (user.status === "inactive") {
