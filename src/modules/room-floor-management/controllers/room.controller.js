@@ -47,118 +47,110 @@
 
 
 
-// controllers/room.controller.js
 const RoomService = require("../services/room.service");
 
 // Helper function để xử lý lỗi tập trung
 const handleError = (res, error) => {
+  console.error("🔴 LỖI CHI TIẾT:", error);
   const status = error.status || 500;
+  const message = error.message || "Lỗi server nội bộ";
   
-  // Nếu có danh sách lỗi chi tiết (từ Excel service)
-  if (error.details) {
-    return res.status(status).json({ 
-      message: error.message, 
-      errors: error.details // Trả về mảng lỗi chi tiết cho FE hiển thị
-    });
-  }
-
-  const message = error.message || "Lỗi server";
-  res.status(status).json({ message, error: error.toString() });
+  res.status(status).json({ 
+    success: false,
+    message: message,
+    errorDetails: error 
+  });
 };
 
 exports.createRoom = async (req, res) => {
   try {
     const newRoom = await RoomService.createRoom(req.body);
-    res.status(201).json({
-      message: "Tạo phòng thành công",
-      data: newRoom,
-    });
-  } catch (error) {
-    handleError(res, error);
-  }
+    res.status(201).json({ message: "Tạo phòng thành công", data: newRoom });
+  } catch (error) { handleError(res, error); }
 };
 
 exports.getRooms = async (req, res) => {
   try {
     const rooms = await RoomService.getAllRooms(req.query);
-    res.status(200).json({
-      count: rooms.length,
-      data: rooms,
-    });
-  } catch (error) {
-    handleError(res, error);
-  }
+    res.status(200).json({ count: rooms.length, data: rooms });
+  } catch (error) { handleError(res, error); }
 };
 
 exports.getRoomById = async (req, res) => {
   try {
     const room = await RoomService.getRoomDetail(req.params.id);
     res.status(200).json({ data: room });
-  } catch (error) {
-    handleError(res, error);
-  }
+  } catch (error) { handleError(res, error); }
 };
 
 exports.updateRoom = async (req, res) => {
   try {
     const updatedRoom = await RoomService.updateRoom(req.params.id, req.body);
-    res.status(200).json({
-      message: "Cập nhật phòng thành công",
-      data: updatedRoom,
-    });
-  } catch (error) {
-    handleError(res, error);
-  }
+    res.status(200).json({ message: "Cập nhật phòng thành công", data: updatedRoom });
+  } catch (error) { handleError(res, error); }
 };
 
 exports.deleteRoom = async (req, res) => {
   try {
     await RoomService.deleteRoom(req.params.id);
     res.status(200).json({ message: "Đã xóa phòng vĩnh viễn" });
-  } catch (error) {
-    handleError(res, error);
-  }
+  } catch (error) { handleError(res, error); }
 };
 
 exports.toggleRoomStatus = async (req, res) => {
   try {
     const { isActive } = req.body;
     const room = await RoomService.toggleStatus(req.params.id, isActive);
-    res.status(200).json({
-      message: `Đã cập nhật trạng thái hoạt động thành: ${isActive}`,
-      data: room,
-    });
-  } catch (error) {
-    handleError(res, error);
-  }
+    res.status(200).json({ message: `Đã cập nhật trạng thái hoạt động thành: ${isActive}`, data: room });
+  } catch (error) { handleError(res, error); }
 };
 
 // ==========================================
-//          [MỚI] CONTROLLER EXCEL
+//          [EXCEL FEATURES]
 // ==========================================
 
 exports.downloadTemplate = async (req, res) => {
   try {
     const buffer = await RoomService.generateTemplateBuffer();
-    
     res.setHeader('Content-Disposition', 'attachment; filename="Mau_Nhap_Phong.xlsx"');
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.send(buffer);
-  } catch (error) {
-    handleError(res, error);
-  }
+  } catch (error) { handleError(res, error); }
 };
 
+// HÀM IMPORT ĐÃ ĐƯỢC LÀM MỚI ĐỂ BẮT LỖI TỐT HƠN
 exports.importRooms = async (req, res) => {
+  console.log("---------------- START IMPORT ----------------");
   try {
-    // req.file được multer xử lý (cần config route upload)
+    // 1. Kiểm tra file từ Multer
+    if (!req.file) {
+      throw { status: 400, message: "Không tìm thấy file! Hãy chắc chắn Key gửi lên là 'file'." };
+    }
+    console.log("📂 Đã nhận file:", req.file.originalname, "| Size:", req.file.size);
+
+    // 2. Gọi Service
     const result = await RoomService.importRoomsFromFile(req.file);
-    
+
     res.status(200).json({ 
       success: true, 
-      message: `Đã nhập thành công ${result.count} phòng.` 
+      message: `Nhập thành công ${result.count} phòng!`, 
+      data: result 
     });
+
   } catch (error) {
-    handleError(res, error);
+    console.error("🔥 LỖI GỐC (CONTROLLER):");
+    console.error(error); 
+
+    // Ép kiểu lỗi thành message string để tránh [object Object]
+    const status = error.status || 500;
+    const message = error.message || "Lỗi không xác định khi nhập file";
+    const details = error.details || null; // Lấy danh sách lỗi chi tiết (nếu có)
+
+    res.status(status).json({ 
+      success: false,
+      message: message,
+      errors: details,      // Frontend sẽ hiển thị cái này nếu có
+      debugStack: error.stack // Dùng để debug
+    });
   }
 };

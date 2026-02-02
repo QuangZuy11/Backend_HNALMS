@@ -1,57 +1,63 @@
 const express = require("express");
+const router = express.Router();
+const uploadImg = require('../middlewares/uploadimg');
+const uploadExcel = require('../middlewares/uploadexcel');
+// Import Controllers
 const roomController = require("../controllers/room.controller");
 const floorController = require("../controllers/floor.controller");
 const roomTypeController = require("../controllers/roomtype.controller");
-const router = express.Router();
-const upload = require('../middlewares/upload');
 
-// --- FLOOR ROUTES (Mới thêm vào) ---
+// ==================================================================
+// 1. CÁC ROUTE ĐẶC BIỆT CỦA ROOM (BẮT BUỘC PHẢI ĐỂ TRÊN CÙNG)
+// ==================================================================
+// Vì App.js dùng "/", nên ở đây ta phải viết rõ là "/room/..."
 
-// Lấy danh sách tầng
+// Tải mẫu Excel (GET /room/template)
+// [QUAN TRỌNG] Phải đặt dòng này TRƯỚC dòng /room/:id
+router.get('/excel/template', roomController.downloadTemplate);
+
+// Nhập file Excel (POST /room/import)
+// [QUAN TRỌNG] Phải đặt dòng này TRƯỚC dòng /room/:id
+router.post('/excel/import', uploadExcel.single('file'), roomController.importRooms);
+
+
+// ==================================================================
+// 2. CÁC ROUTE DANH SÁCH & TẠO MỚI (KHÔNG CÓ ID)
+// ==================================================================
+
+// --- Room ---
+router.get("/room", roomController.getRooms);      // GET /room
+router.post("/room", roomController.createRoom);   // POST /room
+
+// --- Floor ---
 router.get("/floors", floorController.getFloors);
-
-// Lấy chi tiết 1 tầng
-router.get("/floors/:id", floorController.getFloorById);
-
-// Thêm tầng mới
 router.post("/floors", floorController.createFloor);
 
-// Sửa tầng (theo ID)
-router.put("/floors/:id", floorController.updateFloor);
-
-// Xóa tầng (theo ID)
-router.delete("/floors/:id", floorController.deleteFloor);
-
+// --- RoomType ---
 router.get("/roomtypes", roomTypeController.getRoomTypes);
-router.get("/roomtypes/:id", roomTypeController.getRoomTypeById);
-// CREATE: upload.array('images', 10) -> Cho phép upload tối đa 10 ảnh, field name là 'images'
-router.post('/roomtypes', upload.array('images', 10), roomTypeController.createRoomType);
-// UPDATE: Cũng cần upload middleware để thêm ảnh mới
-router.put('/roomtypes/:id', upload.array('images', 10), roomTypeController.updateRoomType);
-router.delete("/roomtypes/:id", roomTypeController.deleteRoomType);
+router.post('/roomtypes', uploadImg.array('images', 10), roomTypeController.createRoomType);
 
-// POST /api/rooms - Tạo phòng mới (Chỉ Owner/Admin)
-router.post("/room", roomController.createRoom);
 
-// GET /api/rooms - Lấy danh sách (Có thể lọc theo ?floorId=...&status=...)
-router.get("/room", roomController.getRooms);
+// ==================================================================
+// 3. CÁC ROUTE CÓ THAM SỐ :ID (BẮT BUỘC PHẢI ĐỂ CUỐI CÙNG)
+// ==================================================================
+// Tại sao phải để cuối? 
+// Vì nếu để lên đầu, nó sẽ ăn mất chữ "template" hoặc "import" và coi đó là ID.
 
-// GET /api/rooms/:id - Lấy chi tiết
-router.get("/room/:id", roomController.getRoomById);
-
-// PUT /api/rooms/:id - Cập nhật thông tin (Có check Occupied)
-router.put("/room/:id", roomController.updateRoom);
-
-// DELETE /api/rooms/:id - Xóa phòng (Có check Occupied)
-router.delete("/room/:id", roomController.deleteRoom);
-
-// PATCH /api/rooms/:id/toggle - Bật/Tắt hoạt động (Soft Delete)
+// --- Room Operations by ID ---
+router.get("/room/:id", roomController.getRoomById);       // GET /room/:id
+router.put("/room/:id", roomController.updateRoom);        // PUT /room/:id
+router.delete("/room/:id", roomController.deleteRoom);     // DELETE /room/:id
 router.patch("/room/:id/toggle", roomController.toggleRoomStatus);
 
-// // Route tải mẫu
-// router.get('/template', roomController.downloadTemplate);
+// --- Floor Operations by ID ---
+router.get("/floors/:id", floorController.getFloorById);
+router.put("/floors/:id", floorController.updateFloor);
+router.delete("/floors/:id", floorController.deleteFloor);
 
-// // Route import (key file là 'file')
-// router.post('/import', upload.single('file'), roomController.importRooms);
+// --- RoomType Operations by ID ---
+router.get("/roomtypes/:id", roomTypeController.getRoomTypeById);
+router.put('/roomtypes/:id', uploadImg.array('images', 10), roomTypeController.updateRoomType);
+router.delete("/roomtypes/:id", roomTypeController.deleteRoomType);
 
 module.exports = router;
