@@ -36,10 +36,12 @@ ApiRouter.get("/users", async (req, res) => {
 // Import routes từ modules
 const roomRoutes = require("../../modules/room-floor-management/routes/room-floor.routes");
 const buildingRoutes = require("../../modules/building-information/routes/building.routes");
+const serviceRoutes = require("../../modules/service-management/routes/service.routes");
 
 // Mount routes
 ApiRouter.use("/auth", authRoutes);
 ApiRouter.use("/", roomRoutes);
 ApiRouter.use("/buildings", buildingRoutes);
+ApiRouter.use("/services", serviceRoutes);
 
 module.exports = ApiRouter;
