@@ -1,4 +1,5 @@
 const bcrypt = require("bcryptjs");
+const mongoose = require("mongoose");
 const User = require("../models/user.model");
 const UserInfo = require("../models/userInfor.model");
 const { generateToken } = require("../../../shared/config/jwt");
@@ -377,12 +378,13 @@ const ALLOWED_VIEW_ROLES = {
  * @returns {Array} Danh sách user (không có password)
  */
 const getCreatedAccounts = async (userId, creatorRole) => {
-  const allowedRoles = ALLOWED_VIEW_ROLES[creatorRole];
+  const roleKey = (creatorRole || "").toLowerCase();
+  const allowedRoles = ALLOWED_VIEW_ROLES[roleKey];
   if (!allowedRoles || allowedRoles.length === 0) {
     return [];
   }
 
-  if (creatorRole === 'manager') {
+  if (roleKey === 'manager') {
     const users = await User.aggregate([
       { $match: { role: { $in: allowedRoles } } },
       { $sort: { createdAt: -1 } },
@@ -405,13 +407,40 @@ const getCreatedAccounts = async (userId, creatorRole) => {
     return users;
   }
 
-  const users = await User.find({
-    createdBy: userId,
-    role: { $in: allowedRoles }
-  })
-    .select("-password")
-    .sort({ createdAt: -1 })
-    .lean();
+  // Admin: chỉ tài khoản Owner do mình tạo
+  // Owner: hiển thị tất cả Quản lý, Kế toán (để danh sách nhân sự đầy đủ)
+  if (roleKey === 'admin') {
+    const creatorObjectId = mongoose.Types.ObjectId.isValid(userId) ? new mongoose.Types.ObjectId(userId) : userId;
+    const users = await User.find({
+      createdBy: creatorObjectId,
+      role: { $in: allowedRoles }
+    })
+      .select("-password")
+      .sort({ createdAt: -1 })
+      .lean();
+    return users;
+  }
+
+  // Owner: lấy tất cả Manager, Accountant (có fullname từ userinfos)
+  const users = await User.aggregate([
+    { $match: { role: { $in: allowedRoles } } },
+    { $sort: { createdAt: -1 } },
+    { $project: { password: 0 } },
+    {
+      $lookup: {
+        from: 'userinfos',
+        localField: '_id',
+        foreignField: 'userId',
+        as: '_userInfo'
+      }
+    },
+    {
+      $addFields: {
+        fullname: { $ifNull: [{ $arrayElemAt: ['$_userInfo.fullname', 0] }, null] }
+      }
+    },
+    { $project: { _userInfo: 0 } }
+  ]);
   return users;
 };
 
@@ -436,12 +465,14 @@ const getCreatedAccountDetail = async (accountId, currentUserId, creatorRole) =>
     throw new Error("Tài khoản không tồn tại");
   }
 
-  const allowedRoles = ALLOWED_VIEW_ROLES[creatorRole];
+  const roleKey = (creatorRole || "").toLowerCase();
+  const allowedRoles = ALLOWED_VIEW_ROLES[roleKey];
   if (!allowedRoles || !allowedRoles.includes(user.role)) {
     throw new Error("Bạn không có quyền xem tài khoản với vai trò này");
   }
 
-  if (creatorRole !== 'manager' && String(user.createdBy) !== String(currentUserId)) {
+  // Admin: chỉ xem tài khoản do mình tạo. Owner/Manager: được xem mọi tài khoản trong phạm vi role
+  if (roleKey === 'admin' && String(user.createdBy) !== String(currentUserId)) {
     throw new Error("Bạn không có quyền xem chi tiết tài khoản này");
   }
 
@@ -463,13 +494,15 @@ const disableAccount = async (accountId, currentUserId, creatorRole) => {
     throw new Error("Tài khoản không tồn tại");
   }
 
-  if (String(user.createdBy) !== String(currentUserId)) {
-    throw new Error("Bạn không có quyền đóng tài khoản này");
-  }
-
-  const allowedRoles = ALLOWED_VIEW_ROLES[creatorRole];
+  const roleKey = (creatorRole || "").toLowerCase();
+  const allowedRoles = ALLOWED_VIEW_ROLES[roleKey];
   if (!allowedRoles || !allowedRoles.includes(user.role)) {
     throw new Error("Bạn không có quyền đóng tài khoản với vai trò này");
+  }
+
+  // Admin: chỉ đóng tài khoản do mình tạo. Owner/Manager: được đóng mọi tài khoản trong phạm vi role
+  if (roleKey === 'admin' && String(user.createdBy) !== String(currentUserId)) {
+    throw new Error("Bạn không có quyền đóng tài khoản này");
   }
 
   if (user.status === "inactive") {
