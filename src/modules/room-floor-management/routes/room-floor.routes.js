@@ -15,7 +15,7 @@ const roomTypeController = require("../controllers/roomtype.controller");
 
 // Tải mẫu Excel (GET /room/template)
 // [QUAN TRỌNG] Phải đặt dòng này TRƯỚC dòng /room/:id
-router.get('/excel/template', roomController.downloadTemplate);
+router.get("/excel/template", roomController.downloadTemplate);
 
 // Nhập file Excel (POST /room/import)
 // [QUAN TRỌNG] Phải đặt dòng này TRƯỚC dòng /room/:id
@@ -31,8 +31,8 @@ router.get('/room/my-room', authenticate, roomController.getMyRoom);
 // ==================================================================
 
 // --- Room ---
-router.get("/room", roomController.getRooms);      // GET /room
-router.post("/room", roomController.createRoom);   // POST /room
+router.get("/rooms", roomController.getRooms); // GET /rooms
+router.post("/rooms", roomController.createRoom); // POST /rooms
 
 // --- Floor ---
 router.get("/floors", floorController.getFloors);
@@ -40,20 +40,23 @@ router.post("/floors", floorController.createFloor);
 
 // --- RoomType ---
 router.get("/roomtypes", roomTypeController.getRoomTypes);
-router.post('/roomtypes', uploadImg.array('images', 10), roomTypeController.createRoomType);
-
+router.post(
+  "/roomtypes",
+  uploadImg.array("images", 10),
+  roomTypeController.createRoomType,
+);
 
 // ==================================================================
 // 3. CÁC ROUTE CÓ THAM SỐ :ID (BẮT BUỘC PHẢI ĐỂ CUỐI CÙNG)
 // ==================================================================
-// Tại sao phải để cuối? 
+// Tại sao phải để cuối?
 // Vì nếu để lên đầu, nó sẽ ăn mất chữ "template" hoặc "import" và coi đó là ID.
 
 // --- Room Operations by ID ---
-router.get("/room/:id", roomController.getRoomById);       // GET /room/:id
-router.put("/room/:id", roomController.updateRoom);        // PUT /room/:id
-router.delete("/room/:id", roomController.deleteRoom);     // DELETE /room/:id
-router.patch("/room/:id/toggle", roomController.toggleRoomStatus);
+router.get("/rooms/:id", roomController.getRoomById); // GET /rooms/:id
+router.put("/rooms/:id", roomController.updateRoom); // PUT /rooms/:id
+router.delete("/rooms/:id", roomController.deleteRoom); // DELETE /rooms/:id
+router.patch("/rooms/:id/toggle", roomController.toggleRoomStatus);
 
 // --- Floor Operations by ID ---
 router.get("/floors/:id", floorController.getFloorById);
@@ -62,7 +65,11 @@ router.delete("/floors/:id", floorController.deleteFloor);
 
 // --- RoomType Operations by ID ---
 router.get("/roomtypes/:id", roomTypeController.getRoomTypeById);
-router.put('/roomtypes/:id', uploadImg.array('images', 10), roomTypeController.updateRoomType);
+router.put(
+  "/roomtypes/:id",
+  uploadImg.array("images", 10),
+  roomTypeController.updateRoomType,
+);
 router.delete("/roomtypes/:id", roomTypeController.deleteRoomType);
 
 module.exports = router;
