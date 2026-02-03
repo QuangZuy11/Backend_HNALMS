@@ -154,3 +154,40 @@ exports.importRooms = async (req, res) => {
     });
   }
 };
+
+// ==========================================
+//        [TENANT - VIEW MY ROOM]
+// ==========================================
+
+exports.getMyRoom = async (req, res) => {
+  try {
+    console.log("🔍 getMyRoom - Full req.user:", JSON.stringify(req.user, null, 2));
+    console.log("🔍 getMyRoom - req.headers:", req.headers.authorization);
+    
+    // Lấy tenantId từ req.user (được set bởi authenticate middleware)
+    const tenantId = req.user?.userId || req.user?.id || req.user?._id;
+
+    console.log("🔍 getMyRoom - tenantId extracted:", tenantId);
+
+    if (!tenantId) {
+      console.log("❌ getMyRoom - No tenantId found in req.user!");
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized - Không tìm thấy thông tin người dùng",
+        debug: { reqUser: req.user }
+      });
+    }
+
+    console.log("✅ getMyRoom - Calling service with tenantId:", tenantId);
+    const roomData = await RoomService.getMyRoom(tenantId);
+
+    res.status(200).json({
+      success: true,
+      message: "Lấy thông tin phòng của tôi thành công",
+      data: roomData
+    });
+
+  } catch (error) {
+    handleError(res, error);
+  }
+};

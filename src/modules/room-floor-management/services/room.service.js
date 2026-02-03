@@ -44,7 +44,10 @@ const RoomDevice = require("../models/roomdevices.model");
 const Floor = require("../models/floor.model");      
 // [LƯU Ý]: Kiểm tra kỹ tên file này, nếu tên file là roomType.model.js thì phải require đúng chữ hoa chữ thường
 const RoomType = require("../models/roomType.model"); 
+const Contract = require("../../contract-management/models/contract.model");
+const Deposit = require("../../contract-management/models/deposit.model");
 const xlsx = require("xlsx");
+const mongoose = require("mongoose");
 
 // ... (Giữ nguyên các hàm createRoom, updateRoom, getAllRooms... của bạn ở trên)
 
@@ -209,4 +212,87 @@ exports.importRoomsFromFile = async (file) => {
     }
     throw dbError;
   }
+};
+
+// ==========================================
+//        [TENANT - VIEW MY ROOM]
+// ==========================================
+
+exports.getMyRoom = async (tenantId) => {
+  if (!tenantId) {
+    throw { status: 400, message: "Tenant ID không hợp lệ" };
+  }
+
+  // Convert tenantId sang ObjectId nếu cần
+  const tenantObjectId = mongoose.Types.ObjectId.isValid(tenantId) 
+    ? new mongoose.Types.ObjectId(tenantId) 
+    : tenantId;
+
+  // Tìm hợp đồng hoạt động của tenant
+  const contract = await Contract.findOne({
+    tenantId: tenantObjectId,
+    status: "active"
+  })
+    .populate({
+      path: "roomId",
+      select: "name roomCode status description isActive floorId roomTypeId",
+      populate: [
+        {
+          path: "floorId",
+          select: "name description status"
+        },
+        {
+          path: "roomTypeId",
+          select: "typeName currentPrice description images personMax status"
+        }
+      ]
+    })
+    .populate({
+      path: "depositCode",
+      select: "name phone email room amount status createdDate"
+    })
+    .lean();
+
+  if (!contract) {
+    throw { status: 404, message: "Không tìm thấy hợp đồng hoạt động. Bạn không đang thuê phòng nào." };
+  }
+
+  console.log("✅ Tìm thấy contract:", {
+    contractCode: contract.contractCode,
+    roomId: contract.roomId?._id,
+    depositCode: contract.depositCode?._id
+  });
+
+  // Lấy thiết bị/tài sản của phòng
+  let assets = [];
+  if (contract.roomId && contract.roomId.roomTypeId) {
+    assets = await RoomDevice.find({ roomTypeId: contract.roomId.roomTypeId._id })
+      .populate("deviceId", "name brand model type")
+      .lean();
+  }
+
+  // Chuẩn bị dữ liệu response
+  return {
+    contract: {
+      _id: contract._id,
+      contractCode: contract.contractCode,
+      personInRoom: contract.personInRoom,
+      startDate: contract.startDate,
+      endDate: contract.endDate,
+      status: contract.status,
+      image: contract.image || [],
+      deposit: contract.depositCode || null
+    },
+    room: {
+      _id: contract.roomId._id,
+      name: contract.roomId.name,
+      roomCode: contract.roomId.roomCode,
+      status: contract.roomId.status,
+      description: contract.roomId.description || "",
+      isActive: contract.roomId.isActive,
+      floor: contract.roomId.floorId || null,
+      roomType: contract.roomId.roomTypeId || null,
+      assets: assets || []
+    }
+  };
 };
