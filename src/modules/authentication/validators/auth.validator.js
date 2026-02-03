@@ -192,13 +192,11 @@ const validateForgotPassword = (req, res, next) => {
   next();
 };
 
-/**
- * Middleware to validate update profile input
- */
+
 const validateUpdateProfile = (req, res, next) => {
   const { fullname, cccd, address, dob, gender } = req.body || {};
 
-  // Validate fullname if provided
+  
   if (fullname !== undefined && fullname !== null && fullname.trim().length < 2) {
     return res.status(400).json({
       success: false,
@@ -206,7 +204,7 @@ const validateUpdateProfile = (req, res, next) => {
     });
   }
 
-  // Validate cccd if provided
+ 
   if (cccd !== undefined && cccd !== null && cccd.trim().length < 9) {
     return res.status(400).json({
       success: false,
@@ -214,7 +212,7 @@ const validateUpdateProfile = (req, res, next) => {
     });
   }
 
-  // Validate gender if provided
+ 
   if (gender !== undefined && gender !== null && !["Male", "Female", "Other"].includes(gender)) {
     return res.status(400).json({
       success: false,
@@ -222,7 +220,7 @@ const validateUpdateProfile = (req, res, next) => {
     });
   }
 
-  // Validate dob if provided
+  
   if (dob !== undefined && dob !== null) {
     const date = new Date(dob);
     if (isNaN(date.getTime())) {
@@ -236,10 +234,7 @@ const validateUpdateProfile = (req, res, next) => {
   next();
 };
 
-/**
- * Middleware to validate create account input (role-based account creation)
- * Admin -> Owner | Owner -> Manager, Accountant
- */
+
 const validateCreateAccount = (req, res, next) => {
   const { username, phoneNumber, email, password, role } = req.body || {};
 

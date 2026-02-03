@@ -15,7 +15,6 @@ const authorize = (...allowedRoles) => {
       });
     }
 
-    // 2. Kiểm tra role của user có trong danh sách allowedRoles không
     if (!allowedRoles.includes(req.user.role)) {
       return res.status(403).json({
         success: false,
@@ -25,15 +24,11 @@ const authorize = (...allowedRoles) => {
       });
     }
 
-    // 3. User có quyền -> cho phép tiếp tục
     next();
   };
 };
 
-/**
- * Middleware kiểm tra user có phải là admin không
- * Shortcut cho authorize('admin')
- */
+
 const isAdmin = authorize('admin');
 
 /**
@@ -64,11 +59,7 @@ const ALLOWED_CREATE_ROLES = {
   owner: ['manager', 'accountant']
 };
 
-/**
- * Middleware kiểm tra user có quyền tạo tài khoản với role được chỉ định
- * Đặt sau authenticate, trước controller
- * req.body.role phải chứa role cần tạo
- */
+
 const canCreateAccount = (req, res, next) => {
   const creatorRole = req.user?.role;
   const targetRole = req.body?.role;

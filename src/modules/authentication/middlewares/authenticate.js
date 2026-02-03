@@ -1,17 +1,10 @@
 const { verifyToken } = require("../../../shared/config/jwt");
 const User = require("../models/user.model");
 
-/**
- * Middleware kiểm tra token hợp lệ
- * Xác thực JWT token từ header Authorization
- * Gắn thông tin user vào req.user nếu token hợp lệ
- *
- * Usage:
- * router.get('/protected', authenticate, controller.method);
- */
+
 const authenticate = async (req, res, next) => {
   try {
-    // 1. Lấy token từ header Authorization
+   
     const authHeader = req.headers.authorization;
 
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
@@ -33,9 +26,6 @@ const authenticate = async (req, res, next) => {
       exp: decoded.exp,
     });
 
-    // 4. Kiểm tra user còn tồn tại trong database
-    // IMPORTANT: Token có thể chứa _id (ObjectId) hoặc user_id (string)
-    // Cần tìm user bằng cả hai cách
     let user = null;
     const mongoose = require("mongoose");
 
@@ -52,14 +42,14 @@ const authenticate = async (req, res, next) => {
       searchUserId,
     );
 
-    // Strategy 1: Tìm bằng user_id (string) - cho token mới
+ 
     user = await User.findOne({ user_id: searchUserId }).select("-password");
     console.log(
       "🔍 Auth Middleware - Strategy 1 (user_id field) result:",
       user ? "FOUND" : "NOT FOUND",
     );
 
-    // Strategy 2: Tìm bằng _id (ObjectId) - cho token cũ
+
     if (!user) {
       console.log("🔍 Auth Middleware - Trying Strategy 2 (_id field)...");
       try {
@@ -82,7 +72,6 @@ const authenticate = async (req, res, next) => {
             );
           }
 
-          // Nếu vẫn không tìm thấy, tìm tất cả và so sánh thủ công
           if (!user) {
             const allUsers = await User.find({}).select("-password");
             console.log(
@@ -114,7 +103,7 @@ const authenticate = async (req, res, next) => {
       }
     }
 
-    // Strategy 3: Fallback - tìm tất cả users và match thủ công
+  
     if (!user) {
       console.log(
         "🔍 Auth Middleware - Trying Strategy 3 (fallback search)...",
@@ -136,7 +125,7 @@ const authenticate = async (req, res, next) => {
           });
         }
 
-        // Tìm user bằng cách so sánh _id.toString() hoặc user_id
+       
         user = allUsers.find((u) => {
           const matchById = u._id && String(u._id.toString()) === searchUserId;
           const matchByUserId = u.user_id && String(u.user_id) === searchUserId;
@@ -152,7 +141,7 @@ const authenticate = async (req, res, next) => {
           return matchById || matchByUserId;
         });
 
-        // Đảm bảo user có user_id
+    
         if (user && !user.user_id) {
           user.user_id = new mongoose.Types.ObjectId().toString();
           await user.save();
@@ -191,7 +180,6 @@ const authenticate = async (req, res, next) => {
       });
     }
 
-    // 6. Gắn thông tin user vào request để sử dụng ở các middleware/controller tiếp theo
     req.user = {
       userId: user._id,
       role: user.role,
@@ -199,7 +187,6 @@ const authenticate = async (req, res, next) => {
       username: user.username,
     };
 
-    // 7. Cho phép request tiếp tục
     next();
   } catch (error) {
     console.error("Authentication error:", error);
@@ -220,15 +207,7 @@ const authenticate = async (req, res, next) => {
   }
 };
 
-/**
- * Optional authentication - không bắt buộc phải có token
- * Nếu có token hợp lệ thì gắn user vào req.user
- * Nếu không có token hoặc token không hợp lệ thì vẫn cho phép request tiếp tục
- *
- * Usage:
- * router.get('/public', optionalAuth, controller.method);
- * // Trong controller có thể check: if (req.user) { ... }
- */
+
 const optionalAuth = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
@@ -256,7 +235,6 @@ const optionalAuth = async (req, res, next) => {
 
     next();
   } catch (error) {
-    // Có lỗi nhưng vẫn cho phép request tiếp tục (optional auth)
     next();
   }
 };

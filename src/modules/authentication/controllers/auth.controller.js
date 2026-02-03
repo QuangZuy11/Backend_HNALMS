@@ -172,7 +172,6 @@ exports.register = async (req, res) => {
   try {
     const { username, phoneNumber, email, password, role } = req.body;
 
-    // Call service to register user
     const result = await authService.registerUser({
       username,
       phoneNumber,
@@ -191,8 +190,6 @@ exports.register = async (req, res) => {
 
   } catch (error) {
     console.error("Register error:", error);
-
-    // Handle specific errors
     if (error.message.includes("already exist")) {
       return res.status(400).json({
         success: false,
@@ -229,7 +226,6 @@ exports.login = async (req, res) => {
   } catch (error) {
     console.error("Login error:", error);
 
-    // Handle authentication errors (401)
     if (
       error.message.includes("incorrect") ||
       error.message.includes("not active") ||
@@ -309,7 +305,6 @@ exports.updateProfile = async (req, res) => {
 
     const { fullname, cccd, address, dob, gender } = req.body;
 
-    // Validate input
     if (!fullname && !cccd && !address && !dob && !gender) {
       return res.status(400).json({
         success: false,
@@ -377,7 +372,6 @@ exports.changePassword = async (req, res) => {
 
     const { oldPassword, newPassword } = req.body;
 
-    // Validate input
     if (!oldPassword || !newPassword) {
       return res.status(400).json({
         success: false,
@@ -385,7 +379,7 @@ exports.changePassword = async (req, res) => {
       });
     }
 
-    // Call service to change password
+
     await authService.changePassword(userId, oldPassword, newPassword);
 
     res.json({
@@ -423,8 +417,6 @@ exports.changePassword = async (req, res) => {
  */
 exports.logout = async (req, res) => {
   try {
-    // In JWT-based auth, logout is handled on client side by removing token
-    // Here we can add token to blacklist if needed
 
     res.json({
       success: true,

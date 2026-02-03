@@ -8,15 +8,14 @@ const { validateRegister, validateLogin, validateChangePassword, validateForgotP
 // Register route - Đăng ký tài khoản mới
 router.post("/register", validateRegister, authController.register);
 
-// Protected route - Tạo tài khoản theo role (Admin/Owner)
 // Admin -> Owner | Owner -> Manager, Accountant
 router.post("/create-account", authenticate, validateCreateAccount, canCreateAccount, authController.createAccount);
 
-// Protected route - Danh sách tài khoản do user tạo
-router.get("/created-accounts", authenticate, authorize("admin", "owner"), authController.getCreatedAccounts);
+// Protected route - Danh sách tài khoản (Admin/Owner: đã tạo | Manager: danh sách tenant)
+router.get("/created-accounts", authenticate, authorize("admin", "owner", "manager"), authController.getCreatedAccounts);
 
-// Protected route - Xem chi tiết tài khoản do user tạo
-router.get("/account/:accountId", authenticate, authorize("admin", "owner"), authController.getAccountDetail);
+// Protected route - Xem chi tiết tài khoản (Admin/Owner: đã tạo | Manager: tenant)
+router.get("/account/:accountId", authenticate, authorize("admin", "owner", "manager"), authController.getAccountDetail);
 
 // Protected route - Đóng tài khoản (chỉ chuyển status, không xóa DB)
 router.put("/disable-account/:accountId", authenticate, authorize("admin", "owner"), authController.disableAccount);

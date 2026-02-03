@@ -362,23 +362,47 @@ const createAccountByRole = async (userData, createdBy = null) => {
   };
 };
 
-// Admin chỉ xem Owner | Owner chỉ xem Manager, Accountant
+// Admin chỉ xem Owner | Owner chỉ xem Manager, Accountant | Manager chỉ xem Tenant
 const ALLOWED_VIEW_ROLES = {
   admin: ['owner'],
-  owner: ['manager', 'accountant']
+  owner: ['manager', 'accountant'],
+  manager: ['Tenant']
 };
 
 /**
- * Lấy danh sách tài khoản do user hiện tại tạo (theo đúng quyền)
- * Admin chỉ xem Owner | Owner chỉ xem Manager, Accountant
- * @param {string} userId - User ID của người tạo
- * @param {string} creatorRole - Role của người xem (admin, owner)
+ * Lấy danh sách tài khoản (theo đúng quyền)
+ * Admin: Owner do mình tạo | Owner: Manager, Accountant do mình tạo | Manager: tất cả Tenant
+ * @param {string} userId - User ID của người xem
+ * @param {string} creatorRole - Role của người xem (admin, owner, manager)
  * @returns {Array} Danh sách user (không có password)
  */
 const getCreatedAccounts = async (userId, creatorRole) => {
   const allowedRoles = ALLOWED_VIEW_ROLES[creatorRole];
   if (!allowedRoles || allowedRoles.length === 0) {
     return [];
+  }
+
+  if (creatorRole === 'manager') {
+    const users = await User.aggregate([
+      { $match: { role: { $in: allowedRoles } } },
+      { $sort: { createdAt: -1 } },
+      { $project: { password: 0 } },
+      {
+        $lookup: {
+          from: 'userinfos',
+          localField: '_id',
+          foreignField: 'userId',
+          as: '_userInfo'
+        }
+      },
+      {
+        $addFields: {
+          fullname: { $ifNull: [{ $arrayElemAt: ['$_userInfo.fullname', 0] }, null] }
+        }
+      },
+      { $project: { _userInfo: 0 } }
+    ]);
+    return users;
   }
 
   const users = await User.find({
@@ -399,11 +423,11 @@ const getCreatedAccounts = async (userId, creatorRole) => {
  * @returns {Object} User đã cập nhật
  */
 /**
- * Xem chi tiết tài khoản do user hiện tại tạo (theo đúng quyền)
- * Admin chỉ xem Owner | Owner chỉ xem Manager, Accountant
+ * Xem chi tiết tài khoản (theo đúng quyền)
+ * Admin/Owner: chỉ tài khoản do mình tạo | Manager: chỉ tài khoản Tenant
  * @param {string} accountId - ID tài khoản
- * @param {string} currentUserId - ID user đang xem (người tạo)
- * @param {string} creatorRole - Role của người xem (admin, owner)
+ * @param {string} currentUserId - ID user đang xem
+ * @param {string} creatorRole - Role của người xem (admin, owner, manager)
  * @returns {Object} User + UserInfo
  */
 const getCreatedAccountDetail = async (accountId, currentUserId, creatorRole) => {
@@ -412,13 +436,13 @@ const getCreatedAccountDetail = async (accountId, currentUserId, creatorRole) =>
     throw new Error("Tài khoản không tồn tại");
   }
 
-  if (String(user.createdBy) !== String(currentUserId)) {
-    throw new Error("Bạn không có quyền xem chi tiết tài khoản này");
-  }
-
   const allowedRoles = ALLOWED_VIEW_ROLES[creatorRole];
   if (!allowedRoles || !allowedRoles.includes(user.role)) {
     throw new Error("Bạn không có quyền xem tài khoản với vai trò này");
+  }
+
+  if (creatorRole !== 'manager' && String(user.createdBy) !== String(currentUserId)) {
+    throw new Error("Bạn không có quyền xem chi tiết tài khoản này");
   }
 
   const userInfo = await UserInfo.findOne({ userId: user._id }).lean();
