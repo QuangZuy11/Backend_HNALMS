@@ -53,5 +53,8 @@ roomTypeSchema.set("toJSON", {
   },
 });
 
-const RoomType = mongoose.model("RoomType", roomTypeSchema);
+// --- [ĐÃ SỬA LỖI TẠI ĐÂY] ---
+// Kiểm tra xem model đã tồn tại chưa, nếu có rồi thì dùng lại, chưa có mới tạo mới
+const RoomType = mongoose.models.RoomType || mongoose.model("RoomType", roomTypeSchema);
+
 module.exports = RoomType;
