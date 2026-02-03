@@ -17,7 +17,8 @@ const userInfoSchema = new mongoose.Schema(
     cccd: {
       type: String,
       trim: true,
-      unique: true
+      unique: true,
+      sparse: true // cho phép nhiều document có cccd = null
     },
 
     address: {
