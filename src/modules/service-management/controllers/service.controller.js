@@ -37,6 +37,30 @@ class ServiceController {
       handleError(res, error);
     }
   }
-}
 
+
+// PUT /api/services/:id
+  async updateService(req, res) {
+    try {
+      const updatedService = await ServiceService.updateService(req.params.id, req.body);
+      res.status(200).json({
+        success: true,
+        message: "Cập nhật dịch vụ thành công",
+        data: updatedService
+      });
+    } catch (error) {
+      handleError(res, error);
+    }
+  }
+
+  // DELETE /api/services/:id
+  async deleteService(req, res) {
+    try {
+      await ServiceService.deleteService(req.params.id);
+      res.status(200).json({ success: true, message: "Đã xóa dịch vụ" });
+    } catch (error) {
+      handleError(res, error);
+    }
+  }
+}
 module.exports = new ServiceController();
