@@ -8,4 +8,9 @@ router.get("/", serviceController.getServices);
 // Tạo mới
 router.post("/", serviceController.createService);
 
+// Cập nhật
+router.put("/:id", serviceController.updateService);
+
+// Xóa
+router.delete("/:id", serviceController.deleteService);
 module.exports = router;

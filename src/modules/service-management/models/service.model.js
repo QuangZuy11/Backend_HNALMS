@@ -39,10 +39,11 @@ const serviceSchema = new mongoose.Schema(
 );
 
 // (Tùy chọn) Virtual field nếu muốn link ngược lại pricehistory sau này
-// serviceSchema.virtual('priceHistories', {
-//   ref: 'PriceHistory',
-//   localField: '_id',
-//   foreignField: 'servicesid'
-// });
+serviceSchema.virtual('histories', {
+    ref: 'PriceHistory',      
+    localField: '_id',        
+    foreignField: 'relatedId',
+    match: { onModel: 'Service' } 
+});
 
 module.exports = mongoose.models.Service || mongoose.model("Service", serviceSchema);

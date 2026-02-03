@@ -19,7 +19,7 @@ class RoomTypeService {
 
   // 1. Lấy danh sách
   async getAllRoomTypes() {
-    return await RoomType.find().sort({ currentPrice: 1 }).populate("histories");
+    return await RoomType.find().sort({ typeName: 1 }).populate("histories");
   }
 
   // 2. Lấy chi tiết
