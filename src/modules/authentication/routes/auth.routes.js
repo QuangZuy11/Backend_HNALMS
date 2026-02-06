@@ -20,6 +20,9 @@ router.get("/account/:accountId", authenticate, authorize("admin", "owner", "man
 // Protected route - Đóng tài khoản (chỉ chuyển status, không xóa DB)
 router.put("/disable-account/:accountId", authenticate, authorize("admin", "owner"), authController.disableAccount);
 
+// Protected route - Mở lại tài khoản (kích hoạt lại)
+router.put("/enable-account/:accountId", authenticate, authorize("admin", "owner"), authController.enableAccount);
+
 // Login route - Đăng nhập
 router.post("/login", validateLogin, authController.login);
 

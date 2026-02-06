@@ -119,7 +119,6 @@ exports.getAccountDetail = async (req, res) => {
 /**
  * Disable Account - Đóng tài khoản (chuyển status sang inactive)
  * PUT /api/auth/disable-account/:accountId
- * Chỉ đóng được tài khoản do chính user tạo
  */
 exports.disableAccount = async (req, res) => {
   try {
@@ -151,6 +150,53 @@ exports.disableAccount = async (req, res) => {
       });
     }
     if (error.message.includes("không có quyền") || error.message.includes("đã bị đóng")) {
+      return res.status(403).json({
+        success: false,
+        message: error.message
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: "Server error"
+    });
+  }
+};
+
+/**
+ * Enable Account - Mở lại tài khoản (chuyển status sang active)
+ * PUT /api/auth/enable-account/:accountId
+ */
+exports.enableAccount = async (req, res) => {
+  try {
+    const { accountId } = req.params;
+    const currentUserId = req.user?.userId;
+    const creatorRole = req.user?.role;
+
+    if (!currentUserId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized"
+      });
+    }
+
+    const user = await authService.enableAccount(accountId, currentUserId, creatorRole);
+
+    res.json({
+      success: true,
+      message: "Đã mở lại tài khoản thành công",
+      data: user
+    });
+  } catch (error) {
+    console.error("Enable account error:", error);
+
+    if (error.message.includes("không tồn tại")) {
+      return res.status(404).json({
+        success: false,
+        message: error.message
+      });
+    }
+    if (error.message.includes("không có quyền") || error.message.includes("đang hoạt động")) {
       return res.status(403).json({
         success: false,
         message: error.message

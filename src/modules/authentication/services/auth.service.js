@@ -363,22 +363,32 @@ const createAccountByRole = async (userData, createdBy = null) => {
   };
 };
 
-// Admin chỉ xem Owner | Owner chỉ xem Manager, Accountant | Manager chỉ xem Tenant
+// Owner chỉ xem Manager, Accountant | Manager chỉ xem Tenant
+// Admin sẽ có quyền xem tất cả tài khoản (không phụ thuộc map này)
 const ALLOWED_VIEW_ROLES = {
-  admin: ['owner'],
   owner: ['manager', 'accountant'],
   manager: ['Tenant']
 };
 
 /**
  * Lấy danh sách tài khoản (theo đúng quyền)
- * Admin: Owner do mình tạo | Owner: Manager, Accountant do mình tạo | Manager: tất cả Tenant
+ * Admin: xem được tất cả tài khoản | Owner: Manager, Accountant | Manager: tất cả Tenant
  * @param {string} userId - User ID của người xem
  * @param {string} creatorRole - Role của người xem (admin, owner, manager)
  * @returns {Array} Danh sách user (không có password)
  */
 const getCreatedAccounts = async (userId, creatorRole) => {
   const roleKey = (creatorRole || "").toLowerCase();
+
+  // Admin: xem được toàn bộ tài khoản trong hệ thống
+  if (roleKey === 'admin') {
+    const users = await User.find({})
+      .select("-password")
+      .sort({ createdAt: -1 })
+      .lean();
+    return users;
+  }
+
   const allowedRoles = ALLOWED_VIEW_ROLES[roleKey];
   if (!allowedRoles || allowedRoles.length === 0) {
     return [];
@@ -404,20 +414,6 @@ const getCreatedAccounts = async (userId, creatorRole) => {
       },
       { $project: { _userInfo: 0 } }
     ]);
-    return users;
-  }
-
-  // Admin: chỉ tài khoản Owner do mình tạo
-  // Owner: hiển thị tất cả Quản lý, Kế toán (để danh sách nhân sự đầy đủ)
-  if (roleKey === 'admin') {
-    const creatorObjectId = mongoose.Types.ObjectId.isValid(userId) ? new mongoose.Types.ObjectId(userId) : userId;
-    const users = await User.find({
-      createdBy: creatorObjectId,
-      role: { $in: allowedRoles }
-    })
-      .select("-password")
-      .sort({ createdAt: -1 })
-      .lean();
     return users;
   }
 
@@ -453,7 +449,7 @@ const getCreatedAccounts = async (userId, creatorRole) => {
  */
 /**
  * Xem chi tiết tài khoản (theo đúng quyền)
- * Admin/Owner: chỉ tài khoản do mình tạo | Manager: chỉ tài khoản Tenant
+ * Admin: xem được mọi tài khoản | Owner: Manager, Accountant | Manager: Tenant
  * @param {string} accountId - ID tài khoản
  * @param {string} currentUserId - ID user đang xem
  * @param {string} creatorRole - Role của người xem (admin, owner, manager)
@@ -466,14 +462,13 @@ const getCreatedAccountDetail = async (accountId, currentUserId, creatorRole) =>
   }
 
   const roleKey = (creatorRole || "").toLowerCase();
-  const allowedRoles = ALLOWED_VIEW_ROLES[roleKey];
-  if (!allowedRoles || !allowedRoles.includes(user.role)) {
-    throw new Error("Bạn không có quyền xem tài khoản với vai trò này");
-  }
 
-  // Admin: chỉ xem tài khoản do mình tạo. Owner/Manager: được xem mọi tài khoản trong phạm vi role
-  if (roleKey === 'admin' && String(user.createdBy) !== String(currentUserId)) {
-    throw new Error("Bạn không có quyền xem chi tiết tài khoản này");
+  // Admin: xem được chi tiết mọi tài khoản, không giới hạn theo createdBy hay role
+  if (roleKey !== 'admin') {
+    const allowedRoles = ALLOWED_VIEW_ROLES[roleKey];
+    if (!allowedRoles || !allowedRoles.includes(user.role)) {
+      throw new Error("Bạn không có quyền xem tài khoản với vai trò này");
+    }
   }
 
   const userInfo = await UserInfo.findOne({ userId: user._id }).lean();
@@ -495,14 +490,16 @@ const disableAccount = async (accountId, currentUserId, creatorRole) => {
   }
 
   const roleKey = (creatorRole || "").toLowerCase();
-  const allowedRoles = ALLOWED_VIEW_ROLES[roleKey];
-  if (!allowedRoles || !allowedRoles.includes(user.role)) {
-    throw new Error("Bạn không có quyền đóng tài khoản với vai trò này");
-  }
-
-  // Admin: chỉ đóng tài khoản do mình tạo. Owner/Manager: được đóng mọi tài khoản trong phạm vi role
-  if (roleKey === 'admin' && String(user.createdBy) !== String(currentUserId)) {
-    throw new Error("Bạn không có quyền đóng tài khoản này");
+  if (roleKey === 'admin') {
+    // Admin chỉ được đóng tài khoản Chủ nhà (Owner)
+    if (user.role !== 'owner') {
+      throw new Error("Admin chỉ có thể đóng tài khoản Chủ nhà (Owner)");
+    }
+  } else {
+    const allowedRoles = ALLOWED_VIEW_ROLES[roleKey];
+    if (!allowedRoles || !allowedRoles.includes(user.role)) {
+      throw new Error("Bạn không có quyền đóng tài khoản với vai trò này");
+    }
   }
 
   if (user.status === "inactive") {
@@ -510,6 +507,43 @@ const disableAccount = async (accountId, currentUserId, creatorRole) => {
   }
 
   user.status = "inactive";
+  await user.save();
+
+  return {
+    _id: user._id,
+    username: user.username,
+    email: user.email,
+    phoneNumber: user.phoneNumber,
+    role: user.role,
+    status: user.status,
+    createdAt: user.createdAt,
+  };
+};
+
+const enableAccount = async (accountId, currentUserId, creatorRole) => {
+  const user = await User.findById(accountId);
+  if (!user) {
+    throw new Error("Tài khoản không tồn tại");
+  }
+
+  const roleKey = (creatorRole || "").toLowerCase();
+  if (roleKey === 'admin') {
+    // Admin chỉ được mở lại tài khoản Chủ nhà (Owner)
+    if (user.role !== 'owner') {
+      throw new Error("Admin chỉ có thể mở lại tài khoản Chủ nhà (Owner)");
+    }
+  } else {
+    const allowedRoles = ALLOWED_VIEW_ROLES[roleKey];
+    if (!allowedRoles || !allowedRoles.includes(user.role)) {
+      throw new Error("Bạn không có quyền mở lại tài khoản với vai trò này");
+    }
+  }
+
+  if (user.status === "active") {
+    throw new Error("Tài khoản đang hoạt động");
+  }
+
+  user.status = "active";
   await user.save();
 
   return {
@@ -536,4 +570,5 @@ module.exports = {
   getCreatedAccounts,
   getCreatedAccountDetail,
   disableAccount,
+  enableAccount,
 };
