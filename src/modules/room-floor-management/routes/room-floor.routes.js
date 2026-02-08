@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
-const uploadImg = require('../middlewares/uploadimg');
-const uploadExcel = require('../middlewares/uploadexcel');
+const uploadImg = require("../middlewares/uploadimg");
+const uploadExcel = require("../middlewares/uploadexcel");
 const { authenticate } = require("../../authentication/middlewares/index");
 // Import Controllers
 const roomController = require("../controllers/room.controller");
@@ -19,19 +19,22 @@ router.get("/excel/template", roomController.downloadTemplate);
 
 // Nhập file Excel (POST /room/import)
 // [QUAN TRỌNG] Phải đặt dòng này TRƯỚC dòng /room/:id
-router.post('/excel/import', uploadExcel.single('file'), roomController.importRooms);
+router.post(
+  "/excel/import",
+  uploadExcel.single("file"),
+  roomController.importRooms,
+);
 
 // View My Room - Xem thông tin phòng của tôi (Tenant)
 // [QUAN TRỌNG] Phải đặt dòng này TRƯỚC dòng /room/:id
-router.get('/room/my-room', authenticate, roomController.getMyRoom);
-
+router.get("/room/my-room", authenticate, roomController.getMyRoom);
 
 // ==================================================================
 // 2. CÁC ROUTE DANH SÁCH & TẠO MỚI (KHÔNG CÓ ID)
 // ==================================================================
 
 // --- Room ---
-router.get("/room", roomController.getRooms); // GET /rooms
+router.get("/rooms", roomController.getRooms); // GET /rooms
 router.post("/rooms", roomController.createRoom); // POST /rooms
 
 // --- Floor ---
