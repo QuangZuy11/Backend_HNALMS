@@ -44,4 +44,7 @@ ApiRouter.use("/", roomRoutes);
 ApiRouter.use("/buildings", buildingRoutes);
 ApiRouter.use("/services", serviceRoutes);
 
+const contractRoutes = require("../../modules/contract-management/routes/contract.routes");
+ApiRouter.use("/contracts", contractRoutes);
+
 module.exports = ApiRouter;
