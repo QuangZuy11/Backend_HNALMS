@@ -18,10 +18,22 @@ router.get("/created-accounts", authenticate, authorize("admin", "owner", "manag
 router.get("/account/:accountId", authenticate, authorize("admin", "owner", "manager"), authController.getAccountDetail);
 
 // Protected route - Đóng tài khoản (chỉ chuyển status, không xóa DB)
-router.put("/disable-account/:accountId", authenticate, authorize("admin", "owner"), authController.disableAccount);
+// Admin, Owner, Manager đều có thể đóng tài khoản
+router.put(
+  "/disable-account/:accountId",
+  authenticate,
+  authorize("admin", "owner", "manager"),
+  authController.disableAccount
+);
 
 // Protected route - Mở lại tài khoản (kích hoạt lại)
-router.put("/enable-account/:accountId", authenticate, authorize("admin", "owner"), authController.enableAccount);
+// Admin, Owner, Manager đều có thể mở lại tài khoản, quyền chi tiết được kiểm tra thêm trong service
+router.put(
+  "/enable-account/:accountId",
+  authenticate,
+  authorize("admin", "owner", "manager"),
+  authController.enableAccount
+);
 
 // Login route - Đăng nhập
 router.post("/login", validateLogin, authController.login);
