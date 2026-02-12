@@ -363,10 +363,10 @@ const createAccountByRole = async (userData, createdBy = null) => {
   };
 };
 
-// Owner chỉ xem Manager, Accountant | Manager chỉ xem Tenant
+// Owner chỉ xem Manager, Accountant, Tenant | Manager chỉ xem Tenant
 // Admin sẽ có quyền xem tất cả tài khoản (không phụ thuộc map này)
 const ALLOWED_VIEW_ROLES = {
-  owner: ['manager', 'accountant'],
+  owner: ['manager', 'accountant', 'Tenant'],
   manager: ['Tenant']
 };
 
@@ -495,6 +495,11 @@ const disableAccount = async (accountId, currentUserId, creatorRole) => {
     if (user.role !== 'owner') {
       throw new Error("Admin chỉ có thể đóng tài khoản Chủ nhà (Owner)");
     }
+  } else if (roleKey === 'owner') {
+    // Owner chỉ được đóng tài khoản Manager/Kế toán (không đóng Tenant)
+    if (!['manager', 'accountant'].includes(user.role)) {
+      throw new Error("Chủ nhà chỉ có thể đóng tài khoản Quản lý/Kế toán");
+    }
   } else {
     const allowedRoles = ALLOWED_VIEW_ROLES[roleKey];
     if (!allowedRoles || !allowedRoles.includes(user.role)) {
@@ -531,6 +536,11 @@ const enableAccount = async (accountId, currentUserId, creatorRole) => {
     // Admin chỉ được mở lại tài khoản Chủ nhà (Owner)
     if (user.role !== 'owner') {
       throw new Error("Admin chỉ có thể mở lại tài khoản Chủ nhà (Owner)");
+    }
+  } else if (roleKey === 'owner') {
+    // Owner chỉ được mở lại tài khoản Manager/Kế toán (không mở Tenant)
+    if (!['manager', 'accountant'].includes(user.role)) {
+      throw new Error("Chủ nhà chỉ có thể mở lại tài khoản Quản lý/Kế toán");
     }
   } else {
     const allowedRoles = ALLOWED_VIEW_ROLES[roleKey];
