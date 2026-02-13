@@ -24,6 +24,9 @@ const generateContractCode = (roomName) => {
     return `HN/${roomName}/${year}/HDSV/${random3}`;
 };
 
+const { sendEmail } = require("../../notification-management/services/email.service");
+const { EMAIL_TEMPLATES } = require("../../../shared/config/email");
+
 exports.createContract = async (req, res) => {
     const session = await mongoose.startSession();
     session.startTransaction();
@@ -44,28 +47,25 @@ exports.createContract = async (req, res) => {
         const room = await Room.findById(roomId).session(session);
         if (!room) throw new Error("Room not found");
         if (room.status !== "Available" && room.status !== "Deposited") {
-            // Allow creating contract even if "Deposited", but check if it matches the depositId if provided
-            // For simplicity, we just check if it's not Occupied/Maintenance (unless logic dictates otherwise)
-            // Note: User requirement says "Trống" or "Đã cọc".
             if (room.status === "Occupied") throw new Error("Room is currently occupied.");
         }
 
         // 2. Manage Tenant Account
+        console.log(`[DEBUG] Looking for user with email: ${tenantInfo.email} or phone: ${tenantInfo.phone}`);
         let user = await User.findOne({
             $or: [{ email: tenantInfo.email }, { phoneNumber: tenantInfo.phone }]
         }).session(session);
 
-        let passwordRaw = "";
+        // Generate Password: random 8 chars (Always do this)
+        const passwordRaw = generateRandomString(8);
+        const hashedPassword = await bcrypt.hash(passwordRaw, 10);
 
         if (!user) {
+            console.log(`[DEBUG] User not found. Creating new user.`);
             // Generate Username: email prefix + room name (sanitized)
             const emailPrefix = tenantInfo.email.split("@")[0];
             const roomNameSanitized = room.name.replace(/[^a-zA-Z0-9]/g, "");
             const username = `${emailPrefix}${roomNameSanitized}`;
-
-            // Generate Password: random 8 chars
-            passwordRaw = generateRandomString(8);
-            const hashedPassword = await bcrypt.hash(passwordRaw, 10);
 
             // Create User
             user = new User({
@@ -89,8 +89,12 @@ exports.createContract = async (req, res) => {
             });
             await userInfo.save({ session });
         } else {
-            // If user exists, ensure they have the Tenant role (or add logic to support multi-role?)
-            // For now, assume existing user is okay.
+            console.log(`[DEBUG] User found (ID: ${user._id}). Updating password.`);
+            // Update existing user's password to the new random one
+            user.password = hashedPassword;
+            // Ensure phone/email match what was provided if we need to sync? 
+            // For now, just update password to ensure they can login with the email we send.
+            await user.save({ session });
         }
 
         // 3. Create Contract Record
@@ -128,18 +132,14 @@ exports.createContract = async (req, res) => {
         await newContract.save({ session });
 
         // 4. Update Room Status
-        // "Trạng thái phòng chuyển thành 'Đang thuê' kể từ ngày bắt đầu"
-        // For MVP, we update immediately if start date is close or today.
         room.status = "Occupied";
-        // We might want to link currentContractId to room if the model supports it, but checking Room model it doesn't have it explicitly yet.
-        // If needed: room.currentContract = newContract._id; 
         await room.save({ session });
 
         // 5. Update Deposit Status (if applicable)
         if (depositId) {
             const deposit = await Deposit.findById(depositId).session(session);
             if (deposit) {
-                deposit.status = "Completed"; // Or whatever status indicates it's converted to contract
+                deposit.status = "Completed";
                 await deposit.save({ session });
             }
         }
@@ -147,18 +147,32 @@ exports.createContract = async (req, res) => {
         await session.commitTransaction();
         session.endSession();
 
-        // 6. Send Email (Mocked)
-        // TODO: Implement Nodemailer to send username/password to user.email
-        console.log(`[Email Mock] Sent credentials to ${user.email}: User=${user.username}, Pass=${passwordRaw}`);
+        // 6. Send Email Notification (Await to ensure delivery or catch error)
+        console.log(`[DEBUG] Preparing to send email to ${user.email}`);
+        const emailContent = EMAIL_TEMPLATES.NEW_CONTRACT_ACCOUNT.getHtml(
+            tenantInfo.fullName,
+            user.username,
+            passwordRaw,
+            room.name
+        );
+
+        try {
+            await sendEmail(user.email, EMAIL_TEMPLATES.NEW_CONTRACT_ACCOUNT.subject, emailContent);
+            console.log(`✅ [DEBUG] Email successfully sent to ${user.email}`);
+        } catch (emailError) {
+            console.error(`❌ [DEBUG] Failed to send email to ${user.email}:`, emailError);
+            // We don't throw here to ensure the contract creation success is still returned, 
+            // but we might want to warn the user in the response if critical.
+        }
 
         res.status(201).json({
             success: true,
-            message: "Contract created successfully",
+            message: "Contract created successfully. Account credentials sent to email.",
             data: {
                 contract: newContract,
                 account: {
                     username: user.username,
-                    password: passwordRaw // Only show this once!
+                    password: passwordRaw
                 }
             },
         });

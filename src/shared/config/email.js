@@ -60,6 +60,58 @@ const EMAIL_TEMPLATES = {
       </body>
       </html>
     `
+  },
+  NEW_CONTRACT_ACCOUNT: {
+    subject: "Thông tin tài khoản - Hợp đồng thuê nhà mới",
+    getHtml: (fullname, username, password, roomName) => `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <style>
+          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+          .header { background: #10B981; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; color: white; }
+          .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 8px 8px; }
+          .credentials-box { background: white; padding: 20px; border-left: 4px solid #10B981; margin: 20px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+          .credential-item { margin-bottom: 10px; }
+          .label { font-weight: bold; color: #555; display: inline-block; width: 100px; }
+          .value { font-family: 'Courier New', monospace; font-weight: bold; font-size: 16px; color: #1F2937; }
+          .footer { text-align: center; margin-top: 20px; color: #666; font-size: 12px; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1 style="margin: 0;">Chào mừng đến với HNALMS</h1>
+            <p style="margin: 5px 0 0 0;">Thông tin tài khoản cư dân</p>
+          </div>
+          <div class="content">
+            <h2>Xin chào ${fullname},</h2>
+            <p>Hợp đồng thuê phòng <strong>${roomName}</strong> của bạn đã được tạo thành công.</p>
+            <p>Dưới đây là thông tin tài khoản để bạn đăng nhập vào hệ thống và quản lý dịch vụ:</p>
+            
+            <div class="credentials-box">
+              <div class="credential-item">
+                <span class="label">Tài khoản:</span>
+                <span class="value">${username}</span>
+              </div>
+              <div class="credential-item">
+                <span class="label">Mật khẩu:</span>
+                <span class="value">${password}</span>
+              </div>
+            </div>
+
+            <p><strong>⚠️ Lưu ý:</strong> Vui lòng đăng nhập và đổi mật khẩu ngay để đảm bảo an toàn.</p>
+            
+            <p>Trân trọng,<br><strong>Ban Quản Lý Tòa Nhà</strong></p>
+          </div>
+          <div class="footer">
+            <p>&copy; ${new Date().getFullYear()} HNALMS. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `
   }
 };
 
