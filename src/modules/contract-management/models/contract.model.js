@@ -56,20 +56,16 @@ const contractSchema = new Schema(
       enum: ["active", "expired", "terminated", "pending"], // added 'terminated' and 'pending'
       default: "active",
     },
-    // Financial Details
+    // Services included in this contract (monthly Fixed services)
+    services: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Service",
+      }
+    ],
+    // Financial Details (only contract-specific data, not duplicates)
     financials: {
-      roomPrice: { type: Number, required: true },
-      depositAmount: { type: Number, required: true }, // usually 1 month rent
       paymentCycle: { type: Number, default: 1 }, // months
-      services: [
-        {
-          serviceId: { type: mongoose.Schema.Types.ObjectId, ref: "Service" },
-          name: String,
-          price: Number,
-          quantity: { type: Number, default: 1 },
-          type: { type: String, enum: ["fixed", "metered", "Fixed", "Extension", "Usage"] }, // e.g., internet vs electricity
-        }
-      ],
       // Initial payment collected upon signing
       initialPayment: {
         rentAmount: Number, // Rent for remaining days
@@ -79,22 +75,13 @@ const contractSchema = new Schema(
         paymentMethod: { type: String, enum: ["cash", "transfer"], default: "cash" }
       }
     },
-    // Handover Checklist (Assets)
+    // Handover Checklist (Assets) - refs to RoomDevice entries
     assets: [
       {
-        deviceId: { type: mongoose.Schema.Types.ObjectId, ref: "Device" },
-        name: String,
-        condition: { type: String, default: "Good" }, // Tốt, Hỏng...
-        quantity: { type: Number, default: 1 },
-        notes: String
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "RoomDevice",
       }
     ],
-    // Initial Meter Readings
-    initialReadings: {
-      electricity: { type: Number, default: 0 },
-      water: { type: Number, default: 0 },
-      recordedAt: { type: Date, default: Date.now }
-    },
     // Terms & Conditions (Optional snapshot or ref)
     terms: {
       content: String, // Or link to a static terms file

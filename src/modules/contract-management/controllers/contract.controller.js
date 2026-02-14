@@ -37,17 +37,27 @@ exports.createContract = async (req, res) => {
             depositId, // Optional
             tenantInfo, // { fullName, dob, cccd, phone, email, address, ... }
             coResidents, // Array
-            contractDetails, // { startDate, duration, roomPrice, depositAmount, services, ... }
-            initialReadings, // { electricity, water }
+            contractDetails, // { startDate, duration, services, paymentCycle }
             assets, // Array of handover assets
             initialPayment, // { rentAmount, total, paymentMethod }
         } = req.body;
 
-        // 1. Validate Room Status
-        const room = await Room.findById(roomId).session(session);
+        // 1. Validate Room Status (populate roomTypeId to get price)
+        const room = await Room.findById(roomId).populate("roomTypeId").session(session);
         if (!room) throw new Error("Room not found");
         if (room.status !== "Available" && room.status !== "Deposited") {
             if (room.status === "Occupied") throw new Error("Room is currently occupied.");
+        }
+
+        // Get room price and deposit from roomType
+        const roomPrice = parseFloat(room.roomTypeId?.currentPrice?.toString() || "0");
+        const depositAmount = roomPrice; // Deposit = 1 month rent
+
+        // Validate personInRoom <= personMax from roomType
+        const personMax = room.roomTypeId?.personMax || 1;
+        const personInRoom = (coResidents ? coResidents.length : 0) + 1; // Tenant + Co-residents
+        if (personInRoom > personMax) {
+            throw new Error(`Số người ở (${personInRoom}) vượt quá giới hạn của loại phòng (tối đa ${personMax} người).`);
         }
 
         // 2. Manage Tenant Account
@@ -101,32 +111,32 @@ exports.createContract = async (req, res) => {
         const endDate = new Date(contractDetails.startDate);
         endDate.setMonth(endDate.getMonth() + contractDetails.duration);
 
+        // Extract service IDs from the request (array of {serviceId, name, price, type})
+        const serviceIds = (contractDetails.services || []).map(s => s.serviceId || s);
+
         const newContract = new Contract({
             contractCode: generateContractCode(room.name),
             roomId: room._id,
             tenantId: user._id,
             depositId: depositId || null,
-            personInRoom: (coResidents ? coResidents.length : 0) + 1, // Tenant + Co-residents
+            personInRoom,
             coResidents,
             startDate: contractDetails.startDate,
             endDate: endDate,
             duration: contractDetails.duration,
             status: "active",
+            services: serviceIds,
             financials: {
-                roomPrice: contractDetails.roomPrice,
-                depositAmount: contractDetails.depositAmount,
                 paymentCycle: contractDetails.paymentCycle || 1,
-                services: contractDetails.services,
                 initialPayment: {
                     rentAmount: initialPayment.rentAmount,
-                    depositAmount: contractDetails.depositAmount,
+                    depositAmount: depositAmount,
                     total: initialPayment.total,
                     paidAt: new Date(),
                     paymentMethod: initialPayment.paymentMethod
                 }
             },
             assets,
-            initialReadings,
         });
 
         await newContract.save({ session });
@@ -191,9 +201,17 @@ exports.createContract = async (req, res) => {
 exports.getAllContracts = async (req, res) => {
     try {
         const contracts = await Contract.find()
-            .populate("roomId", "name customId price status")
+            .populate({
+                path: "roomId",
+                select: "name customId status roomTypeId",
+                populate: { path: "roomTypeId", select: "typeName currentPrice" }
+            })
             .populate("tenantId", "username email phoneNumber")
-            .populate("financials.services.serviceId", "name type price")
+            .populate("services", "name currentPrice type")
+            .populate({
+                path: "assets",
+                populate: { path: "deviceId", select: "name brand model" }
+            })
             .sort({ createdAt: -1 });
 
         res.status(200).json({
@@ -203,6 +221,62 @@ exports.getAllContracts = async (req, res) => {
         });
     } catch (error) {
         console.error("Get All Contracts Error:", error);
+        res.status(500).json({
+            success: false,
+            message: "Server Error"
+        });
+    }
+};
+
+exports.getContractById = async (req, res) => {
+    try {
+        const contract = await Contract.findById(req.params.id)
+            .populate({
+                path: "roomId",
+                select: "name roomCode status roomTypeId floorId",
+                populate: [
+                    { path: "roomTypeId", select: "typeName currentPrice personMax" },
+                    { path: "floorId", select: "name" }
+                ]
+            })
+            .populate("tenantId", "username email phoneNumber")
+            .populate("services", "name currentPrice type")
+            .populate({
+                path: "assets",
+                populate: { path: "deviceId", select: "name brand model" }
+            });
+
+        if (!contract) {
+            return res.status(404).json({ success: false, message: "Contract not found" });
+        }
+
+        // Fetch tenant's UserInfo separately
+        const tenantInfo = await UserInfo.findOne({ userId: contract.tenantId._id });
+
+        // Convert to plain object and fix Decimal128 fields
+        const contractData = contract.toObject();
+
+        // Fix roomType currentPrice (Decimal128 → Number)
+        if (contractData.roomId?.roomTypeId?.currentPrice) {
+            contractData.roomId.roomTypeId.currentPrice = parseFloat(contractData.roomId.roomTypeId.currentPrice.toString());
+        }
+        // Fix service currentPrice (Decimal128 → Number)
+        if (contractData.services) {
+            contractData.services = contractData.services.map(s => ({
+                ...s,
+                currentPrice: s.currentPrice ? parseFloat(s.currentPrice.toString()) : 0
+            }));
+        }
+
+        res.status(200).json({
+            success: true,
+            data: {
+                ...contractData,
+                tenantInfo: tenantInfo ? tenantInfo.toObject() : null
+            }
+        });
+    } catch (error) {
+        console.error("Get Contract By ID Error:", error);
         res.status(500).json({
             success: false,
             message: "Server Error"

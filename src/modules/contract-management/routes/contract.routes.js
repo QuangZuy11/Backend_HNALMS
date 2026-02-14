@@ -9,6 +9,6 @@ router.post("/create", contractController.createContract);
 
 // Route to get all contracts
 router.get("/", contractController.getAllContracts);
-// router.get("/:id", contractController.getContractById);
+router.get("/:id", contractController.getContractById);
 
 module.exports = router;
