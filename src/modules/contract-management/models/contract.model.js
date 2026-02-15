@@ -35,6 +35,7 @@ const contractSchema = new Schema(
         dob: Date,
         cccd: String,
         phone: String,
+        _id: false,
       }
     ],
     startDate: {
@@ -61,25 +62,6 @@ const contractSchema = new Schema(
       {
         type: mongoose.Schema.Types.ObjectId,
         ref: "Service",
-      }
-    ],
-    // Financial Details (only contract-specific data, not duplicates)
-    financials: {
-      paymentCycle: { type: Number, default: 1 }, // months
-      // Initial payment collected upon signing
-      initialPayment: {
-        rentAmount: Number, // Rent for remaining days
-        depositAmount: Number,
-        total: Number,
-        paidAt: Date,
-        paymentMethod: { type: String, enum: ["cash", "transfer"], default: "cash" }
-      }
-    },
-    // Handover Checklist (Assets) - refs to RoomDevice entries
-    assets: [
-      {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "RoomDevice",
       }
     ],
     // Terms & Conditions (Optional snapshot or ref)

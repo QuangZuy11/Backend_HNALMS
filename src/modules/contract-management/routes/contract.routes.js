@@ -1,6 +1,10 @@
 const express = require("express");
 const router = express.Router();
 const contractController = require("../controllers/contract.controller");
+const uploadContractImg = require("../middlewares/uploadContractImg");
+
+// Route to upload contract images to Cloudinary
+router.post("/upload-images", uploadContractImg.array("images", 5), contractController.uploadContractImages);
 
 // Route to create a new contract
 router.post("/create", contractController.createContract);

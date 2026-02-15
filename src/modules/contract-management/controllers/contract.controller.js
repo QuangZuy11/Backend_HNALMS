@@ -38,8 +38,6 @@ exports.createContract = async (req, res) => {
             tenantInfo, // { fullName, dob, cccd, phone, email, address, ... }
             coResidents, // Array
             contractDetails, // { startDate, duration, services, paymentCycle }
-            assets, // Array of handover assets
-            initialPayment, // { rentAmount, total, paymentMethod }
         } = req.body;
 
         // 1. Validate Room Status (populate roomTypeId to get price)
@@ -60,52 +58,44 @@ exports.createContract = async (req, res) => {
             throw new Error(`Số người ở (${personInRoom}) vượt quá giới hạn của loại phòng (tối đa ${personMax} người).`);
         }
 
-        // 2. Manage Tenant Account
-        console.log(`[DEBUG] Looking for user with email: ${tenantInfo.email} or phone: ${tenantInfo.phone}`);
-        let user = await User.findOne({
-            $or: [{ email: tenantInfo.email }, { phoneNumber: tenantInfo.phone }]
-        }).session(session);
-
-        // Generate Password: random 8 chars (Always do this)
+        // 2. Always Create New Tenant Account
         const passwordRaw = generateRandomString(8);
         const hashedPassword = await bcrypt.hash(passwordRaw, 10);
 
-        if (!user) {
-            console.log(`[DEBUG] User not found. Creating new user.`);
-            // Generate Username: email prefix + room name (sanitized)
-            const emailPrefix = tenantInfo.email.split("@")[0];
-            const roomNameSanitized = room.name.replace(/[^a-zA-Z0-9]/g, "");
-            const username = `${emailPrefix}${roomNameSanitized}`;
+        // Generate Username: email prefix + room name (sanitized)
+        const emailPrefix = tenantInfo.email.split("@")[0];
+        const roomNameSanitized = room.name.replace(/[^a-zA-Z0-9]/g, "");
+        let finalUsername = `${emailPrefix}${roomNameSanitized}`;
 
-            // Create User
-            user = new User({
-                username,
-                email: tenantInfo.email,
-                phoneNumber: tenantInfo.phone,
-                password: hashedPassword,
-                role: "Tenant",
-                status: "active",
-            });
-            await user.save({ session });
-
-            // Create UserInfo
-            const userInfo = new UserInfo({
-                userId: user._id,
-                fullname: tenantInfo.fullName,
-                cccd: tenantInfo.cccd,
-                address: tenantInfo.address,
-                dob: tenantInfo.dob,
-                gender: tenantInfo.gender || "Other",
-            });
-            await userInfo.save({ session });
-        } else {
-            console.log(`[DEBUG] User found (ID: ${user._id}). Updating password.`);
-            // Update existing user's password to the new random one
-            user.password = hashedPassword;
-            // Ensure phone/email match what was provided if we need to sync? 
-            // For now, just update password to ensure they can login with the email we send.
-            await user.save({ session });
+        // Ensure username is unique
+        const existingUser = await User.findOne({ username: finalUsername }).session(session);
+        if (existingUser) {
+            finalUsername = `${finalUsername}${Math.floor(100 + Math.random() * 900)}`;
         }
+
+        console.log(`[CREATE USER] Creating new Tenant: email=${tenantInfo.email}, phone=${tenantInfo.phone}, username=${finalUsername}`);
+
+        const user = new User({
+            username: finalUsername,
+            email: tenantInfo.email,
+            phoneNumber: tenantInfo.phone,
+            password: hashedPassword,
+            role: "Tenant",
+            status: "active",
+        });
+        await user.save({ session });
+        console.log(`[CREATE USER] ✅ New Tenant created with ID: ${user._id}`);
+
+        // Create UserInfo
+        const userInfo = new UserInfo({
+            userId: user._id,
+            fullname: tenantInfo.fullName,
+            cccd: tenantInfo.cccd,
+            address: tenantInfo.address,
+            dob: tenantInfo.dob,
+            gender: tenantInfo.gender || "Other",
+        });
+        await userInfo.save({ session });
 
         // 3. Create Contract Record
         const endDate = new Date(contractDetails.startDate);
@@ -126,17 +116,7 @@ exports.createContract = async (req, res) => {
             duration: contractDetails.duration,
             status: "active",
             services: serviceIds,
-            financials: {
-                paymentCycle: contractDetails.paymentCycle || 1,
-                initialPayment: {
-                    rentAmount: initialPayment.rentAmount,
-                    depositAmount: depositAmount,
-                    total: initialPayment.total,
-                    paidAt: new Date(),
-                    paymentMethod: initialPayment.paymentMethod
-                }
-            },
-            assets,
+            images: req.body.images || [],
         });
 
         await newContract.save({ session });
@@ -157,8 +137,9 @@ exports.createContract = async (req, res) => {
         await session.commitTransaction();
         session.endSession();
 
-        // 6. Send Email Notification (Await to ensure delivery or catch error)
-        console.log(`[DEBUG] Preparing to send email to ${user.email}`);
+        // 6. Send Email Notification to the tenant's email from the form (NOT user.email from DB)
+        const recipientEmail = tenantInfo.email;
+        console.log(`[DEBUG] Preparing to send email to ${recipientEmail}`);
         const emailContent = EMAIL_TEMPLATES.NEW_CONTRACT_ACCOUNT.getHtml(
             tenantInfo.fullName,
             user.username,
@@ -167,8 +148,8 @@ exports.createContract = async (req, res) => {
         );
 
         try {
-            await sendEmail(user.email, EMAIL_TEMPLATES.NEW_CONTRACT_ACCOUNT.subject, emailContent);
-            console.log(`✅ [DEBUG] Email successfully sent to ${user.email}`);
+            await sendEmail(recipientEmail, EMAIL_TEMPLATES.NEW_CONTRACT_ACCOUNT.subject, emailContent);
+            console.log(`✅ [DEBUG] Email successfully sent to ${recipientEmail}`);
         } catch (emailError) {
             console.error(`❌ [DEBUG] Failed to send email to ${user.email}:`, emailError);
             // We don't throw here to ensure the contract creation success is still returned, 
@@ -208,10 +189,6 @@ exports.getAllContracts = async (req, res) => {
             })
             .populate("tenantId", "username email phoneNumber")
             .populate("services", "name currentPrice type")
-            .populate({
-                path: "assets",
-                populate: { path: "deviceId", select: "name brand model" }
-            })
             .sort({ createdAt: -1 });
 
         res.status(200).json({
@@ -240,11 +217,7 @@ exports.getContractById = async (req, res) => {
                 ]
             })
             .populate("tenantId", "username email phoneNumber")
-            .populate("services", "name currentPrice type")
-            .populate({
-                path: "assets",
-                populate: { path: "deviceId", select: "name brand model" }
-            });
+            .populate("services", "name currentPrice type");
 
         if (!contract) {
             return res.status(404).json({ success: false, message: "Contract not found" });
@@ -280,6 +253,26 @@ exports.getContractById = async (req, res) => {
         res.status(500).json({
             success: false,
             message: "Server Error"
+        });
+    }
+};
+
+// Upload contract images to Cloudinary
+exports.uploadContractImages = async (req, res) => {
+    try {
+        if (!req.files || req.files.length === 0) {
+            return res.status(400).json({ success: false, message: "No files uploaded" });
+        }
+        const imageUrls = req.files.map(file => file.path);
+        res.status(200).json({
+            success: true,
+            data: imageUrls
+        });
+    } catch (error) {
+        console.error("Upload Contract Images Error:", error);
+        res.status(500).json({
+            success: false,
+            message: "Upload failed: " + (error.message || "Internal Server Error")
         });
     }
 };
