@@ -1,0 +1,276 @@
+/**
+ * Complaint Request Service
+ * Xử lý business logic cho khiếu nại
+ */
+
+const ComplaintRequest = require("../models/complaint_requests.model");
+
+/**
+ * Tạo yêu cầu khiếu nại mới
+ * @param {Object} data - {tenantId, content, category, priority}
+ * @returns {Object} Complaint request vừa tạo
+ */
+const createComplaintRequest = async (data) => {
+  try {
+    const { tenantId, content, category, priority } = data;
+
+    // Validate input
+    if (!tenantId || !content || !category) {
+      throw new Error("Missing required fields: tenantId, content, category");
+    }
+
+    const complaint = new ComplaintRequest({
+      tenantId,
+      content,
+      category,
+      priority: priority || "Low",
+      status: "Pending"
+    });
+
+    const savedComplaint = await complaint.save();
+    
+    return await savedComplaint.populate([
+      { path: "tenantId", select: "username email phoneNumber" },
+      { path: "responseBy", select: "username email role" }
+    ]);
+  } catch (error) {
+    throw new Error(`Error creating complaint: ${error.message}`);
+  }
+};
+
+/**
+ * Lấy khiếu nại theo ID
+ * @param {string} id - Complaint ID
+ * @returns {Object} Complaint details
+ */
+const getComplaintById = async (id) => {
+  try {
+    const complaint = await ComplaintRequest.findById(id)
+      .populate("tenantId", "username email phoneNumber")
+      .populate("responseBy", "username email role")
+      .lean();
+
+    return complaint;
+  } catch (error) {
+    throw new Error(`Error fetching complaint: ${error.message}`);
+  }
+};
+
+/**
+ * Lấy danh sách khiếu nại với filter và phân trang
+ * @param {Object} filters - {tenantId, status, category}
+ * @param {number} page - Page number
+ * @param {number} limit - Items per page
+ * @returns {Object} {data, total, page, limit}
+ */
+const getComplaintsList = async (filters = {}, page = 1, limit = 10) => {
+  try {
+    const skip = (page - 1) * limit;
+
+    // Build query
+    const query = {};
+    if (filters.tenantId) query.tenantId = filters.tenantId;
+    if (filters.status) query.status = filters.status;
+    if (filters.category) query.category = filters.category;
+
+    // Get total count
+    const total = await ComplaintRequest.countDocuments(query);
+
+    // Get paginated results
+    const complaints = await ComplaintRequest.find(query)
+      .populate("tenantId", "username email phoneNumber")
+      .populate("responseBy", "username email role")
+      .sort({ createdDate: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    return {
+      data: complaints,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit)
+    };
+  } catch (error) {
+    throw new Error(`Error fetching complaint list: ${error.message}`);
+  }
+};
+
+/**
+ * Cập nhật thông tin khiếu nại (chỉ content, category, priority)
+ * @param {string} id - Complaint ID
+ * @param {Object} data - {content, category, priority}
+ * @returns {Object} Updated complaint
+ */
+const updateComplaintRequest = async (id, data) => {
+  try {
+    const { content, category, priority } = data;
+
+    const updateData = {};
+    if (content) updateData.content = content;
+    if (category) updateData.category = category;
+    if (priority) updateData.priority = priority;
+
+    const complaint = await ComplaintRequest.findByIdAndUpdate(
+      id,
+      updateData,
+      { new: true }
+    )
+      .populate("tenantId", "username email phoneNumber")
+      .populate("responseBy", "username email role");
+
+    return complaint;
+  } catch (error) {
+    throw new Error(`Error updating complaint: ${error.message}`);
+  }
+};
+
+/**
+ * Cập nhật trạng thái khiếu nại (chỉ manager/admin)
+ * @param {string} id - Complaint ID
+ * @param {string} status - "Pending", "Processing", "Done"
+ * @param {string} response - Response message
+ * @param {string} responderId - User ID who responds
+ * @returns {Object} Updated complaint
+ */
+const updateComplaintStatus = async (id, status, response, responderId) => {
+  try {
+    const updateData = {
+      status,
+      ...(response && { response }),
+      ...(response && { responseBy: responderId }),
+      ...(response && { responseDate: new Date() })
+    };
+
+    const complaint = await ComplaintRequest.findByIdAndUpdate(
+      id,
+      updateData,
+      { new: true }
+    )
+      .populate("tenantId", "username email phoneNumber")
+      .populate("responseBy", "username email role");
+
+    return complaint;
+  } catch (error) {
+    throw new Error(`Error updating complaint status: ${error.message}`);
+  }
+};
+
+/**
+ * Xóa khiếu nại
+ * @param {string} id - Complaint ID
+ */
+const deleteComplaint = async (id) => {
+  try {
+    await ComplaintRequest.findByIdAndDelete(id);
+    return { success: true };
+  } catch (error) {
+    throw new Error(`Error deleting complaint: ${error.message}`);
+  }
+};
+
+/**
+ * Lấy thống kê khiếu nại
+ * @returns {Object} Statistics
+ */
+const getComplaintStatistics = async () => {
+  try {
+    const [
+      totalComplaints,
+      pendingCount,
+      processingCount,
+      doneCount,
+      byCategory,
+      byPriority
+    ] = await Promise.all([
+      ComplaintRequest.countDocuments(),
+      ComplaintRequest.countDocuments({ status: "Pending" }),
+      ComplaintRequest.countDocuments({ status: "Processing" }),
+      ComplaintRequest.countDocuments({ status: "Done" }),
+      ComplaintRequest.aggregate([
+        {
+          $group: {
+            _id: "$category",
+            count: { $sum: 1 }
+          }
+        },
+        { $sort: { count: -1 } }
+      ]),
+      ComplaintRequest.aggregate([
+        {
+          $group: {
+            _id: "$priority",
+            count: { $sum: 1 }
+          }
+        }
+      ])
+    ]);
+
+    return {
+      total: totalComplaints,
+      byStatus: {
+        pending: pendingCount,
+        processing: processingCount,
+        done: doneCount
+      },
+      byCategory,
+      byPriority,
+      completionRate: totalComplaints > 0 
+        ? ((doneCount / totalComplaints) * 100).toFixed(2) 
+        : 0
+    };
+  } catch (error) {
+    throw new Error(`Error fetching statistics: ${error.message}`);
+  }
+};
+
+/**
+ * Lấy khiếu nại theo category
+ * @param {string} category - Category name
+ * @returns {Array} Complaints
+ */
+const getComplaintsByCategory = async (category) => {
+  try {
+    const complaints = await ComplaintRequest.find({ category })
+      .populate("tenantId", "username email phoneNumber")
+      .populate("responseBy", "username email role")
+      .sort({ createdDate: -1 })
+      .lean();
+
+    return complaints;
+  } catch (error) {
+    throw new Error(`Error fetching complaints by category: ${error.message}`);
+  }
+};
+
+/**
+ * Lấy khiếu nại theo priority
+ * @param {string} priority - "Low", "Medium", "High"
+ * @returns {Array} Complaints
+ */
+const getComplaintsByPriority = async (priority) => {
+  try {
+    const complaints = await ComplaintRequest.find({ priority })
+      .populate("tenantId", "username email phoneNumber")
+      .populate("responseBy", "username email role")
+      .sort({ createdDate: -1 })
+      .lean();
+
+    return complaints;
+  } catch (error) {
+    throw new Error(`Error fetching complaints by priority: ${error.message}`);
+  }
+};
+
+module.exports = {
+  createComplaintRequest,
+  getComplaintById,
+  getComplaintsList,
+  updateComplaintRequest,
+  updateComplaintStatus,
+  deleteComplaint,
+  getComplaintStatistics,
+  getComplaintsByCategory,
+  getComplaintsByPriority
+};
