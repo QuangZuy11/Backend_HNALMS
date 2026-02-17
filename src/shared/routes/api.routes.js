@@ -37,11 +37,13 @@ ApiRouter.get("/users", async (req, res) => {
 const roomRoutes = require("../../modules/room-floor-management/routes/room-floor.routes");
 const buildingRoutes = require("../../modules/building-information/routes/building.routes");
 const serviceRoutes = require("../../modules/service-management/routes/service.routes");
+const requestRoutes = require("../../modules/request-management/routes/request.routes");
 
 // Mount routes
 ApiRouter.use("/auth", authRoutes);
 ApiRouter.use("/", roomRoutes);
 ApiRouter.use("/buildings", buildingRoutes);
 ApiRouter.use("/services", serviceRoutes);
+ApiRouter.use("/requests", requestRoutes);
 
 module.exports = ApiRouter;
