@@ -37,6 +37,10 @@ const RepairRequestSchema = new Schema({
     type: Number,
     default: 0
   },
+  notes: {
+    type: String,
+    default: ""
+  },
   createdDate: {
     type: Date,
     default: Date.now
