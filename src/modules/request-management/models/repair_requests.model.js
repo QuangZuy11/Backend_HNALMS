@@ -4,7 +4,7 @@ const { Schema } = mongoose;
 const RepairRequestSchema = new Schema({
   tenantId: {
     type: Schema.Types.ObjectId,
-    ref: "Tenant",
+    ref: "User",
     required: true,
     index: true
   },

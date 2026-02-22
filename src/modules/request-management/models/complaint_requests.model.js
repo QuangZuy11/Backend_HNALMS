@@ -4,7 +4,7 @@ const { Schema } = mongoose;
 const ComplaintRequestSchema = new Schema({
   tenantId: {
     type: Schema.Types.ObjectId,
-    ref: "Tenant",
+    ref: "User",
     required: true,
     index: true
   },
