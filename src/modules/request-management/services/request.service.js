@@ -44,8 +44,10 @@ const getRepairRequests = async () => {
  * Cập nhật trạng thái yêu cầu sửa chữa
  * @param {string} requestId - ID của yêu cầu
  * @param {"Pending"|"Processing"|"Done"} status - Trạng thái mới
+ * @param {number} cost - Chi phí (chỉ khi status = Done)
+ * @param {string} notes - Ghi chú (chỉ khi status = Done)
  */
-const updateRepairRequestStatus = async (requestId, status) => {
+const updateRepairRequestStatus = async (requestId, status, cost = null, notes = null) => {
   const allowedStatus = ["Pending", "Processing", "Done"];
   if (!allowedStatus.includes(status)) {
     throw new Error("Trạng thái không hợp lệ");
@@ -57,6 +59,17 @@ const updateRepairRequestStatus = async (requestId, status) => {
   }
 
   request.status = status;
+
+  // Nếu chuyển sang Done, cập nhật chi phí và ghi chú
+  if (status === "Done") {
+    if (cost !== null && cost !== undefined) {
+      request.cost = cost;
+    }
+    if (notes !== null && notes !== undefined) {
+      request.notes = notes;
+    }
+  }
+
   await request.save();
 
   return request;

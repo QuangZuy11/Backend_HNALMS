@@ -27,12 +27,12 @@ exports.getRepairRequests = async (req, res) => {
 /**
  * Cập nhật trạng thái yêu cầu sửa chữa
  * PUT /api/requests/repair/:requestId/status
- * Body: { status: "Pending" | "Processing" | "Done" }
+ * Body: { status: "Pending" | "Processing" | "Done", cost?: number, notes?: string }
  */
 exports.updateRepairStatus = async (req, res) => {
   try {
     const { requestId } = req.params;
-    const { status } = req.body || {};
+    const { status, cost, notes } = req.body || {};
 
     if (!status) {
       return res.status(400).json({
@@ -43,7 +43,9 @@ exports.updateRepairStatus = async (req, res) => {
 
     const updated = await requestService.updateRepairRequestStatus(
       requestId,
-      status
+      status,
+      cost,
+      notes
     );
 
     res.json({
