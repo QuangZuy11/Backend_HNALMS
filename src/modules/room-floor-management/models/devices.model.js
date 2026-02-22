@@ -52,6 +52,17 @@ const deviceSchema = new mongoose.Schema(
   }
 );
 
+// Getter convert Decimal128 -> Number
+deviceSchema.set("toJSON", {
+  virtuals: true,
+  getters: true,
+  transform: (doc, ret) => {
+    if (ret.price) ret.price = parseFloat(ret.price.toString());
+    delete ret.id;
+    return ret;
+  },
+});
+
 const Device = mongoose.model("Device", deviceSchema);
 
 module.exports = Device;
