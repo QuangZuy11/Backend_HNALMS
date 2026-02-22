@@ -39,6 +39,7 @@ const buildingRoutes = require("../../modules/building-information/routes/buildi
 const serviceRoutes = require("../../modules/service-management/routes/service.routes");
 const requestRoutes = require("../../modules/request-management/routes/request.routes");
 
+const deviceRoutes = require("../../modules/room-floor-management/routes/device.route");
 // Mount routes
 ApiRouter.use("/auth", authRoutes);
 ApiRouter.use("/", roomRoutes);
@@ -49,4 +50,5 @@ ApiRouter.use("/requests", requestRoutes);
 const contractRoutes = require("../../modules/contract-management/routes/contract.routes");
 ApiRouter.use("/contracts", contractRoutes);
 
+ApiRouter.use("/devices", deviceRoutes);
 module.exports = ApiRouter;
