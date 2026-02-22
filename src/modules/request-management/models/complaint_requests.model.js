@@ -62,3 +62,4 @@ const ComplaintRequest = mongoose.model(
 );
 
 module.exports = ComplaintRequest;
+  

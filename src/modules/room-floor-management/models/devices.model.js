@@ -25,26 +25,43 @@ const deviceSchema = new mongoose.Schema(
       default: "",
       trim: true
     },
+    category: {
+      type: String,
+      default: "",
+      trim: true
+    },
+    unit: {
+      type: String,
+      default: "Cái",
+      trim: true
+    },
+    price: { 
+          type: mongoose.Schema.Types.Decimal128, 
+          required: true, 
+          default: 0 
+      },
     // Mô tả chi tiết (Kích thước, công suất, v.v.)
     description: {
       type: String,
       default: "",
     },
-    // Hình ảnh thiết bị (nếu cần hiển thị mẫu)
-    image: {
-      type: String,
-      default: ""
-    },
-    // Trạng thái quản lý (Soft delete - Thay vì xóa hẳn thì ẩn đi)
-    isActive: {
-      type: Boolean,
-      default: true,
-    },
+
   },
   {
     timestamps: true, // Tự động tạo createdAt, updatedAt
   }
 );
+
+// Getter convert Decimal128 -> Number
+deviceSchema.set("toJSON", {
+  virtuals: true,
+  getters: true,
+  transform: (doc, ret) => {
+    if (ret.price) ret.price = parseFloat(ret.price.toString());
+    delete ret.id;
+    return ret;
+  },
+});
 
 const Device = mongoose.model("Device", deviceSchema);
 
