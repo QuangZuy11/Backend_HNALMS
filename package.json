@@ -28,6 +28,7 @@
     "dotenv": "^17.2.3",
     "ejs": "^4.0.1",
     "express": "^5.2.1",
+    "express-fileupload": "^1.5.2",
     "express-handlebars": "^8.0.3",
     "http": "^0.0.1-security",
     "http-errors": "^2.0.1",
