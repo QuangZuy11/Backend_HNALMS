@@ -18,6 +18,24 @@ class MeterReadingController {
       res.status(400).json({ success: false, message: error.message });
     }
   }
+
+  // [THÊM MỚI] Xử lý request lấy chỉ số cũ
+  async getLatest(req, res) {
+    try {
+      const { roomId, utilityId } = req.query; // Lấy dữ liệu từ URL query
+      
+      if (!roomId || !utilityId) {
+        return res.status(400).json({ success: false, message: "Thiếu thông tin roomId hoặc utilityId" });
+      }
+
+      const latestData = await meterReadingService.getLatestReading(roomId, utilityId);
+      
+      // Nếu không tìm thấy (phòng mới chưa ghi điện nước bao giờ), vẫn trả về 200 nhưng data là null
+      res.status(200).json({ success: true, data: latestData });
+    } catch (error) {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  }
 }
 
 module.exports = new MeterReadingController();

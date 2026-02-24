@@ -58,5 +58,5 @@ ApiRouter.use("/contracts", contractRoutes);
 ApiRouter.use("/accounts", accountRoutes);
 ApiRouter.use("/devices", deviceRoutes);
 ApiRouter.use("/invoices", invoiceRoutes);
-ApiRouter.use("/meterreading", meterreadingRoutes);
+ApiRouter.use("/meter-readings", meterreadingRoutes);
 module.exports = ApiRouter;
