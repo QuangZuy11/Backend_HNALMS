@@ -31,7 +31,7 @@ router.get('/room/my-room', authenticate, roomController.getMyRoom);
 // ==================================================================
 
 // --- Room ---
-router.get("/room", roomController.getRooms); // GET /rooms
+router.get("/rooms", roomController.getRooms); // GET /rooms
 router.post("/rooms", roomController.createRoom); // POST /rooms
 
 // --- Floor ---
