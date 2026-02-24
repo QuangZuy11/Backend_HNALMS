@@ -38,6 +38,7 @@ const roomRoutes = require("../../modules/room-floor-management/routes/room-floo
 const buildingRoutes = require("../../modules/building-information/routes/building.routes");
 const serviceRoutes = require("../../modules/service-management/routes/service.routes");
 const requestRoutes = require("../../modules/request-management/routes/request.routes");
+const uploadRoutes = require("../../modules/request-management/routes/upload.routes");
 
 const deviceRoutes = require("../../modules/room-floor-management/routes/device.route");
 // Mount routes
@@ -46,6 +47,7 @@ ApiRouter.use("/", roomRoutes);
 ApiRouter.use("/buildings", buildingRoutes);
 ApiRouter.use("/services", serviceRoutes);
 ApiRouter.use("/requests", requestRoutes);
+ApiRouter.use("/upload", uploadRoutes);
 
 const contractRoutes = require("../../modules/contract-management/routes/contract.routes");
 ApiRouter.use("/contracts", contractRoutes);
