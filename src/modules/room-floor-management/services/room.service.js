@@ -40,9 +40,10 @@
 // services/room.service.js
 const Room = require("../models/room.model");
 const RoomDevice = require("../models/roomdevices.model");
+const Device = require("../models/devices.model"); // Ensure Device model is registered
 const Floor = require("../models/floor.model");
 // [LƯU Ý]: Kiểm tra kỹ tên file này, nếu tên file là roomType.model.js thì phải require đúng chữ hoa chữ thường
-const RoomType = require("../models/roomType.model");
+const RoomType = require("../models/roomtype.model");
 const Contract = require("../../contract-management/models/contract.model");
 const Deposit = require("../../contract-management/models/deposit.model");
 const xlsx = require("xlsx");
@@ -116,25 +117,39 @@ exports.getAllRooms = async (filters) => {
 };
 
 exports.getRoomDetail = async (roomId) => {
-  const room = await Room.findById(roomId)
-    .populate("floorId", "name")
-    .populate(
-      "roomTypeId",
-      "typeName currentPrice description images personMax area",
-    );
+  try {
+    const room = await Room.findById(roomId)
+      .populate("floorId", "name")
+      .populate(
+        "roomTypeId",
+        "typeName currentPrice description images personMax area",
+      );
 
-  if (!room) throw { status: 404, message: "Không tìm thấy phòng" };
+    if (!room) throw { status: 404, message: "Không tìm thấy phòng" };
 
-  console.log("🔍 getRoomDetail - Room:", room.name);
-  console.log("📸 RoomType images:", room.roomTypeId?.images);
-  console.log("📊 Images count:", room.roomTypeId?.images?.length);
+    console.log("🔍 getRoomDetail - Room:", room.name);
 
-  const roomAssets = await RoomDevice.find({
-    roomTypeId: room.roomTypeId._id,
-  }).populate("deviceId", "name brand model type");
-  const roomData = room.toObject();
-  roomData.assets = roomAssets;
-  return roomData;
+    let roomAssets = [];
+    if (room.roomTypeId) {
+      console.log("📸 RoomType found:", room.roomTypeId._id);
+      roomAssets = await RoomDevice.find({
+        roomTypeId: room.roomTypeId._id,
+      }).populate("deviceId", "name brand model"); // Removed 'unit' and 'type' just to be safe, standard fields only
+      console.log("✅ RoomAssets found:", roomAssets.length);
+    } else {
+      console.warn("⚠️ Room has no RoomType assigned:", room.name);
+    }
+
+    const roomData = room.toObject();
+    if (roomData.roomTypeId && roomData.roomTypeId.currentPrice) {
+      roomData.roomTypeId.currentPrice = parseFloat(roomData.roomTypeId.currentPrice.toString());
+    }
+    roomData.assets = roomAssets;
+    return roomData;
+  } catch (error) {
+    console.error("🔥 Error in getRoomDetail:", error);
+    throw error;
+  }
 };
 
 exports.deleteRoom = async (roomId) => {
