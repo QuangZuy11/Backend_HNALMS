@@ -38,10 +38,14 @@ const roomRoutes = require("../../modules/room-floor-management/routes/room-floo
 const buildingRoutes = require("../../modules/building-information/routes/building.routes");
 const serviceRoutes = require("../../modules/service-management/routes/service.routes");
 const deviceRoutes = require("../../modules/room-floor-management/routes/device.route");
+const invoiceRoutes = require("../../modules/invoice-management/routes/invoice.routes");
+const meterreadingRoutes = require("../../modules/invoice-management/routes/meterreading.routes");
 // Mount routes
 ApiRouter.use("/auth", authRoutes);
 ApiRouter.use("/", roomRoutes);
 ApiRouter.use("/buildings", buildingRoutes);
 ApiRouter.use("/services", serviceRoutes);
 ApiRouter.use("/devices", deviceRoutes);
+ApiRouter.use("/invoices", invoiceRoutes);
+ApiRouter.use("/meterreading", meterreadingRoutes);
 module.exports = ApiRouter;
