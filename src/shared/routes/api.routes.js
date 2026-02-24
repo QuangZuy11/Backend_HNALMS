@@ -50,7 +50,9 @@ ApiRouter.use("/requests", requestRoutes);
 ApiRouter.use("/upload", uploadRoutes);
 
 const contractRoutes = require("../../modules/contract-management/routes/contract.routes");
-ApiRouter.use("/contracts", contractRoutes);
+const accountRoutes = require("../../modules/account-management/routes/account.routes");
 
+ApiRouter.use("/contracts", contractRoutes);
+ApiRouter.use("/accounts", accountRoutes);
 ApiRouter.use("/devices", deviceRoutes);
 module.exports = ApiRouter;
