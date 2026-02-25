@@ -13,12 +13,22 @@ exports.getTenants = async (req, res) => {
         message: "Chỉ Quản lý hoặc Chủ nhà mới xem được danh sách Khách thuê",
       });
     }
+    const rawOffset = req.query.offset;
+    const rawLimit = req.query.limit;
+    const offset = Math.max(parseInt(rawOffset, 10) || 0, 0);
+    const limit = Math.min(Math.max(parseInt(rawLimit, 10) || 10, 1), 100);
+
     const accounts = await accountService.getAccountsByRole("Tenant");
+    const total = accounts.length;
+    const pagedAccounts = accounts.slice(offset, offset + limit);
+
     res.json({
       success: true,
       message: "Lấy danh sách Khách thuê thành công",
-      data: accounts,
-      total: accounts.length,
+      data: pagedAccounts,
+      total,
+      offset,
+      limit,
     });
   } catch (error) {
     console.error("Get tenants error:", error);

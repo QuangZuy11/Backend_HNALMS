@@ -39,12 +39,22 @@ exports.getOwners = async (req, res) => {
         message: "Chỉ Admin mới xem được danh sách Chủ nhà",
       });
     }
+    const rawOffset = req.query.offset;
+    const rawLimit = req.query.limit;
+    const offset = Math.max(parseInt(rawOffset, 10) || 0, 0);
+    const limit = Math.min(Math.max(parseInt(rawLimit, 10) || 10, 1), 100);
+
     const accounts = await accountService.getAccountsByRole("owner");
+    const total = accounts.length;
+    const pagedAccounts = accounts.slice(offset, offset + limit);
+
     res.json({
       success: true,
       message: "Lấy danh sách Chủ nhà thành công",
-      data: accounts,
-      total: accounts.length,
+      data: pagedAccounts,
+      total,
+      offset,
+      limit,
     });
   } catch (error) {
     console.error("Get owners error:", error);
