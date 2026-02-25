@@ -2,6 +2,7 @@ const express = require("express");
 const bodyParser = require("body-parser");
 const morgan = require("morgan");
 const cors = require("cors");
+const fileUpload = require("express-fileupload");
 require("dotenv").config();
 
 const connectDB = require("./shared/config/database");
@@ -21,6 +22,15 @@ app.use(cors({
 // Middlewares
 app.use(bodyParser.json());
 app.use(morgan("dev"));
+
+// File upload middleware
+app.use(fileUpload({
+  useTempFiles: true,
+  tempFileDir: '/tmp/',
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+  abortOnLimit: true,
+  createParentPath: true
+}));
 
 // Routes
 app.use("/api", ApiRouter);
