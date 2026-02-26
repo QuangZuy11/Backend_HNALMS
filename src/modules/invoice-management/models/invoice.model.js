@@ -4,7 +4,12 @@ const invoiceSchema = new mongoose.Schema(
   {
     invoiceCode: { type: String, required: true, unique: true },
     roomId: { type: mongoose.Schema.Types.ObjectId, ref: "Room", required: true },
-    title: { type: String, required: true },
+    // Tham chiếu đến yêu cầu sửa chữa tương ứng (nếu là hóa đơn phát sinh sửa chữa)
+    repairRequestId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "RepairRequest",
+    },
+    title: { type: String, required: true, trim: true },
     type: { type: String, enum: ["Periodic", "Incurred"], default: "Periodic" },
     
     // ĐÂY CHÍNH LÀ PHẦN "INVOICE DETAIL" NẰM GỌN BÊN TRONG HÓA ĐƠN
