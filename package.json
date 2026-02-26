@@ -5,7 +5,11 @@
   "main": "index.js",
   "scripts": {
     "start": "nodemon server.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "test:unit": "jest test/unit",
+    "test:integration": "jest test/integration"
   },
   "repository": {
     "type": "git",
@@ -42,6 +46,9 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
-    "nodemon": "^3.1.11"
+    "jest": "^30.2.0",
+    "mongodb-memory-server": "^11.0.1",
+    "nodemon": "^3.1.11",
+    "supertest": "^7.2.2"
   }
 }
