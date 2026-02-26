@@ -113,7 +113,35 @@ exports.getAllRooms = async (filters) => {
     )
     .sort({ name: 1 });
 
-  return rooms;
+  // Find active contracts expiring within 1 month to show "Trống từ DD/MM" on floor map
+  const now = new Date();
+  const oneMonthFromNow = new Date();
+  oneMonthFromNow.setMonth(oneMonthFromNow.getMonth() + 1);
+
+  const roomIds = rooms.map((r) => r._id);
+  const expiringContracts = await Contract.find({
+    status: "active",
+    endDate: { $gte: now, $lte: oneMonthFromNow },
+    roomId: { $in: roomIds },
+  })
+    .select("roomId endDate")
+    .lean();
+
+  // Build map: roomId -> endDate
+  const expiryMap = {};
+  expiringContracts.forEach((c) => {
+    expiryMap[c.roomId.toString()] = c.endDate;
+  });
+
+  // Attach contractEndDate to rooms that have expiring contracts
+  const enrichedRooms = rooms.map((r) => {
+    const obj = r.toObject();
+    const endDate = expiryMap[r._id.toString()];
+    if (endDate) obj.contractEndDate = endDate;
+    return obj;
+  });
+
+  return enrichedRooms;
 };
 
 exports.getRoomDetail = async (roomId) => {
