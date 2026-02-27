@@ -132,11 +132,9 @@ const validateUpdateStatus = (data) => {
     }
   }
 
-  // Response is required when status is "Done" or "Processing"
-  if (data.status === "Done" || data.status === "Processing") {
-    if (!data.response) {
-      errors.push("Response là bắt buộc khi trạng thái là Processing hoặc Done");
-    } else if (typeof data.response !== "string") {
+  // Response là tùy chọn; nếu có thì validate format
+  if (data.response) {
+    if (typeof data.response !== "string") {
       errors.push("Response phải là chuỗi ký tự");
     } else if (data.response.trim().length === 0) {
       errors.push("Response không được trống");

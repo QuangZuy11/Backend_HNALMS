@@ -225,12 +225,25 @@ const updateRepairRequestStatus = async (
 
       const roomId = activeContract.roomId._id || activeContract.roomId;
 
+      // Chuẩn bị chi tiết hóa đơn (items) - 1 dòng cho lần sửa chữa này
+      const items = [
+        {
+          itemName: title || "Chi phí sửa chữa",
+          oldIndex: 0,
+          newIndex: 0,
+          usage: 1,
+          unitPrice: totalAmount,
+          amount: totalAmount,
+        },
+      ];
+
       const newInvoice = new Invoice({
         invoiceCode,
         roomId,
         repairRequestId: request._id, // liên kết hóa đơn với yêu cầu sửa chữa
         title,
         type: "Incurred",
+        items,
         totalAmount,
         status: "Unpaid",
         dueDate,
