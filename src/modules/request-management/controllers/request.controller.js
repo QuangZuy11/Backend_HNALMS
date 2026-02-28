@@ -153,7 +153,15 @@ exports.getRepairRequestById = async (req, res) => {
 exports.updateRepairStatus = async (req, res) => {
   try {
     const { requestId } = req.params;
-    const { status, cost, notes } = req.body || {};
+    const {
+      status,
+      cost,
+      notes,
+      invoiceCode,
+      invoiceTitle,
+      invoiceTotalAmount,
+      invoiceDueDate,
+    } = req.body || {};
 
     if (!status) {
       return res.status(400).json({
@@ -162,12 +170,12 @@ exports.updateRepairStatus = async (req, res) => {
       });
     }
 
-    const updated = await requestService.updateRepairRequestStatus(
-      requestId,
-      status,
-      cost,
-      notes
-    );
+    const updated = await requestService.updateRepairRequestStatus(requestId, status, cost, notes, {
+      invoiceCode,
+      title: invoiceTitle,
+      totalAmount: invoiceTotalAmount,
+      dueDate: invoiceDueDate,
+    });
 
     res.json({
       success: true,
