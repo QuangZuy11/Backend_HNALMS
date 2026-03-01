@@ -204,7 +204,7 @@ class InvoiceService {
 
       // 5.5. Trả về cấu trúc lưu DB
       return {
-        invoiceCode: `INV-${room.name}-${month}${year}-${Math.floor(1000 + Math.random() * 9000)}`,
+        invoiceCode: `INV-${room.name}-${month}${year}`,
         roomId: room._id,
         title: `Hóa đơn tiền thuê & dịch vụ tháng ${month}/${year}`,
         type: "Periodic",
