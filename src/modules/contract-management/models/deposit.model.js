@@ -26,12 +26,20 @@ const depositSchema = new Schema(
     },
     status: {
       type: String,
-      enum: ["Held", "Refunded", "Forfeited", "Pending"],
+      enum: ["Held", "Refunded", "Forfeited"],
       default: "Held",
+    },
+    refundDate: {
+      type: Date,
+      default: null,
     },
     createdDate: {
       type: Date,
       default: Date.now,
+    },
+    forfeitedDate: {
+      type: Date,
+      default: null,
     },
   },
   {

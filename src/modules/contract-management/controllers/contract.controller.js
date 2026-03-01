@@ -125,14 +125,7 @@ exports.createContract = async (req, res) => {
         room.status = "Occupied";
         await room.save({ session });
 
-        // 5. Update Deposit Status (if applicable)
-        if (depositId) {
-            const deposit = await Deposit.findById(depositId).session(session);
-            if (deposit) {
-                deposit.status = "Completed";
-                await deposit.save({ session });
-            }
-        }
+        // 5. Deposit remains "Held" status when linked to a contract (no status change needed)
 
         await session.commitTransaction();
         session.endSession();
