@@ -23,25 +23,33 @@ class MeterReadingService {
       throw new Error("Không tìm thấy thông tin Dịch vụ.");
     }
     
-    const unitPrice = serviceInfo.currentPrice || serviceInfo.price || 0; 
+    // Xử lý Decimal128 nếu có
+    let unitPrice = serviceInfo.currentPrice || serviceInfo.price || 0; 
+    unitPrice = typeof unitPrice === 'object' && unitPrice.$numberDecimal ? parseFloat(unitPrice.$numberDecimal) : Number(unitPrice);
+    
     const incurredCost = usageAmount * unitPrice; // Thành tiền
     const serviceName = serviceInfo.name || serviceInfo.serviceName || "Dịch vụ";
+    
+    // Tạo chuỗi định dạng hiển thị cho Hóa đơn (Giống hệt lúc tạo hàng loạt)
+    const formattedItemName = `Tiền ${serviceName.toLowerCase()} (Cũ: ${data.oldIndex} - Mới: ${data.newIndex})`;
+    const searchKeyword = `tiền ${serviceName.toLowerCase()}`; // Keyword để tìm kiếm
 
     // 3. Cập nhật vào mảng 'items' của Hóa đơn Nháp
     const draftInvoice = await Invoice.findOne({
       roomId: data.roomId,
       type: "Periodic",
-      status: "Draft" // Chỉ sửa hóa đơn chưa chốt
+      status: "Draft" 
     });
 
     if (draftInvoice) {
-      // Tìm xem dịch vụ này đã tồn tại trong mảng items chưa (dựa vào tên)
+      // [SỬA LỖI] Tìm item có chứa chữ "Tiền điện" hoặc "Tiền nước" bằng .includes()
       const existingItemIndex = draftInvoice.items.findIndex(
-        item => item.itemName.toLowerCase() === serviceName.toLowerCase()
+        item => item.itemName.toLowerCase().includes(searchKeyword)
       );
 
       if (existingItemIndex > -1) {
-        // NẾU ĐÃ CÓ => Cập nhật đè lên
+        // NẾU ĐÃ CÓ => Cập nhật đè lên toàn bộ (Gồm cả tên mới, số mới, tiền mới)
+        draftInvoice.items[existingItemIndex].itemName = formattedItemName;
         draftInvoice.items[existingItemIndex].oldIndex = data.oldIndex;
         draftInvoice.items[existingItemIndex].newIndex = data.newIndex;
         draftInvoice.items[existingItemIndex].usage = usageAmount;
@@ -50,7 +58,7 @@ class MeterReadingService {
       } else {
         // NẾU CHƯA CÓ => Thêm mới vào mảng
         draftInvoice.items.push({
-          itemName: serviceName,
+          itemName: formattedItemName,
           oldIndex: data.oldIndex,
           newIndex: data.newIndex,
           usage: usageAmount,
@@ -67,7 +75,7 @@ class MeterReadingService {
     return newReading;
   }
 
-  // 2. CẬP NHẬT CHỈ SỐ (Phòng trường hợp nhập sai, sửa lại)
+  // 2. CẬP NHẬT CHỈ SỐ
   async updateReading(id, data) {
     const reading = await MeterReading.findById(id);
     if (!reading) throw new Error("Không tìm thấy bản ghi chỉ số");
@@ -87,7 +95,9 @@ class MeterReadingService {
 
     if (usageDifference !== 0) {
       const serviceInfo = await Service.findById(reading.utilityId);
-      const unitPrice = serviceInfo ? serviceInfo.currentPrice : 0;
+      let unitPrice = serviceInfo ? (serviceInfo.currentPrice || serviceInfo.price || 0) : 0;
+      unitPrice = typeof unitPrice === 'object' && unitPrice.$numberDecimal ? parseFloat(unitPrice.$numberDecimal) : Number(unitPrice);
+      
       const costDifference = usageDifference * unitPrice;
 
       const draftInvoice = await Invoice.findOne({
@@ -99,6 +109,9 @@ class MeterReadingService {
       if (draftInvoice) {
         draftInvoice.totalAmount += costDifference; 
         if (draftInvoice.totalAmount < 0) draftInvoice.totalAmount = 0; 
+        
+        // Lưu ý: Nếu muốn UI tự nhảy số chi tiết, ở đây cũng phải sửa mảng items.
+        // Tuy nhiên với luồng Undo -> Add mới thì ta không dùng updateReading này nên không sao.
         await draftInvoice.save();
       }
     }
@@ -117,7 +130,7 @@ class MeterReadingService {
   }
 
   // ==========================================
-  // [MỚI] 4. XÓA BẢN GHI (HOÀN TÁC SỬA SAI)
+  // 4. XÓA BẢN GHI (HOÀN TÁC SỬA SAI)
   // ==========================================
   async deleteReading(id) {
     const reading = await MeterReading.findById(id);
@@ -135,12 +148,14 @@ class MeterReadingService {
       const serviceName = serviceInfo ? (serviceInfo.name || serviceInfo.serviceName) : "";
 
       if (serviceName) {
-        // Lọc bỏ dịch vụ này ra khỏi mảng items của hóa đơn
+        const searchKeyword = `tiền ${serviceName.toLowerCase()}`;
+
+        // [SỬA LỖI] Lọc bỏ dịch vụ này ra khỏi mảng items bằng .includes()
         draftInvoice.items = draftInvoice.items.filter(
-          item => item.itemName.toLowerCase() !== serviceName.toLowerCase()
+          item => !item.itemName.toLowerCase().includes(searchKeyword)
         );
         
-        // Tính toán lại tổng tiền sau khi đã loại bỏ
+        // Tính toán lại tổng tiền sau khi đã loại bỏ cái bị sai
         draftInvoice.totalAmount = draftInvoice.items.reduce((sum, item) => sum + (item.amount || 0), 0);
         await draftInvoice.save();
       }
