@@ -1,6 +1,6 @@
 const MeterReading = require("../models/meterreading.model");
 const Invoice = require("../models/invoice.model");
-const Service = require("../../service-management/models/service.model"); // Import thêm bảng Service để lấy giá tiền
+const Service = require("../../service-management/models/service.model"); 
 
 class MeterReadingService {
   // 1. NHẬP CHỈ SỐ MỚI VÀ CẬP NHẬT TRỰC TIẾP VÀO HÓA ĐƠN NHÁP
@@ -10,7 +10,7 @@ class MeterReadingService {
       throw new Error("Chỉ số mới không được nhỏ hơn chỉ số cũ");
     }
 
-    // 1. Lưu lịch sử ghi chỉ số vào bảng MeterReading (để lưu vết/thống kê)
+    // 1. Lưu lịch sử ghi chỉ số vào bảng MeterReading
     const newReading = new MeterReading({
       ...data,
       usageAmount: usageAmount
@@ -41,7 +41,7 @@ class MeterReadingService {
       );
 
       if (existingItemIndex > -1) {
-        // NẾU ĐÃ CÓ (Ví dụ nhập sai, giờ nhập lại) => Cập nhật đè lên
+        // NẾU ĐÃ CÓ => Cập nhật đè lên
         draftInvoice.items[existingItemIndex].oldIndex = data.oldIndex;
         draftInvoice.items[existingItemIndex].newIndex = data.newIndex;
         draftInvoice.items[existingItemIndex].usage = usageAmount;
@@ -59,11 +59,8 @@ class MeterReadingService {
         });
       }
 
-      // 4. Tính lại Tổng tiền (Cộng tất cả cột amount trong mảng items lại)
-      // Hàm reduce sẽ đi qua từng item, lấy biến sum (bắt đầu từ 0) cộng dồn với item.amount
+      // 4. Tính lại Tổng tiền
       draftInvoice.totalAmount = draftInvoice.items.reduce((sum, item) => sum + (item.amount || 0), 0);
-      
-      // Lưu lại hóa đơn
       await draftInvoice.save();
     }
 
@@ -83,14 +80,11 @@ class MeterReadingService {
       throw new Error("Chỉ số mới không được nhỏ hơn chỉ số cũ");
     }
 
-    // Tính ra độ chênh lệch lượng sử dụng (có thể tăng thêm hoặc giảm đi do sửa sai)
     const usageDifference = newUsageAmount - reading.usageAmount;
 
-    // Lưu lại chỉ số mới
     Object.assign(reading, data, { usageAmount: newUsageAmount });
     await reading.save();
 
-    // Điều chỉnh lại tiền trong Hóa đơn Draft nếu có thay đổi
     if (usageDifference !== 0) {
       const serviceInfo = await Service.findById(reading.utilityId);
       const unitPrice = serviceInfo ? serviceInfo.currentPrice : 0;
@@ -103,8 +97,7 @@ class MeterReadingService {
       });
 
       if (draftInvoice) {
-        draftInvoice.totalAmount += costDifference; // Có thể cộng thêm hoặc trừ bớt
-        // Đảm bảo tổng tiền không bị âm (phòng lỗi logic)
+        draftInvoice.totalAmount += costDifference; 
         if (draftInvoice.totalAmount < 0) draftInvoice.totalAmount = 0; 
         await draftInvoice.save();
       }
@@ -113,16 +106,49 @@ class MeterReadingService {
     return reading;
   }
 
-  //Hàm lấy chỉ số điện/nước mới nhất của một phòng
+  // 3. LẤY CHỈ SỐ MỚI NHẤT
   async getLatestReading(roomId, utilityId) {
-    // Tìm kiếm bản ghi khớp ID phòng & ID dịch vụ
-    // Sắp xếp giảm dần theo ngày tạo (createdAt: -1) để lấy cái mới nhất
     const latestReading = await MeterReading.findOne({ 
       roomId: roomId, 
       utilityId: utilityId 
     }).sort({ createdAt: -1 });
 
     return latestReading;
+  }
+
+  // ==========================================
+  // [MỚI] 4. XÓA BẢN GHI (HOÀN TÁC SỬA SAI)
+  // ==========================================
+  async deleteReading(id) {
+    const reading = await MeterReading.findById(id);
+    if (!reading) throw new Error("Không tìm thấy bản ghi để xóa.");
+
+    // Bước 1: Tìm hóa đơn nháp liên quan để trừ tiền
+    const draftInvoice = await Invoice.findOne({
+      roomId: reading.roomId,
+      type: "Periodic",
+      status: "Draft"
+    });
+
+    if (draftInvoice) {
+      const serviceInfo = await Service.findById(reading.utilityId);
+      const serviceName = serviceInfo ? (serviceInfo.name || serviceInfo.serviceName) : "";
+
+      if (serviceName) {
+        // Lọc bỏ dịch vụ này ra khỏi mảng items của hóa đơn
+        draftInvoice.items = draftInvoice.items.filter(
+          item => item.itemName.toLowerCase() !== serviceName.toLowerCase()
+        );
+        
+        // Tính toán lại tổng tiền sau khi đã loại bỏ
+        draftInvoice.totalAmount = draftInvoice.items.reduce((sum, item) => sum + (item.amount || 0), 0);
+        await draftInvoice.save();
+      }
+    }
+
+    // Bước 2: Xóa bản ghi trong DB
+    await MeterReading.findByIdAndDelete(id);
+    return true;
   }
 }
 
