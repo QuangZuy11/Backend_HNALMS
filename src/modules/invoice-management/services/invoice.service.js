@@ -1,8 +1,9 @@
 const Invoice = require("../models/invoice.model");
 const Room = require("../../room-floor-management/models/room.model");
 const MeterReading = require('../models/meterreading.model'); 
-// [MỚI] Import model RoomService
 const RoomService = require('../../service-management/models/roomservice.model'); 
+// [MỚI] Import model Service để lấy thông tin dịch vụ Điện / Nước cho việc kiểm tra
+const Service = require("../../service-management/models/service.model"); 
 
 class InvoiceService {
   async getInvoices(query = {}) {
@@ -55,7 +56,40 @@ class InvoiceService {
     }).populate('utilityId'); 
 
     // ==========================================
-    // [MỚI] BƯỚC 4.2: LẤY CÁC DỊCH VỤ ĐANG SỬ DỤNG TRONG THÁNG
+    // [MỚI] BƯỚC 4.2: KIỂM TRA BẮT BUỘC ĐÃ CHỐT ĐIỆN NƯỚC CHƯA
+    // ==========================================
+    const elecService = await Service.findOne({ name: "Điện" });
+    const waterService = await Service.findOne({ name: "Nước" });
+    const missingRooms = [];
+
+    roomsToCreate.forEach(room => { // Chỉ check những phòng chuẩn bị tạo hóa đơn
+      const roomReadings = recentReadings.filter(r => r.roomId.toString() === room._id.toString());
+      let hasElec = true;
+      let hasWater = true;
+
+      // Check xem có bản ghi điện không
+      if (elecService) {
+        hasElec = roomReadings.some(r => r.utilityId && r.utilityId._id.toString() === elecService._id.toString());
+      }
+      // Check xem có bản ghi nước không
+      if (waterService) {
+        hasWater = roomReadings.some(r => r.utilityId && r.utilityId._id.toString() === waterService._id.toString());
+      }
+
+      // Nếu thiếu 1 trong 2 thì đẩy vào danh sách báo lỗi
+      if (!hasElec || !hasWater) {
+        missingRooms.push(room.name);
+      }
+    });
+
+    // Nếu có phòng chưa chốt, chặn lại ngay lập tức và ném lỗi về Frontend
+    if (missingRooms.length > 0) {
+      const displayRooms = missingRooms.length > 6 ? missingRooms.slice(0, 6).join(', ') + '...' : missingRooms.join(', ');
+      throw new Error(`Bạn CHƯA CHỐT số Điện/Nước cho các phòng: ${displayRooms}. Vui lòng ghi chỉ số trước khi tạo hóa đơn!`);
+    }
+
+    // ==========================================
+    // BƯỚC 4.3: LẤY CÁC DỊCH VỤ ĐANG SỬ DỤNG TRONG THÁNG
     // ==========================================
     const activeServices = await RoomService.find({
       startDate: { $lte: endOfMonth }, // Bắt đầu trước khi tháng này kết thúc
@@ -91,17 +125,15 @@ class InvoiceService {
       // 5.3. CỘNG DỒN TIỀN ĐIỆN / NƯỚC 
       // ==========================================
       const roomReadings = recentReadings.filter(r => r.roomId.toString() === room._id.toString());
-      
-      // [MỚI] Tạo object để gộp các chỉ số cùng loại (Điện theo Điện, Nước theo Nước)
       const groupedReadings = {};
 
       roomReadings.forEach(reading => {
         const uId = reading.utilityId._id.toString();
         const usage = reading.newIndex - reading.oldIndex;
         
-        if (usage > 0 && reading.utilityId) {
+        // [SỬA] Đổi >= 0 để vẫn nhận diện được trường hợp khách dùng 0 số
+        if (usage >= 0 && reading.utilityId) {
           if (!groupedReadings[uId]) {
-            // Nếu chưa có dịch vụ này trong nhóm, thêm mới vào
             groupedReadings[uId] = {
               utilityId: reading.utilityId,
               oldIndex: reading.oldIndex,
@@ -109,18 +141,13 @@ class InvoiceService {
               totalUsage: usage
             };
           } else {
-            // Nếu đã có rồi (do ghi nhiều lần trong tháng), tiến hành gộp:
-            // 1. Lấy số cũ nhất
             groupedReadings[uId].oldIndex = Math.min(groupedReadings[uId].oldIndex, reading.oldIndex);
-            // 2. Lấy số mới nhất
             groupedReadings[uId].newIndex = Math.max(groupedReadings[uId].newIndex, reading.newIndex);
-            // 3. Cộng dồn lượng sử dụng
             groupedReadings[uId].totalUsage += usage;
           }
         }
       });
 
-      // Sau khi gộp xong, mới bắt đầu tính tiền và đẩy vào Hóa đơn (Chỉ ra 1 dòng duy nhất)
       Object.values(groupedReadings).forEach(group => {
         let servicePrice = group.utilityId.price || group.utilityId.currentPrice || 0;
         servicePrice = typeof servicePrice === 'object' && servicePrice.$numberDecimal 
@@ -128,23 +155,25 @@ class InvoiceService {
           : Number(servicePrice);
 
         const amount = group.totalUsage * servicePrice;
-        totalAmount += amount; // Cộng dồn vào tổng tiền hóa đơn
+        totalAmount += amount; 
 
         const serviceName = group.utilityId.name || group.utilityId.serviceName || "Dịch vụ";
         
-        // Đẩy 1 dòng duy nhất vào mảng chi tiết
-        invoiceItems.push({
-          itemName: `Tiền ${serviceName.toLowerCase()} (Cũ: ${group.oldIndex} - Mới: ${group.newIndex})`,
-          oldIndex: group.oldIndex,
-          newIndex: group.newIndex,
-          usage: group.totalUsage,
-          unitPrice: servicePrice,
-          amount: amount
-        });
+        // Nếu dùng > 0 số thì mới in ra dòng chi tiết điện/nước trong hóa đơn (0 số thì ẩn đi cho gọn)
+        if (group.totalUsage > 0) {
+          invoiceItems.push({
+            itemName: `Tiền ${serviceName.toLowerCase()} (Cũ: ${group.oldIndex} - Mới: ${group.newIndex})`,
+            oldIndex: group.oldIndex,
+            newIndex: group.newIndex,
+            usage: group.totalUsage,
+            unitPrice: servicePrice,
+            amount: amount
+          });
+        }
       });
 
       // ==========================================
-      // [MỚI] 5.4. CỘNG DỒN TIỀN CÁC DỊCH VỤ PHỤ (Gửi xe, Rác, Wifi...)
+      // 5.4. CỘNG DỒN TIỀN CÁC DỊCH VỤ PHỤ (Gửi xe, Rác, Wifi...)
       // ==========================================
       const roomServices = activeServices.filter(rs => rs.roomId.toString() === room._id.toString());
       roomServices.forEach(rs => {
@@ -160,41 +189,36 @@ class InvoiceService {
           totalAmount += amount;
 
           const srvName = rs.serviceId.name || rs.serviceId.serviceName || "Dịch vụ";
-          
-          // Thêm ghi chú (Biển số xe...) vào tên dịch vụ nếu có
           const displayItemName = rs.note ? `Dịch vụ ${srvName} (${rs.note})` : `Dịch vụ ${srvName}`;
 
           invoiceItems.push({
             itemName: displayItemName,
             oldIndex: 0,
             newIndex: 0,
-            usage: qty, // Đẩy số lượng (ví dụ: 2 chiếc xe)
-            unitPrice: srvPrice, // Đơn giá 1 chiếc
-            amount: amount // Thành tiền
+            usage: qty,
+            unitPrice: srvPrice, 
+            amount: amount 
           });
         }
       });
 
       // 5.5. Trả về cấu trúc lưu DB
       return {
-        // Tạo mã hóa đơn random 4 số cuối
         invoiceCode: `INV-${room.name}-${month}${year}-${Math.floor(1000 + Math.random() * 9000)}`,
         roomId: room._id,
         title: `Hóa đơn tiền thuê & dịch vụ tháng ${month}/${year}`,
         type: "Periodic",
-        items: invoiceItems, // Đã bao gồm Tiền phòng + Điện/Nước + Dịch vụ
+        items: invoiceItems,
         totalAmount: totalAmount, 
         dueDate: dueDate,
         status: "Draft" 
       };
     });
 
-    // Lưu hàng loạt vào DB
     const createdInvoices = await Invoice.insertMany(invoicesToCreate);
     return createdInvoices;
   }
 
-  // 2. CHỨC NĂNG: PHÁT HÀNH HÓA ĐƠN
   async releaseInvoice(id) {
     const invoice = await Invoice.findById(id);
     if (!invoice) throw new Error("Không tìm thấy hóa đơn");
@@ -204,7 +228,6 @@ class InvoiceService {
     return await invoice.save();
   }
 
-  // 3. LẤY CHI TIẾT HÓA ĐƠN
   async getInvoiceById(id) {
     const invoice = await Invoice.findById(id).populate("roomId", "name floorId");
     if (!invoice) {
