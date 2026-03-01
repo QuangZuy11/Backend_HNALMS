@@ -67,18 +67,29 @@ class RoomTypeController {
   // UPDATE (SỬA ĐỔI: Xử lý giữ ảnh cũ + thêm ảnh mới)
   async updateRoomType(req, res) {
     try {
-      // 1. Xử lý ảnh mới upload (nếu có)
+      // 1. Xử lý ảnh mới upload từ req.files (Multer xử lý trường 'images')
       const newImages = req.files ? req.files.map(file => file.path) : [];
 
-      // 2. Xử lý ảnh cũ muốn giữ lại (Client gửi lên dạng string hoặc array string qua req.body.images)
-      let oldImages = req.body.images || [];
-      // Nếu chỉ có 1 ảnh cũ, req.body.images sẽ là string -> chuyển thành array
-      if (!Array.isArray(oldImages)) {
-        oldImages = [oldImages];
+      // 2. Xử lý ảnh cũ (Client giờ gửi lên qua trường 'oldImages' chứ không phải 'images' nữa)
+      let oldImages = req.body.oldImages;
+      
+      // Chuẩn hóa oldImages thành mảng (Array)
+      if (!oldImages) {
+        oldImages = []; // Không có ảnh cũ nào
+      } else if (!Array.isArray(oldImages)) {
+        oldImages = [oldImages]; // Nếu chỉ có 1 ảnh cũ, nó sẽ là string -> bọc vào mảng
       }
 
       // 3. Gộp ảnh cũ và ảnh mới
       const finalImages = [...oldImages, ...newImages];
+
+      // [THÊM MỚI] Bắt lỗi ngay tại Controller nếu gom lại không đủ 7 ảnh
+      if (finalImages.length > 0 && finalImages.length !== 7) {
+        return res.status(400).json({ 
+          success: false, 
+          message: "Vui lòng cung cấp đủ 7 ảnh cho loại phòng." 
+        });
+      }
 
       const updateData = {
         typeName: req.body.typeName,
@@ -89,7 +100,7 @@ class RoomTypeController {
         images: finalImages.length > 0 ? finalImages : undefined // Chỉ update nếu có ảnh
       };
 
-      // Xóa các trường undefined
+      // Xóa các trường undefined để không ghi đè mất dữ liệu cũ trong DB
       Object.keys(updateData).forEach(key => updateData[key] === undefined && delete updateData[key]);
 
       const updatedRT = await roomTypeService.updateRoomType(req.params.id, updateData);

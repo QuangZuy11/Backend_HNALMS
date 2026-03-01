@@ -45,7 +45,7 @@ router.post("/floors", floorController.createFloor);
 router.get("/roomtypes", roomTypeController.getRoomTypes);
 router.post(
   "/roomtypes",
-  uploadImg.array("images", 10),
+  uploadImg.array("images", 7),
   roomTypeController.createRoomType,
 );
 
@@ -70,7 +70,7 @@ router.delete("/floors/:id", floorController.deleteFloor);
 router.get("/roomtypes/:id", roomTypeController.getRoomTypeById);
 router.put(
   "/roomtypes/:id",
-  uploadImg.array("images", 10),
+  uploadImg.array("images", 7),
   roomTypeController.updateRoomType,
 );
 router.delete("/roomtypes/:id", roomTypeController.deleteRoomType);

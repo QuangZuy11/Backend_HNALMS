@@ -7,11 +7,18 @@ class InvoiceService {
   }
 
 // 1. CHỨC NĂNG: TẠO HÓA ĐƠN NHÁP HÀNG LOẠT (Lấy giá từ RoomType & Lưu theo mảng items)
-  async generateDraftInvoices(data) {
-    const { month, year, dueDate } = data;
-    
+// 1. CHỨC NĂNG: TẠO HÓA ĐƠN NHÁP HÀNG LOẠT (Tự động lấy tháng hiện tại, hạn mùng 5 tháng sau)
+  async generateDraftInvoices() {
+    // Tự động tính toán ngày tháng
+    const now = new Date();
+    const month = now.getMonth() + 1; // getMonth() chạy từ 0-11 nên phải +1
+    const year = now.getFullYear();
+
+    // Tính hạn thanh toán (dueDate): Ngày 5 của tháng tiếp theo
+    // Lưu ý: JS Date rất thông minh, nếu now.getMonth() + 1 là 12 (tháng 13), nó tự nhảy sang tháng 1 năm sau
+    const dueDate = new Date(now.getFullYear(), now.getMonth() + 1, 5);
+
     // Bước 1: Lấy danh sách phòng đang thuê và JOIN (populate) sang bảng RoomType để lấy giá tiền
-    // LƯU Ý: Thay 'roomTypeId' bằng tên trường khóa ngoại trong model Room của bạn (có thể là 'roomType')
     const activeRooms = await Room.find({ status: "Occupied" }).populate("roomTypeId"); 
     
     if (activeRooms.length === 0) {
@@ -41,6 +48,11 @@ class InvoiceService {
       // Lấy giá phòng từ RoomType (nếu không có thì mặc định là 0)
       const roomPrice = room.roomTypeId ? (room.roomTypeId.currentPrice || 0) : 0;
 
+      // Xử lý giá trị Decimal128 nếu bạn đang dùng kiểu dữ liệu này trong Mongoose
+      const parsedPrice = typeof roomPrice === 'object' && roomPrice.$numberDecimal 
+        ? parseFloat(roomPrice.$numberDecimal) 
+        : Number(roomPrice) || 0;
+
       return {
         invoiceCode: `INV-${room.name}-${month}${year}-${Math.floor(1000 + Math.random() * 9000)}`,
         roomId: room._id,
@@ -54,12 +66,12 @@ class InvoiceService {
             oldIndex: 0,
             newIndex: 0,
             usage: 1, // Thuê 1 phòng
-            unitPrice: roomPrice,
-            amount: roomPrice // Thành tiền = 1 * Giá phòng
+            unitPrice: parsedPrice,
+            amount: parsedPrice // Thành tiền = 1 * Giá phòng
           }
         ],
 
-        totalAmount: roomPrice, // Tổng tiền ban đầu chỉ có tiền phòng
+        totalAmount: parsedPrice, // Tổng tiền ban đầu chỉ có tiền phòng
         dueDate: dueDate,
         status: "Draft" 
       };
