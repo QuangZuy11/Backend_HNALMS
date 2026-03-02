@@ -72,7 +72,7 @@ const loginUser = async (username, password) => {
     throw new Error("Tên đăng nhập hoặc mật khẩu không chính xác");
   }
 
-  console.log("🔍 Login Service - User found:", {
+  console.log("Login Service - User found:", {
     _id: user._id,
     username: user.username,
     email: user.email,

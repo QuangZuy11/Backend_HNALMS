@@ -43,6 +43,7 @@ const uploadRoutes = require("../../modules/request-management/routes/upload.rou
 const deviceRoutes = require("../../modules/room-floor-management/routes/device.route");
 const invoiceRoutes = require("../../modules/invoice-management/routes/invoice.routes");
 const meterreadingRoutes = require("../../modules/invoice-management/routes/meterreading.routes");
+const financialTicketRoutes = require("../../modules/managing-income-expenses/routes/financial_tickets.routes");
 // Mount routes
 ApiRouter.use("/auth", authRoutes);
 ApiRouter.use("/", roomRoutes);
@@ -59,4 +60,5 @@ ApiRouter.use("/accounts", accountRoutes);
 ApiRouter.use("/devices", deviceRoutes);
 ApiRouter.use("/invoices", invoiceRoutes);
 ApiRouter.use("/meter-readings", meterreadingRoutes);
+ApiRouter.use("/financial-tickets", financialTicketRoutes);
 module.exports = ApiRouter;
