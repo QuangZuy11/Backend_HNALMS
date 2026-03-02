@@ -63,8 +63,8 @@ ApiRouter.use("/devices", deviceRoutes);
 ApiRouter.use("/invoices", invoiceRoutes);
 ApiRouter.use("/meter-readings", meterreadingRoutes);
 ApiRouter.use("/financial-tickets", financialTicketRoutes);
-const depositRoutes = require("../../modules/room-floor-management/routes/deposit-room.routes");
 
-ApiRouter.use("/deposits", depositRoutes);
+const roomDepositRoutes = require("../../modules/room-floor-management/routes/deposit-room.routes");
+ApiRouter.use("/deposits", roomDepositRoutes);
 
 module.exports = ApiRouter;
