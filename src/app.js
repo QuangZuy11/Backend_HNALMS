@@ -23,15 +23,7 @@ app.use(cors({
 app.use(bodyParser.json());
 app.use(morgan("dev"));
 
-// File upload middleware
-app.use(fileUpload({
-  useTempFiles: true,
-  tempFileDir: '/tmp/',
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
-  abortOnLimit: true,
-  createParentPath: true
-}));
-
+// File upload middleware removed from global to prevent conflict with multer
 // Routes
 app.use("/api", ApiRouter);
 //login

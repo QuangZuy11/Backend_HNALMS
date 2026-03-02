@@ -36,6 +36,24 @@ class MeterReadingController {
       res.status(500).json({ success: false, message: error.message });
     }
   }
+
+  async deleteReading(req, res) {
+    try {
+      const { id } = req.params;
+      await meterReadingService.deleteReading(id);
+      
+      res.status(200).json({ 
+        success: true, 
+        message: "Đã hoàn tác chỉ số và cập nhật lại hóa đơn thành công." 
+      });
+    } catch (error) {
+      res.status(400).json({ 
+        success: false, 
+        message: error.message 
+      });
+    }
+  }
 }
 
+  
 module.exports = new MeterReadingController();

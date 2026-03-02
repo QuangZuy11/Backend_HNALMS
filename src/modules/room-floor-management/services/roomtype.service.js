@@ -1,4 +1,4 @@
-const RoomType = require("../models/roomType.model");
+const RoomType = require("../models/roomtype.model");
 const PriceHistory = require("../models/pricehistory.model");
 const mongoose = require("mongoose");
 
@@ -29,6 +29,11 @@ class RoomTypeService {
 
   // 3. THÊM MỚI LOẠI PHÒNG
   async createRoomType(data) {
+    // [MỚI] Kiểm tra bắt buộc đủ 7 ảnh trước khi làm bất cứ việc gì khác
+    if (!data.images || data.images.length !== 7) {
+      throw new Error("Vui lòng cung cấp đủ 7 ảnh cho loại phòng.");
+    }
+
     const session = await mongoose.startSession();
     session.startTransaction();
     try {
@@ -37,9 +42,7 @@ class RoomTypeService {
         typeName: data.typeName,
         description: data.description,
         currentPrice: data.currentPrice,
-        // --- [MỚI] THÊM DÒNG NÀY ---
         personMax: data.personMax, 
-        // --------------------------
         images: data.images,
         status: data.status
       });
@@ -62,7 +65,26 @@ class RoomTypeService {
   }
 
   // 4. SỬA LOẠI PHÒNG
-  async updateRoomType(id, data) {
+async updateRoomType(id, data) {
+    // [MỚI] BƯỚC 1: Xử lý gộp ảnh cũ (oldImages) và ảnh mới (images)
+    let finalImages = [];
+
+    // Lấy ảnh cũ (nếu có)
+    if (data.oldImages) {
+      finalImages = Array.isArray(data.oldImages) ? [...data.oldImages] : [data.oldImages];
+    }
+
+    // Lấy ảnh mới (nếu có)
+    if (data.images) {
+      finalImages = Array.isArray(data.images) ? [...finalImages, ...data.images] : [...finalImages, data.images];
+    }
+
+    // [MỚI] BƯỚC 2: Kiểm tra bắt buộc đủ 7 ảnh
+    // Chỉ kiểm tra khi có sự thay đổi/gửi lên về ảnh
+    if ((data.oldImages || data.images) && finalImages.length !== 7) {
+      throw new Error("Vui lòng cung cấp đủ 7 ảnh cho loại phòng.");
+    }
+
     const session = await mongoose.startSession();
     session.startTransaction();
     try {
@@ -94,12 +116,13 @@ class RoomTypeService {
       // Cập nhật các thông tin khác
       if (data.typeName) roomType.typeName = data.typeName;
       if (data.description) roomType.description = data.description;
-      
-      // --- [MỚI] THÊM DÒNG NÀY ĐỂ UPDATE SỐ NGƯỜI ---
       if (data.personMax) roomType.personMax = data.personMax;
-      // ---------------------------------------------
-
-      if (data.images) roomType.images = data.images;
+      
+      // [MỚI] Cập nhật ảnh (lấy mảng finalImages đã gộp ở trên)
+      if (data.oldImages || data.images) {
+        roomType.images = finalImages;
+      }
+      
       if (data.status) roomType.status = data.status;
 
       await roomType.save({ session });
