@@ -24,18 +24,28 @@ const depositSchema = new Schema(
       type: Number,
       required: true,
     },
+    transactionCode: {
+      type: String,
+      unique: true,
+      sparse: true, // cho phép null nhưng unique khi có giá trị
+    },
+    codeDeposit: {
+      type: String,
+      unique: true,
+      sparse: true, // Format: CHN-P310-020226
+    },
     status: {
       type: String,
-      enum: ["Held", "Refunded", "Forfeited"],
-      default: "Held",
+      enum: ["Pending", "Held", "Refunded", "Forfeited", "Expired"],
+      default: "Pending",
+    },
+    expireAt: {
+      type: Date,
+      default: null,
     },
     refundDate: {
       type: Date,
       default: null,
-    },
-    createdDate: {
-      type: Date,
-      default: Date.now,
     },
     forfeitedDate: {
       type: Date,
