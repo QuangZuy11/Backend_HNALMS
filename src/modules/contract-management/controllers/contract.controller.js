@@ -250,6 +250,53 @@ exports.getContractById = async (req, res) => {
     }
 };
 
+// Tenant xem hợp đồng của mình
+exports.getMyContracts = async (req, res) => {
+    try {
+        const tenantId = req.user?.userId;
+        if (!tenantId) {
+            return res.status(401).json({ success: false, message: "Unauthorized - Không tìm thấy thông tin người dùng" });
+        }
+
+        const contracts = await Contract.find({ tenantId })
+            .populate({
+                path: "roomId",
+                select: "name roomCode status roomTypeId floorId",
+                populate: [
+                    { path: "roomTypeId", select: "typeName currentPrice personMax description images" },
+                    { path: "floorId", select: "name" }
+                ]
+            })
+            .populate("depositId", "name phone email room amount status createdDate")
+            .populate("services", "name currentPrice type")
+            .sort({ createdAt: -1 })
+            .lean();
+
+        // Fix Decimal128 fields
+        const data = contracts.map(c => {
+            if (c.roomId?.roomTypeId?.currentPrice) {
+                c.roomId.roomTypeId.currentPrice = parseFloat(c.roomId.roomTypeId.currentPrice.toString());
+            }
+            if (c.services) {
+                c.services = c.services.map(s => ({
+                    ...s,
+                    currentPrice: s.currentPrice ? parseFloat(s.currentPrice.toString()) : 0
+                }));
+            }
+            return c;
+        });
+
+        res.status(200).json({
+            success: true,
+            count: data.length,
+            data
+        });
+    } catch (error) {
+        console.error("Get My Contracts Error:", error);
+        res.status(500).json({ success: false, message: error.message || "Server Error" });
+    }
+};
+
 // Upload contract images to Cloudinary
 exports.uploadContractImages = async (req, res) => {
     try {
