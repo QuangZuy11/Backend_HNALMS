@@ -52,9 +52,11 @@ ApiRouter.use("/requests", requestRoutes);
 ApiRouter.use("/upload", uploadRoutes);
 
 const contractRoutes = require("../../modules/contract-management/routes/contract.routes");
+const depositRoutes = require("../../modules/contract-management/routes/deposit.routes");
 const accountRoutes = require("../../modules/account-management/routes/account.routes");
 
 ApiRouter.use("/contracts", contractRoutes);
+ApiRouter.use("/deposits", depositRoutes);
 ApiRouter.use("/accounts", accountRoutes);
 ApiRouter.use("/devices", deviceRoutes);
 ApiRouter.use("/invoices", invoiceRoutes);
