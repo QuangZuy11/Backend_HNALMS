@@ -13,25 +13,17 @@ const app = express();
 
 // CORS Configuration
 app.use(cors({
-    origin: ['http://localhost:5173', 'http://localhost:3000'], // Frontend URLs
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+  origin: ['http://localhost:5173', 'http://localhost:3000'], // Frontend URLs
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 // Middlewares
 app.use(bodyParser.json());
 app.use(morgan("dev"));
 
-// File upload middleware
-app.use(fileUpload({
-  useTempFiles: true,
-  tempFileDir: '/tmp/',
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
-  abortOnLimit: true,
-  createParentPath: true
-}));
-
+// File upload middleware removed from global to prevent conflict with multer
 // Routes
 app.use("/api", ApiRouter);
 //login

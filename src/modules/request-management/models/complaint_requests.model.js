@@ -49,6 +49,11 @@ const ComplaintRequestSchema = new Schema({
     type: Date,
     default: null
   },
+  // Ghi chú xử lý chi tiết của manager khi chuyển sang Đã xử lý
+  managerNote: {
+    type: String,
+    default: "",
+  },
   createdDate: {
     type: Date,
     default: Date.now

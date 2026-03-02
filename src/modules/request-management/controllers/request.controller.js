@@ -54,13 +54,31 @@ exports.createRepairRequest = async (req, res) => {
  */
 exports.getRepairRequests = async (req, res) => {
   try {
-    const repairRequests = await requestService.getRepairRequests();
+    const { roomSearch, tenantSearch, page, limit } = req.query || {};
+    const filters = {};
+    if (roomSearch && roomSearch.trim()) {
+      filters.roomSearch = roomSearch.trim();
+    }
+    if (tenantSearch && tenantSearch.trim()) {
+      filters.tenantSearch = tenantSearch.trim();
+    }
+    if (page) {
+      filters.page = page;
+    }
+    if (limit) {
+      filters.limit = limit;
+    }
+    
+    const result = await requestService.getRepairRequests(filters);
 
     res.json({
       success: true,
       message: "Lấy danh sách yêu cầu sửa chữa thành công",
-      data: repairRequests,
-      total: repairRequests.length,
+      data: result.data,
+      total: result.total,
+      page: result.page,
+      limit: result.limit,
+      totalPages: result.totalPages,
     });
   } catch (error) {
     console.error("Get repair requests error:", error);
@@ -161,6 +179,12 @@ exports.updateRepairStatus = async (req, res) => {
       invoiceTitle,
       invoiceTotalAmount,
       invoiceDueDate,
+      // Dành cho sửa chữa miễn phí → tạo phiếu chi nội bộ
+      financialTitle,
+      financialAmount,
+      financialType,
+      // Loại thanh toán (REVENUE / EXPENSE)
+      paymentType,
     } = req.body || {};
 
     if (!status) {
@@ -170,12 +194,34 @@ exports.updateRepairStatus = async (req, res) => {
       });
     }
 
-    const updated = await requestService.updateRepairRequestStatus(requestId, status, cost, notes, {
-      invoiceCode,
-      title: invoiceTitle,
-      totalAmount: invoiceTotalAmount,
-      dueDate: invoiceDueDate,
-    });
+    const invoiceData =
+      invoiceCode && invoiceTitle && invoiceTotalAmount && invoiceDueDate
+        ? {
+            invoiceCode,
+            title: invoiceTitle,
+            totalAmount: invoiceTotalAmount,
+            dueDate: invoiceDueDate,
+          }
+        : null;
+
+    const financialTicketData =
+      financialTitle && financialAmount !== undefined && financialAmount !== null
+        ? {
+            type: financialType || "Payment",
+            title: financialTitle,
+            amount: financialAmount,
+          }
+        : null;
+
+    const updated = await requestService.updateRepairRequestStatus(
+      requestId,
+      status,
+      cost,
+      notes,
+      invoiceData,
+      financialTicketData,
+      paymentType
+    );
 
     res.json({
       success: true,

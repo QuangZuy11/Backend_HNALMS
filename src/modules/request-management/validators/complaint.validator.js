@@ -132,11 +132,22 @@ const validateUpdateStatus = (data) => {
     }
   }
 
-  // Response is required when status is "Done" or "Processing"
-  if (data.status === "Done" || data.status === "Processing") {
+  // Nếu chuyển sang Done, bắt buộc phải có response (ghi chú xử lý)
+  if (data.status === "Done") {
     if (!data.response) {
-      errors.push("Response là bắt buộc khi trạng thái là Processing hoặc Done");
+      errors.push("Response (ghi chú xử lý) là bắt buộc khi chuyển sang trạng thái Đã xử lý");
     } else if (typeof data.response !== "string") {
+      errors.push("Response phải là chuỗi ký tự");
+    } else if (data.response.trim().length === 0) {
+      errors.push("Response không được trống");
+    } else if (data.response.length < 5) {
+      errors.push("Response phải có ít nhất 5 ký tự");
+    } else if (data.response.length > 2000) {
+      errors.push("Response không được vượt quá 2000 ký tự");
+    }
+  } else if (data.response) {
+    // Các trạng thái khác: response là tùy chọn; nếu có thì vẫn validate format
+    if (typeof data.response !== "string") {
       errors.push("Response phải là chuỗi ký tự");
     } else if (data.response.trim().length === 0) {
       errors.push("Response không được trống");

@@ -9,17 +9,17 @@ const connectDB = async () => {
     try {
         await mongoose.connect(process.env.MONGO_URI, {
             // family: 4 giúp ưu tiên kết nối qua IPv4, tránh lỗi trên mạng Việt Nam
-            family: 4, 
+            family: 4,
         });
         console.log('✅ MongoDB connected successfully');
     } catch (error) {
         console.error("❌ MongoDB connection failed: ", error);
-        
+
         // Gợi ý thêm nếu vẫn lỗi
         if (error.message.includes('ECONNREFUSED')) {
             console.log('💡 Mẹo: Kiểm tra lại xem IP hiện tại đã được whitelist trên MongoDB Atlas chưa.');
         }
-        
+
         process.exit(1);
     }
 };

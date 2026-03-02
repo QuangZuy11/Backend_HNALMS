@@ -251,8 +251,9 @@ exports.importRoomsFromFile = async (file) => {
   const floorMap = new Map();
   floors.forEach((f) => floorMap.set(f.name.trim().toLowerCase(), f._id));
 
+  // [SỬA Ở ĐÂY 1] Thay vì chỉ lưu _id, ta lưu trọn bộ object RoomType để lấy được giá
   const typeMap = new Map();
-  roomTypes.forEach((t) => typeMap.set(t.typeName.trim().toLowerCase(), t._id));
+  roomTypes.forEach((t) => typeMap.set(t.typeName.trim().toLowerCase(), t));
 
   const validRooms = [];
   const errors = [];
@@ -275,7 +276,9 @@ exports.importRoomsFromFile = async (file) => {
     }
 
     const floorId = floorMap.get(String(floorName).trim().toLowerCase());
-    const roomTypeId = typeMap.get(String(typeName).trim().toLowerCase());
+    
+    // [SỬA Ở ĐÂY 2] Lấy ra object RoomType tương ứng thay vì chỉ lấy ID
+    const roomTypeData = typeMap.get(String(typeName).trim().toLowerCase());
 
     if (!floorId) {
       errors.push(
@@ -283,7 +286,7 @@ exports.importRoomsFromFile = async (file) => {
       );
       continue;
     }
-    if (!roomTypeId) {
+    if (!roomTypeData) {
       errors.push(
         `Dòng ${rowIndex}: Không tìm thấy loại phòng tên "${typeName}".`,
       );
@@ -297,11 +300,14 @@ exports.importRoomsFromFile = async (file) => {
       continue;
     }
 
+    // [SỬA Ở ĐÂY 3] Bổ sung thêm trường price (lấy từ currentPrice của loại phòng)
     validRooms.push({
       roomCode: String(roomCode),
       name: String(name),
       floorId,
-      roomTypeId,
+      roomTypeId: roomTypeData._id,         // ID của loại phòng
+      price: roomTypeData.currentPrice || 0, // <--- ĐÂY LÀ DÒNG QUAN TRỌNG NHẤT
+      personMax: roomTypeData.personMax || 1, // (Tùy chọn) Có thể kế thừa luôn số người tối đa
       description: desc,
       status: "Available",
       isActive: true,
@@ -329,7 +335,6 @@ exports.importRoomsFromFile = async (file) => {
     throw dbError;
   }
 };
-
 // ==========================================
 //        [TENANT - VIEW MY ROOM]
 // ==========================================

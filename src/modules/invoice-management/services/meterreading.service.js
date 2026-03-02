@@ -1,6 +1,6 @@
 const MeterReading = require("../models/meterreading.model");
 const Invoice = require("../models/invoice.model");
-const Service = require("../../service-management/models/service.model"); // Import thêm bảng Service để lấy giá tiền
+const Service = require("../../service-management/models/service.model"); 
 
 class MeterReadingService {
   // 1. NHẬP CHỈ SỐ MỚI VÀ CẬP NHẬT TRỰC TIẾP VÀO HÓA ĐƠN NHÁP
@@ -10,7 +10,7 @@ class MeterReadingService {
       throw new Error("Chỉ số mới không được nhỏ hơn chỉ số cũ");
     }
 
-    // 1. Lưu lịch sử ghi chỉ số vào bảng MeterReading (để lưu vết/thống kê)
+    // 1. Lưu lịch sử ghi chỉ số vào bảng MeterReading
     const newReading = new MeterReading({
       ...data,
       usageAmount: usageAmount
@@ -23,25 +23,33 @@ class MeterReadingService {
       throw new Error("Không tìm thấy thông tin Dịch vụ.");
     }
     
-    const unitPrice = serviceInfo.currentPrice || serviceInfo.price || 0; 
+    // Xử lý Decimal128 nếu có
+    let unitPrice = serviceInfo.currentPrice || serviceInfo.price || 0; 
+    unitPrice = typeof unitPrice === 'object' && unitPrice.$numberDecimal ? parseFloat(unitPrice.$numberDecimal) : Number(unitPrice);
+    
     const incurredCost = usageAmount * unitPrice; // Thành tiền
     const serviceName = serviceInfo.name || serviceInfo.serviceName || "Dịch vụ";
+    
+    // Tạo chuỗi định dạng hiển thị cho Hóa đơn (Giống hệt lúc tạo hàng loạt)
+    const formattedItemName = `Tiền ${serviceName.toLowerCase()} (Cũ: ${data.oldIndex} - Mới: ${data.newIndex})`;
+    const searchKeyword = `tiền ${serviceName.toLowerCase()}`; // Keyword để tìm kiếm
 
     // 3. Cập nhật vào mảng 'items' của Hóa đơn Nháp
     const draftInvoice = await Invoice.findOne({
       roomId: data.roomId,
       type: "Periodic",
-      status: "Draft" // Chỉ sửa hóa đơn chưa chốt
+      status: "Draft" 
     });
 
     if (draftInvoice) {
-      // Tìm xem dịch vụ này đã tồn tại trong mảng items chưa (dựa vào tên)
+      // [SỬA LỖI] Tìm item có chứa chữ "Tiền điện" hoặc "Tiền nước" bằng .includes()
       const existingItemIndex = draftInvoice.items.findIndex(
-        item => item.itemName.toLowerCase() === serviceName.toLowerCase()
+        item => item.itemName.toLowerCase().includes(searchKeyword)
       );
 
       if (existingItemIndex > -1) {
-        // NẾU ĐÃ CÓ (Ví dụ nhập sai, giờ nhập lại) => Cập nhật đè lên
+        // NẾU ĐÃ CÓ => Cập nhật đè lên toàn bộ (Gồm cả tên mới, số mới, tiền mới)
+        draftInvoice.items[existingItemIndex].itemName = formattedItemName;
         draftInvoice.items[existingItemIndex].oldIndex = data.oldIndex;
         draftInvoice.items[existingItemIndex].newIndex = data.newIndex;
         draftInvoice.items[existingItemIndex].usage = usageAmount;
@@ -50,7 +58,7 @@ class MeterReadingService {
       } else {
         // NẾU CHƯA CÓ => Thêm mới vào mảng
         draftInvoice.items.push({
-          itemName: serviceName,
+          itemName: formattedItemName,
           oldIndex: data.oldIndex,
           newIndex: data.newIndex,
           usage: usageAmount,
@@ -59,18 +67,15 @@ class MeterReadingService {
         });
       }
 
-      // 4. Tính lại Tổng tiền (Cộng tất cả cột amount trong mảng items lại)
-      // Hàm reduce sẽ đi qua từng item, lấy biến sum (bắt đầu từ 0) cộng dồn với item.amount
+      // 4. Tính lại Tổng tiền
       draftInvoice.totalAmount = draftInvoice.items.reduce((sum, item) => sum + (item.amount || 0), 0);
-      
-      // Lưu lại hóa đơn
       await draftInvoice.save();
     }
 
     return newReading;
   }
 
-  // 2. CẬP NHẬT CHỈ SỐ (Phòng trường hợp nhập sai, sửa lại)
+  // 2. CẬP NHẬT CHỈ SỐ
   async updateReading(id, data) {
     const reading = await MeterReading.findById(id);
     if (!reading) throw new Error("Không tìm thấy bản ghi chỉ số");
@@ -83,17 +88,16 @@ class MeterReadingService {
       throw new Error("Chỉ số mới không được nhỏ hơn chỉ số cũ");
     }
 
-    // Tính ra độ chênh lệch lượng sử dụng (có thể tăng thêm hoặc giảm đi do sửa sai)
     const usageDifference = newUsageAmount - reading.usageAmount;
 
-    // Lưu lại chỉ số mới
     Object.assign(reading, data, { usageAmount: newUsageAmount });
     await reading.save();
 
-    // Điều chỉnh lại tiền trong Hóa đơn Draft nếu có thay đổi
     if (usageDifference !== 0) {
       const serviceInfo = await Service.findById(reading.utilityId);
-      const unitPrice = serviceInfo ? serviceInfo.currentPrice : 0;
+      let unitPrice = serviceInfo ? (serviceInfo.currentPrice || serviceInfo.price || 0) : 0;
+      unitPrice = typeof unitPrice === 'object' && unitPrice.$numberDecimal ? parseFloat(unitPrice.$numberDecimal) : Number(unitPrice);
+      
       const costDifference = usageDifference * unitPrice;
 
       const draftInvoice = await Invoice.findOne({
@@ -103,9 +107,11 @@ class MeterReadingService {
       });
 
       if (draftInvoice) {
-        draftInvoice.totalAmount += costDifference; // Có thể cộng thêm hoặc trừ bớt
-        // Đảm bảo tổng tiền không bị âm (phòng lỗi logic)
+        draftInvoice.totalAmount += costDifference; 
         if (draftInvoice.totalAmount < 0) draftInvoice.totalAmount = 0; 
+        
+        // Lưu ý: Nếu muốn UI tự nhảy số chi tiết, ở đây cũng phải sửa mảng items.
+        // Tuy nhiên với luồng Undo -> Add mới thì ta không dùng updateReading này nên không sao.
         await draftInvoice.save();
       }
     }
@@ -113,16 +119,51 @@ class MeterReadingService {
     return reading;
   }
 
-  //Hàm lấy chỉ số điện/nước mới nhất của một phòng
+  // 3. LẤY CHỈ SỐ MỚI NHẤT
   async getLatestReading(roomId, utilityId) {
-    // Tìm kiếm bản ghi khớp ID phòng & ID dịch vụ
-    // Sắp xếp giảm dần theo ngày tạo (createdAt: -1) để lấy cái mới nhất
     const latestReading = await MeterReading.findOne({ 
       roomId: roomId, 
       utilityId: utilityId 
     }).sort({ createdAt: -1 });
 
     return latestReading;
+  }
+
+  // ==========================================
+  // 4. XÓA BẢN GHI (HOÀN TÁC SỬA SAI)
+  // ==========================================
+  async deleteReading(id) {
+    const reading = await MeterReading.findById(id);
+    if (!reading) throw new Error("Không tìm thấy bản ghi để xóa.");
+
+    // Bước 1: Tìm hóa đơn nháp liên quan để trừ tiền
+    const draftInvoice = await Invoice.findOne({
+      roomId: reading.roomId,
+      type: "Periodic",
+      status: "Draft"
+    });
+
+    if (draftInvoice) {
+      const serviceInfo = await Service.findById(reading.utilityId);
+      const serviceName = serviceInfo ? (serviceInfo.name || serviceInfo.serviceName) : "";
+
+      if (serviceName) {
+        const searchKeyword = `tiền ${serviceName.toLowerCase()}`;
+
+        // [SỬA LỖI] Lọc bỏ dịch vụ này ra khỏi mảng items bằng .includes()
+        draftInvoice.items = draftInvoice.items.filter(
+          item => !item.itemName.toLowerCase().includes(searchKeyword)
+        );
+        
+        // Tính toán lại tổng tiền sau khi đã loại bỏ cái bị sai
+        draftInvoice.totalAmount = draftInvoice.items.reduce((sum, item) => sum + (item.amount || 0), 0);
+        await draftInvoice.save();
+      }
+    }
+
+    // Bước 2: Xóa bản ghi trong DB
+    await MeterReading.findByIdAndDelete(id);
+    return true;
   }
 }
 

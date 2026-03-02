@@ -33,13 +33,27 @@ const RepairRequestSchema = new Schema({
     required: true,
     default: "Pending"
   },
-  cost: {
-    type: Number,
-    default: 0
-  },
   notes: {
     type: String,
     default: ""
+  },
+  // Loại thanh toán: REVENUE (sửa chữa có phí) hoặc EXPENSE (sửa chữa miễn phí)
+  // Từ paymentType có thể suy ra người thanh toán:
+  // - REVENUE  -> Khách hàng
+  // - EXPENSE  -> Chủ nhà
+  paymentType: {
+    type: String,
+    enum: ["REVENUE", "EXPENSE"],
+    default: null,
+  },
+  // Trạng thái thanh toán: tách riêng với trạng thái xử lý (status)
+  // - NONE   : chưa phát sinh nghĩa vụ thanh toán (mới tạo, đang xử lý, hoặc sửa miễn phí không cần thu)
+  // - UNPAID : đã phát sinh hóa đơn nhưng cư dân chưa thanh toán (chờ thanh toán)
+  // - PAID   : hóa đơn/phiếu chi đã hoàn tất
+  paymentStatus: {
+    type: String,
+    enum: ["NONE", "UNPAID", "PAID"],
+    default: "NONE",
   },
   createdDate: {
     type: Date,
