@@ -59,4 +59,8 @@ ApiRouter.use("/accounts", accountRoutes);
 ApiRouter.use("/devices", deviceRoutes);
 ApiRouter.use("/invoices", invoiceRoutes);
 ApiRouter.use("/meter-readings", meterreadingRoutes);
+
+const depositRoutes = require("../../modules/room-floor-management/routes/deposit-room.routes");
+ApiRouter.use("/deposits", depositRoutes);
+
 module.exports = ApiRouter;
