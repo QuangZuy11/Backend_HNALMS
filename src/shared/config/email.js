@@ -115,6 +115,59 @@ const EMAIL_TEMPLATES = {
   }
 };
 
+// Template xác nhận đặt cọc phòng thành công
+EMAIL_TEMPLATES.DEPOSIT_CONFIRMATION = {
+  subject: "Xác nhận đặt cọc phòng thành công - HNALMS",
+  getHtml: (guestName, roomName, amount, transactionCode) => `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background: #FCD34D; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }
+        .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 8px 8px; }
+        .info-box { background: white; padding: 15px; border-left: 4px solid #16A34A; margin: 20px 0; border-radius: 4px; }
+        .info-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee; }
+        .info-row:last-child { border-bottom: none; }
+        .label { color: #6B7280; font-size: 14px; }
+        .value { font-weight: bold; color: #1F2937; }
+        .badge { background: #D1FAE5; color: #065F46; padding: 4px 12px; border-radius: 20px; font-size: 13px; font-weight: bold; }
+        .footer { text-align: center; margin-top: 20px; color: #666; font-size: 12px; }
+        .notice { background: #FEF3C7; border-left: 4px solid #F59E0B; padding: 12px 15px; border-radius: 4px; margin-top: 15px; font-size: 14px; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="header">
+          <h1 style="margin: 0; color: #1F2937;">HNALMS</h1>
+          <p style="margin: 5px 0 0 0; color: #6B7280;">Hệ thống quản lý căn hộ</p>
+        </div>
+        <div class="content">
+          <h2>Xin chào ${guestName},</h2>
+          <p>Chúng tôi xác nhận rằng <strong>đặt cọc phòng của bạn đã được ghi nhận thành công</strong>.</p>
+          <div class="info-box">
+            <div class="info-row"><span class="label">Phòng</span><span class="value">${roomName}</span></div>
+            <div class="info-row"><span class="label">Số tiền đặt cọc</span><span class="value">${new Intl.NumberFormat('vi-VN').format(amount)} đ</span></div>
+            <div class="info-row"><span class="label">Mã giao dịch</span><span class="value">${transactionCode}</span></div>
+            <div class="info-row"><span class="label">Trạng thái</span><span class="badge">✅ Đã xác nhận</span></div>
+          </div>
+          <div class="notice">
+            <strong>⏰ Lưu ý quan trọng:</strong><br/>
+            Phòng sẽ được giữ trong <strong>7 ngày</strong> kể từ hôm nay.<br/>
+            Vui lòng liên hệ ban quản lý để ký hợp đồng trước khi hết thời hạn.
+          </div>
+          <p style="margin-top: 20px;">Trân trọng,<br><strong>Ban Quản Lý Tòa Nhà</strong></p>
+        </div>
+        <div class="footer">
+          <p>&copy; ${new Date().getFullYear()} HNALMS. All rights reserved.</p>
+        </div>
+      </div>
+    </body>
+    </html>
+  `
+};
+
 module.exports = {
   EMAIL_CONFIG,
   EMAIL_TEMPLATES
