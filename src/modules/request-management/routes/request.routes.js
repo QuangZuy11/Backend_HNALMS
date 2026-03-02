@@ -3,11 +3,15 @@ const router = express.Router();
 const requestController = require("../controllers/request.controller");
 const requestValidator = require("../validators/request.validator");
 const complaintRoutes = require("./complaint.routes");
+const transferRoutes = require("./transfer.routes");
 const { authenticate } = require("../../authentication/middlewares/authenticate");
 const { authorize } = require("../../authentication/middlewares/authorize");
 
 // Mount complaint routes
 router.use(complaintRoutes);
+
+// Mount transfer room request routes
+router.use("/transfer", transferRoutes);
 
 /**
  * Tạo yêu cầu sửa chữa/bảo trì mới
