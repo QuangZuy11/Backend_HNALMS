@@ -117,10 +117,14 @@ exports.getComplaintList = async (req, res) => {
     const userRole = req.user?.role;
     const { status, page, limit, category } = req.query;
 
+    // Admin & Manager: xem được tất cả khiếu nại
+    // Các role khác (tenant, ...) chỉ xem được khiếu nại của chính mình
+    const isAdminOrManager = ["admin", "manager"].includes(userRole);
+
     const filters = {
       ...(status && { status }),
       ...(category && { category }),
-      ...(userRole !== "admin" && { tenantId: userId })
+      ...(!isAdminOrManager && { tenantId: userId })
     };
 
     const complaints = await complaintService.getComplaintsList(

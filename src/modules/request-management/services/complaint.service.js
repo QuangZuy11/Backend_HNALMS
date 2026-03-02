@@ -4,6 +4,7 @@
  */
 
 const ComplaintRequest = require("../models/complaint_requests.model");
+const Contract = require("../../contract-management/models/contract.model");
 
 /**
  * Tạo yêu cầu khiếu nại mới
@@ -85,6 +86,49 @@ const getComplaintsList = async (filters = {}, page = 1, limit = 10) => {
       .limit(limit)
       .lean();
 
+    // Gắn thông tin phòng (room) dựa theo hợp đồng đang active của tenant
+    const tenantIds = [
+      ...new Set(
+        complaints
+          .map((c) => c.tenantId?._id)
+          .filter(Boolean)
+          .map((id) => id.toString())
+      ),
+    ];
+
+    const roomByTenant = new Map();
+
+    if (tenantIds.length > 0) {
+      const contracts = await Contract.find({
+        tenantId: { $in: tenantIds },
+        status: "active",
+      })
+        .populate({
+          path: "roomId",
+          select: "name roomCode",
+        })
+        .lean();
+
+      contracts.forEach((ct) => {
+        if (ct.tenantId && ct.roomId) {
+          roomByTenant.set(ct.tenantId.toString(), {
+            _id: ct.roomId._id,
+            name: ct.roomId.name,
+            roomCode: ct.roomId.roomCode,
+          });
+        }
+      });
+    }
+
+    complaints.forEach((c) => {
+      if (c.tenantId?._id) {
+        const room = roomByTenant.get(c.tenantId._id.toString());
+        c.room = room || null;
+      } else {
+        c.room = null;
+      }
+    });
+
     return {
       data: complaints,
       total,
@@ -140,7 +184,8 @@ const updateComplaintStatus = async (id, status, response, responderId) => {
       status,
       ...(response && { response }),
       ...(response && { responseBy: responderId }),
-      ...(response && { responseDate: new Date() })
+      ...(response && { responseDate: new Date() }),
+      ...(response && { managerNote: response })
     };
 
     const complaint = await ComplaintRequest.findByIdAndUpdate(

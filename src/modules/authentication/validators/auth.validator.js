@@ -113,22 +113,72 @@ const validateRegister = (req, res, next) => {
 const validateLogin = (req, res, next) => {
   const { username, password } = req.body || {};
 
-  // Check required fields
-  if (!username || !password) {
+  // Trường hợp client gửi sai kiểu dữ liệu cho username (không phải string)
+  // => xem như thông tin đăng nhập sai để tránh lộ chi tiết validate
+  if (username !== undefined && username !== null && typeof username !== "string") {
     return res.status(400).json({
       success: false,
-      message: "Username and password are required"
+      message: "Tên đăng nhập hoặc mật khẩu sai"
     });
   }
 
-  // Validate username
-  const usernameValidation = validateUsername(username);
-  if (!usernameValidation.valid) {
+  const rawUsername = typeof username === "string" ? username : "";
+  const rawPassword = typeof password === "string" ? password : "";
+
+  // Không cho phép khoảng trắng ở đầu/cuối username
+  if (rawUsername && rawUsername !== rawUsername.trim()) {
     return res.status(400).json({
       success: false,
-      message: usernameValidation.message
+      message: "Vui lòng nhập đúng tên đăng nhập"
     });
   }
+
+  // Không cho phép khoảng trắng ở đầu/cuối password
+  if (rawPassword && rawPassword !== rawPassword.trim()) {
+    return res.status(400).json({
+      success: false,
+      message: "Vui lòng nhập đúng mật khẩu"
+    });
+  }
+
+  const normalizedUsername = rawUsername.trim();
+  const normalizedPassword = rawPassword.trim();
+
+  // Thiếu username
+  if (!normalizedUsername) {
+    return res.status(400).json({
+      success: false,
+      message: "Vui lòng nhập tên đăng nhập"
+    });
+  }
+
+  // Thiếu password
+  if (!normalizedPassword) {
+    return res.status(400).json({
+      success: false,
+      message: "Vui lòng nhập mật khẩu"
+    });
+  }
+
+  // Username quá 30 ký tự
+  if (normalizedUsername.length > 30) {
+    return res.status(400).json({
+      success: false,
+      message: "Tên người dùng không được vượt quá 30 ký tự"
+    });
+  }
+
+  // Username có khoảng trắng ở giữa hoặc ký tự không hợp lệ
+  if (!/^[A-Za-z0-9._-]+$/.test(normalizedUsername)) {
+    return res.status(400).json({
+      success: false,
+      message: "Vui lòng nhập đúng tên đăng nhập"
+    });
+  }
+
+  // Ghi đè lại body bằng giá trị đã chuẩn hoá để BE xử lý thống nhất
+  req.body.username = normalizedUsername;
+  req.body.password = normalizedPassword;
 
   next();
 };

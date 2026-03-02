@@ -63,14 +63,20 @@ exports.login = async (req, res) => {
   } catch (error) {
     console.error("Login error:", error);
 
-    if (
-      error.message.includes("incorrect") ||
-      error.message.includes("not active") ||
-      error.message.includes("Email")
-    ) {
+    const message = error?.message || "";
+
+    // Các lỗi do người dùng (sai tài khoản/mật khẩu, tài khoản chưa kích hoạt, email không tồn tại, ...)
+    const isClientError =
+      message.includes("incorrect") ||
+      message.includes("not active") ||
+      message.includes("Email") ||
+      message.includes("Tên đăng nhập hoặc mật khẩu không chính xác") ||
+      message.includes("Tài khoản chưa được kích hoạt");
+
+    if (isClientError) {
       return res.status(401).json({
         success: false,
-        message: error.message
+        message
       });
     }
 
