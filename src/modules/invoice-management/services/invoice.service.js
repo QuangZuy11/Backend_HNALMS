@@ -1,9 +1,10 @@
 const Invoice = require("../models/invoice.model");
 const Room = require("../../room-floor-management/models/room.model");
 const MeterReading = require('../models/meterreading.model'); 
-const RoomService = require('../../service-management/models/roomservice.model'); 
-// [MỚI] Import model Service để lấy thông tin dịch vụ Điện / Nước cho việc kiểm tra
+const BookService = require('../../service-management/models/bookservice.model'); 
 const Service = require("../../service-management/models/service.model"); 
+// [MỚI] Import model Contract
+const Contract = require('../../contract-management/models/contract.model'); 
 
 class InvoiceService {
   async getInvoices(query = {}) {
@@ -12,22 +13,17 @@ class InvoiceService {
 
   // 1. CHỨC NĂNG: TẠO HÓA ĐƠN NHÁP HÀNG LOẠT (Tự động lấy tiền phòng + điện nước + dịch vụ)
   async generateDraftInvoices() {
-    // Tự động tính toán ngày tháng
     const now = new Date();
-    const month = now.getMonth() + 1; // getMonth() chạy từ 0-11 nên phải +1
+    const month = now.getMonth() + 1; 
     const year = now.getFullYear();
-
-    // Tính hạn thanh toán (dueDate): Ngày 5 của tháng tiếp theo
     const dueDate = new Date(year, month, 5);
 
-    // Bước 1: Lấy danh sách phòng đang thuê và JOIN sang bảng RoomType để lấy giá tiền
     const activeRooms = await Room.find({ status: "Occupied" }).populate("roomTypeId"); 
     
     if (activeRooms.length === 0) {
       throw new Error("Không có phòng nào đang thuê để tạo hóa đơn.");
     }
 
-    // Bước 2: Tìm các hóa đơn định kỳ đã được tạo cho tháng/năm này để chống trùng lặp
     const titlePattern = `tháng ${month}/${year}`;
     const existingInvoices = await Invoice.find({
       type: "Periodic",
@@ -36,7 +32,6 @@ class InvoiceService {
 
     const roomIdsWithInvoice = existingInvoices.map(inv => inv.roomId.toString());
 
-    // Bước 3: Lọc ra những phòng CHƯA CÓ hóa đơn
     const roomsToCreate = activeRooms.filter(
       room => !roomIdsWithInvoice.includes(room._id.toString())
     );
@@ -45,9 +40,6 @@ class InvoiceService {
       throw new Error(`Tất cả các phòng đang thuê đều đã được tạo hóa đơn cho tháng ${month}/${year}.`);
     }
 
-    // ==========================================
-    // BƯỚC 4.1: LẤY CHỈ SỐ ĐIỆN NƯỚC ĐÃ LƯU TRONG THÁNG
-    // ==========================================
     const startOfMonth = new Date(year, month - 1, 1);
     const endOfMonth = new Date(year, month, 0, 23, 59, 59);
 
@@ -56,59 +48,67 @@ class InvoiceService {
     }).populate('utilityId'); 
 
     // ==========================================
-    // [MỚI] BƯỚC 4.2: KIỂM TRA BẮT BUỘC ĐÃ CHỐT ĐIỆN NƯỚC CHƯA
+    // BƯỚC 4.2: KIỂM TRA BẮT BUỘC ĐÃ CHỐT ĐIỆN NƯỚC CHƯA
     // ==========================================
     const elecService = await Service.findOne({ name: "Điện" });
     const waterService = await Service.findOne({ name: "Nước" });
     const missingRooms = [];
 
-    roomsToCreate.forEach(room => { // Chỉ check những phòng chuẩn bị tạo hóa đơn
+    roomsToCreate.forEach(room => { 
       const roomReadings = recentReadings.filter(r => r.roomId.toString() === room._id.toString());
       let hasElec = true;
       let hasWater = true;
 
-      // Check xem có bản ghi điện không
       if (elecService) {
         hasElec = roomReadings.some(r => r.utilityId && r.utilityId._id.toString() === elecService._id.toString());
       }
-      // Check xem có bản ghi nước không
       if (waterService) {
         hasWater = roomReadings.some(r => r.utilityId && r.utilityId._id.toString() === waterService._id.toString());
       }
 
-      // Nếu thiếu 1 trong 2 thì đẩy vào danh sách báo lỗi
       if (!hasElec || !hasWater) {
         missingRooms.push(room.name);
       }
     });
 
-    // Nếu có phòng chưa chốt, chặn lại ngay lập tức và ném lỗi về Frontend
     if (missingRooms.length > 0) {
       const displayRooms = missingRooms.length > 6 ? missingRooms.slice(0, 6).join(', ') + '...' : missingRooms.join(', ');
       throw new Error(`Bạn CHƯA CHỐT số Điện/Nước cho các phòng: ${displayRooms}. Vui lòng ghi chỉ số trước khi tạo hóa đơn!`);
     }
 
     // ==========================================
-    // BƯỚC 4.3: LẤY CÁC DỊCH VỤ ĐANG SỬ DỤNG TRONG THÁNG
+    // [ĐÃ SỬA] BƯỚC 4.3: LẤY CÁC DỊCH VỤ THEO HỢP ĐỒNG ĐANG ACTIVE
     // ==========================================
-    const activeServices = await RoomService.find({
-      startDate: { $lte: endOfMonth }, // Bắt đầu trước khi tháng này kết thúc
+    // 1. Tìm tất cả hợp đồng ĐANG HIỆU LỰC trong tháng này
+    const activeContracts = await Contract.find({
+      startDate: { $lte: endOfMonth },
       $or: [
-        { endDate: null }, // Chưa có ngày kết thúc (Đang dùng)
+        { endDate: null },
+        { endDate: { $gte: startOfMonth } },
+        { status: 'active' } // Bắt điều kiện Hợp đồng còn hạn
+      ]
+    });
+
+    const activeContractIds = activeContracts.map(c => c._id.toString());
+
+    // 2. Tìm tất cả Dịch vụ (BookService) thuộc về các Hợp đồng trên
+    const activeServices = await BookService.find({
+      contractId: { $in: activeContractIds }, // <== Đổi roomId thành contractId
+      startDate: { $lte: endOfMonth }, 
+      $or: [
+        { endDate: null }, 
         { endDate: { $exists: false } },
-        { endDate: { $gte: startOfMonth } } // Hoặc có kết thúc nhưng kết thúc trong/sau tháng này
+        { endDate: { $gte: startOfMonth } } 
       ]
     }).populate('serviceId');
 
     // Bước 5: Khởi tạo dữ liệu Hóa đơn Nháp
     const invoicesToCreate = roomsToCreate.map(room => {
-      // 5.1. Lấy giá phòng từ RoomType
       const roomPrice = room.roomTypeId ? (room.roomTypeId.currentPrice || 0) : 0;
       const parsedPrice = typeof roomPrice === 'object' && roomPrice.$numberDecimal 
         ? parseFloat(roomPrice.$numberDecimal) 
         : Number(roomPrice) || 0;
 
-      // 5.2. Khởi tạo mảng items và biến tổng tiền
       let totalAmount = parsedPrice;
       const invoiceItems = [
         {
@@ -131,7 +131,6 @@ class InvoiceService {
         const uId = reading.utilityId._id.toString();
         const usage = reading.newIndex - reading.oldIndex;
         
-        // [SỬA] Đổi >= 0 để vẫn nhận diện được trường hợp khách dùng 0 số
         if (usage >= 0 && reading.utilityId) {
           if (!groupedReadings[uId]) {
             groupedReadings[uId] = {
@@ -159,7 +158,6 @@ class InvoiceService {
 
         const serviceName = group.utilityId.name || group.utilityId.serviceName || "Dịch vụ";
         
-        // Nếu dùng > 0 số thì mới in ra dòng chi tiết điện/nước trong hóa đơn (0 số thì ẩn đi cho gọn)
         if (group.totalUsage > 0) {
           invoiceItems.push({
             itemName: `Tiền ${serviceName.toLowerCase()} (Cũ: ${group.oldIndex} - Mới: ${group.newIndex})`,
@@ -173,38 +171,44 @@ class InvoiceService {
       });
 
       // ==========================================
-      // 5.4. CỘNG DỒN TIỀN CÁC DỊCH VỤ PHỤ (Gửi xe, Rác, Wifi...)
+      // [ĐÃ SỬA] 5.4. CỘNG DỒN TIỀN CÁC DỊCH VỤ PHỤ TỪ HỢP ĐỒNG
       // ==========================================
-      const roomServices = activeServices.filter(rs => rs.roomId.toString() === room._id.toString());
-      roomServices.forEach(rs => {
-        if (rs.serviceId) {
-          // Xử lý giá tiền Decimal128
-          let srvPrice = rs.serviceId.currentPrice || rs.serviceId.price || 0;
-          srvPrice = typeof srvPrice === 'object' && srvPrice.$numberDecimal 
-            ? parseFloat(srvPrice.$numberDecimal) 
-            : Number(srvPrice);
+      // Lấy hợp đồng của phòng này
+      const roomContract = activeContracts.find(c => c.roomId.toString() === room._id.toString());
+      
+      if (roomContract) {
+        // Nếu phòng có Hợp đồng, tìm các dịch vụ thuộc về Hợp đồng đó
+        const contractServices = activeServices.filter(rs => rs.contractId.toString() === roomContract._id.toString());
+        
+        contractServices.forEach(rs => {
+          if (rs.serviceId) {
+            let srvPrice = rs.serviceId.currentPrice || rs.serviceId.price || 0;
+            srvPrice = typeof srvPrice === 'object' && srvPrice.$numberDecimal 
+              ? parseFloat(srvPrice.$numberDecimal) 
+              : Number(srvPrice);
 
-          const qty = rs.quantity || 1;
-          const amount = qty * srvPrice;
-          totalAmount += amount;
+            const qty = rs.quantity || 1;
+            const amount = qty * srvPrice;
+            totalAmount += amount;
 
-          const srvName = rs.serviceId.name || rs.serviceId.serviceName || "Dịch vụ";
-          const displayItemName = rs.note ? `Dịch vụ ${srvName} (${rs.note})` : `Dịch vụ ${srvName}`;
+            const srvName = rs.serviceId.name || rs.serviceId.serviceName || "Dịch vụ";
+            const displayItemName = rs.note ? `Dịch vụ ${srvName} (${rs.note})` : `Dịch vụ ${srvName}`;
 
-          invoiceItems.push({
-            itemName: displayItemName,
-            oldIndex: 0,
-            newIndex: 0,
-            usage: qty,
-            unitPrice: srvPrice, 
-            amount: amount 
-          });
-        }
-      });
+            invoiceItems.push({
+              itemName: displayItemName,
+              oldIndex: 0,
+              newIndex: 0,
+              usage: qty,
+              unitPrice: srvPrice, 
+              amount: amount 
+            });
+          }
+        });
+      }
 
       // 5.5. Trả về cấu trúc lưu DB
       return {
-        invoiceCode: `INV-${room.name}-${month}${year}`,
+        invoiceCode: `INV-${room.name}-${month}${year}-${Math.floor(1000 + Math.random() * 9000)}`,
         roomId: room._id,
         title: `Hóa đơn tiền thuê & dịch vụ tháng ${month}/${year}`,
         type: "Periodic",
