@@ -166,7 +166,10 @@ exports.getRepairRequestById = async (req, res) => {
 /**
  * Cập nhật trạng thái yêu cầu sửa chữa
  * PUT /api/requests/repair/:requestId/status
- * Body: { status: "Pending" | "Processing" | "Done", cost?: number, notes?: string }
+ * Body: { status: "Pending"|"Processing"|"Done"|"Unpaid"|"Paid", notes?, invoiceCode?, ... }
+ *   - Done   : đã xử lý, miễn phí (có thể kèm financialTicket)
+ *   - Unpaid : đã xử lý, cư dân chưa thanh toán (có thể kèm invoice)
+ *   - Paid   : đã thanh toán
  */
 exports.updateRepairStatus = async (req, res) => {
   try {

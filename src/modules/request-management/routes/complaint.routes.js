@@ -12,7 +12,7 @@ const { authenticate } = require("../../authentication/middlewares/");
 /**
  * POST /api/requests/complaints
  * Tạo yêu cầu khiếu nại mới
- * Body: {content, category, priority}
+ * Body: {content, category}
  */
 router.post(
   "/complaints",
@@ -45,7 +45,7 @@ router.get(
 /**
  * PUT /api/requests/complaints/:id
  * Cập nhật khiếu nại (chỉ tenant, chỉ khi Pending)
- * Body: {content, category, priority}
+ * Body: {content, category}
  */
 router.put(
   "/complaints/:id",

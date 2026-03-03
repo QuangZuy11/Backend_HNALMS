@@ -24,12 +24,6 @@ const ComplaintRequestSchema = new Schema({
     ],
     required: true
   },
-  priority: {
-    type: String,
-    enum: ["Low", "Medium", "High"],
-    required: true,
-    default: "Low"
-  },
   status: {
     type: String,
     enum: ["Pending", "Processing", "Done"],

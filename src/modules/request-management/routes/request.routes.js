@@ -66,6 +66,7 @@ router.get(
  * Cập nhật trạng thái yêu cầu sửa chữa
  * PUT /api/requests/repair/:requestId/status
  * Chỉ dành cho role manager
+ * Body: { status: "Pending"|"Processing"|"Done"|"Unpaid"|"Paid", notes?, invoiceCode?, ... }
  */
 router.put(
   "/repair/:requestId/status",
