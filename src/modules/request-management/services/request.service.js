@@ -382,12 +382,15 @@ const getRepairRequestsByTenant = async (tenantId) => {
 /**
  * Cập nhật trạng thái yêu cầu sửa chữa
  * @param {string} requestId - ID của yêu cầu
- * @param {"Pending"|"Processing"|"Done"} status - Trạng thái mới
- * @param {number} cost - Chi phí (KHÔNG sử dụng nữa, giữ tham số cho tương thích)
- * @param {string} notes - Ghi chú (chỉ khi status = Done)
- * @param {Object|null} invoiceData - Thông tin tạo hóa đơn (sửa chữa có phí)
- * @param {Object|null} financialTicketData - Thông tin tạo phiếu chi (sửa chữa miễn phí)
- * @param {string|null} paymentType - Loại thanh toán: "REVENUE" (có phí) hoặc "EXPENSE" (miễn phí)
+ * @param {"Pending"|"Processing"|"Done"|"Unpaid"|"Paid"} status - Trạng thái mới
+ *   - Done   : đã xử lý, sửa chữa miễn phí (chủ nhà chịu chi phí → tạo phiếu chi nếu có)
+ *   - Unpaid : đã xử lý, cư dân chưa thanh toán (→ tạo hóa đơn nếu có)
+ *   - Paid   : cư dân đã thanh toán
+ * @param {number} cost - Không sử dụng nữa, giữ cho tương thích
+ * @param {string} notes - Ghi chú (khi status = Done hoặc Unpaid)
+ * @param {Object|null} invoiceData - Thông tin hóa đơn (khi status = Unpaid)
+ * @param {Object|null} financialTicketData - Thông tin phiếu chi (khi status = Done)
+ * @param {string|null} paymentType - Tự suy ra từ status nếu không truyền
  */
 const updateRepairRequestStatus = async (
   requestId,
@@ -398,7 +401,7 @@ const updateRepairRequestStatus = async (
   financialTicketData = null,
   paymentType = null
 ) => {
-  const allowedStatus = ["Pending", "Processing", "Done"];
+  const allowedStatus = ["Pending", "Processing", "Done", "Unpaid", "Paid"];
   if (!allowedStatus.includes(status)) {
     throw new Error("Trạng thái không hợp lệ");
   }
@@ -410,21 +413,21 @@ const updateRepairRequestStatus = async (
 
   request.status = status;
 
-  // Nếu chuyển sang Done, cập nhật chi phí, ghi chú và tạo các chứng từ liên quan
-  if (status === "Done") {
+  // Xử lý khi chuyển sang Đã xử lý (Done) hoặc Chưa thanh toán (Unpaid)
+  if (status === "Done" || status === "Unpaid") {
     if (notes !== null && notes !== undefined) {
       request.notes = notes;
     }
 
-    // Cập nhật paymentType + paymentStatus
-    // - REVENUE  : sửa chữa có phí → tạo hóa đơn, mặc định chờ thanh toán (UNPAID)
-    // - EXPENSE  : sửa chữa miễn phí cho cư dân → không tham gia luồng thanh toán, không đụng paymentStatus
-    if (paymentType !== null && paymentType !== undefined) {
+    // Tự suy ra paymentType nếu không truyền:
+    // - Unpaid → cư dân trả (REVENUE) → tạo hóa đơn
+    // - Done   → chủ nhà trả (EXPENSE) → tạo phiếu chi nội bộ (nếu có)
+    if (paymentType) {
       request.paymentType = paymentType;
-
-      if (paymentType === "REVENUE") {
-        request.paymentStatus = "UNPAID";
-      }
+    } else if (status === "Unpaid") {
+      request.paymentType = "REVENUE";
+    } else if (status === "Done") {
+      request.paymentType = financialTicketData ? "EXPENSE" : null;
     }
 
     // 1. Tạo hóa đơn nếu frontend gửi kèm dữ liệu invoice (sửa chữa có phí cho cư dân)
