@@ -12,7 +12,7 @@ const { successResponse, errorResponse } = require("../../../shared/utils/respon
  */
 exports.createComplaint = async (req, res) => {
   try {
-    const { content, category, priority } = req.body;
+    const { content, category } = req.body;
     const tenantId = req.user?.userId;
 
     // Validate required fields
@@ -28,8 +28,7 @@ exports.createComplaint = async (req, res) => {
     const complaint = await complaintService.createComplaintRequest({
       tenantId,
       content,
-      category,
-      priority: priority || "Low"
+      category
     });
 
     return successResponse(
@@ -155,7 +154,7 @@ exports.getComplaintList = async (req, res) => {
 exports.updateComplaint = async (req, res) => {
   try {
     const { id } = req.params;
-    const { content, category, priority } = req.body;
+    const { content, category } = req.body;
     const userId = req.user?.userId;
 
     const complaint = await complaintService.getComplaintById(id);
@@ -187,8 +186,7 @@ exports.updateComplaint = async (req, res) => {
 
     const updatedComplaint = await complaintService.updateComplaintRequest(id, {
       content,
-      category,
-      priority
+      category
     });
 
     return successResponse(
