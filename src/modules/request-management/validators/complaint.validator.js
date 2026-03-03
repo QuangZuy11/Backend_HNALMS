@@ -42,14 +42,6 @@ const validateCreateComplaint = (data) => {
     );
   }
 
-  // Validate priority (optional, có default)
-  if (data.priority) {
-    const validPriorities = ["Low", "Medium", "High"];
-    if (!validPriorities.includes(data.priority)) {
-      errors.push(`Priority phải là một trong: ${validPriorities.join(", ")}`);
-    }
-  }
-
   return {
     valid: errors.length === 0,
     errors
@@ -65,8 +57,8 @@ const validateUpdateComplaint = (data) => {
   const errors = [];
 
   // At least one field must be provided
-  if (!data.content && !data.category && !data.priority) {
-    errors.push("Ít nhất một trường phải được cập nhật (content, category, priority)");
+  if (!data.content && !data.category) {
+    errors.push("Ít nhất một trường phải được cập nhật (content, category)");
     return { valid: false, errors };
   }
 
@@ -98,14 +90,6 @@ const validateUpdateComplaint = (data) => {
       errors.push(
         `Category phải là một trong: ${validCategories.join(", ")}`
       );
-    }
-  }
-
-  // Validate priority if provided
-  if (data.priority) {
-    const validPriorities = ["Low", "Medium", "High"];
-    if (!validPriorities.includes(data.priority)) {
-      errors.push(`Priority phải là một trong: ${validPriorities.join(", ")}`);
     }
   }
 
