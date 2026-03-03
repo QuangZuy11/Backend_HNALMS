@@ -1,4 +1,5 @@
 const Contract = require("../models/contract.model");
+const BookService = require("../models/bookservice.model");
 const Room = require("../../room-floor-management/models/room.model");
 const User = require("../../authentication/models/user.model");
 const UserInfo = require("../../authentication/models/userInfor.model");
@@ -8,7 +9,8 @@ const bcrypt = require("bcryptjs"); // Ensure bcryptjs is installed
 
 // Helper to generate random string
 const generateRandomString = (length) => {
-    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    const chars =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     let result = "";
     for (let i = 0; i < length; i++) {
         result += chars.charAt(Math.floor(Math.random() * chars.length));
@@ -24,7 +26,9 @@ const generateContractCode = (roomName) => {
     return `HN/${roomName}/${year}/HDSV/${random3}`;
 };
 
-const { sendEmail } = require("../../notification-management/services/email.service");
+const {
+    sendEmail,
+} = require("../../notification-management/services/email.service");
 const { EMAIL_TEMPLATES } = require("../../../shared/config/email");
 
 exports.createContract = async (req, res) => {
@@ -38,6 +42,7 @@ exports.createContract = async (req, res) => {
             tenantInfo, // { fullName, dob, cccd, phone, email, address, ... }
             coResidents, // Array
             contractDetails, // { startDate, duration, services, paymentCycle }
+            bookServices, // NEW: array of { serviceId, name, price, type, category, quantity }
         } = req.body;
 
         // 1. Validate Room Status (populate roomTypeId to get price)
@@ -67,14 +72,18 @@ exports.createContract = async (req, res) => {
         }
 
         // Get room price and deposit from roomType
-        const roomPrice = parseFloat(room.roomTypeId?.currentPrice?.toString() || "0");
+        const roomPrice = parseFloat(
+            room.roomTypeId?.currentPrice?.toString() || "0",
+        );
         const depositAmount = roomPrice; // Deposit = 1 month rent
 
         // Validate personInRoom <= personMax from roomType
         const personMax = room.roomTypeId?.personMax || 1;
         const personInRoom = (coResidents ? coResidents.length : 0) + 1; // Tenant + Co-residents
         if (personInRoom > personMax) {
-            throw new Error(`Số người ở (${personInRoom}) vượt quá giới hạn của loại phòng (tối đa ${personMax} người).`);
+            throw new Error(
+                `Số người ở (${personInRoom}) vượt quá giới hạn của loại phòng (tối đa ${personMax} người).`,
+            );
         }
 
         // 2. Always Create New Tenant Account
@@ -87,12 +96,16 @@ exports.createContract = async (req, res) => {
         let finalUsername = `${emailPrefix}${roomNameSanitized}`;
 
         // Ensure username is unique
-        const existingUser = await User.findOne({ username: finalUsername }).session(session);
+        const existingUser = await User.findOne({
+            username: finalUsername,
+        }).session(session);
         if (existingUser) {
             finalUsername = `${finalUsername}${Math.floor(100 + Math.random() * 900)}`;
         }
 
-        console.log(`[CREATE USER] Creating new Tenant: email=${tenantInfo.email}, phone=${tenantInfo.phone}, username=${finalUsername}`);
+        console.log(
+            `[CREATE USER] Creating new Tenant: email=${tenantInfo.email}, phone=${tenantInfo.phone}, username=${finalUsername}`,
+        );
 
         const user = new User({
             username: finalUsername,
@@ -120,30 +133,40 @@ exports.createContract = async (req, res) => {
         const endDate = new Date(contractDetails.startDate);
         endDate.setMonth(endDate.getMonth() + contractDetails.duration);
 
-        // Extract service IDs from the request (array of {serviceId, name, price, type})
-        const serviceIds = (contractDetails.services || []).map(s => s.serviceId || s);
-
         const newContract = new Contract({
             contractCode: generateContractCode(room.name),
             roomId: room._id,
             tenantId: user._id,
-            depositId: depositId || null,
             personInRoom,
             coResidents,
             startDate: contractDetails.startDate,
             endDate: endDate,
             duration: contractDetails.duration,
             status: "active",
-            services: serviceIds,
             images: req.body.images || [],
         });
 
         await newContract.save({ session });
 
-        // 4. NOT Update Room Status immediately to "Occupied"
-        // Phòng vẫn giữ trạng thái "Deposited" cho đến khi hợp đồng bắt đầu (trên startDate)
-        // Status sẽ được thay đổi bởi cron job hoặc trigger vào ngày startDate
-        // room.status = "Occupied";  // DISABLED: Status thay đổi khi ngày bắt đầu đến
+        // 4. Create BookService record (separate collection for service subscriptions)
+        if (bookServices && bookServices.length > 0) {
+            const bookServiceRecord = new BookService({
+                contractId: newContract._id,
+                services: bookServices.map((s) => {
+                    const entry = { serviceId: s.serviceId };
+                    // Only include quantity for quantity_based services (vehicle parking)
+                    if (s.category === "quantity_based" && s.quantity) {
+                        entry.quantity = s.quantity;
+                    }
+                    return entry;
+                }),
+            });
+            await bookServiceRecord.save({ session });
+        }
+
+        // 5. Update Room Status
+        room.status = "Occupied";
+        await room.save({ session });
 
         // 5. Deposit remains "Held" status when linked to a contract (no status change needed)
 
@@ -157,30 +180,37 @@ exports.createContract = async (req, res) => {
             tenantInfo.fullName,
             user.username,
             passwordRaw,
-            room.name
+            room.name,
         );
 
         try {
-            await sendEmail(recipientEmail, EMAIL_TEMPLATES.NEW_CONTRACT_ACCOUNT.subject, emailContent);
+            await sendEmail(
+                recipientEmail,
+                EMAIL_TEMPLATES.NEW_CONTRACT_ACCOUNT.subject,
+                emailContent,
+            );
             console.log(`✅ [DEBUG] Email successfully sent to ${recipientEmail}`);
         } catch (emailError) {
-            console.error(`❌ [DEBUG] Failed to send email to ${user.email}:`, emailError);
-            // We don't throw here to ensure the contract creation success is still returned, 
+            console.error(
+                `❌ [DEBUG] Failed to send email to ${user.email}:`,
+                emailError,
+            );
+            // We don't throw here to ensure the contract creation success is still returned,
             // but we might want to warn the user in the response if critical.
         }
 
         res.status(201).json({
             success: true,
-            message: "Contract created successfully. Account credentials sent to email.",
+            message:
+                "Contract created successfully. Account credentials sent to email.",
             data: {
                 contract: newContract,
                 account: {
                     username: user.username,
-                    password: passwordRaw
-                }
+                    password: passwordRaw,
+                },
             },
         });
-
     } catch (error) {
         await session.abortTransaction();
         session.endSession();
@@ -198,22 +228,21 @@ exports.getAllContracts = async (req, res) => {
             .populate({
                 path: "roomId",
                 select: "name customId status roomTypeId",
-                populate: { path: "roomTypeId", select: "typeName currentPrice" }
+                populate: { path: "roomTypeId", select: "typeName currentPrice" },
             })
             .populate("tenantId", "username email phoneNumber")
-            .populate("services", "name currentPrice type")
             .sort({ createdAt: -1 });
 
         res.status(200).json({
             success: true,
             count: contracts.length,
-            data: contracts
+            data: contracts,
         });
     } catch (error) {
         console.error("Get All Contracts Error:", error);
         res.status(500).json({
             success: false,
-            message: "Server Error"
+            message: "Server Error",
         });
     }
 };
@@ -226,31 +255,38 @@ exports.getContractById = async (req, res) => {
                 select: "name roomCode status roomTypeId floorId",
                 populate: [
                     { path: "roomTypeId", select: "typeName currentPrice personMax" },
-                    { path: "floorId", select: "name" }
-                ]
+                    { path: "floorId", select: "name" },
+                ],
             })
-            .populate("tenantId", "username email phoneNumber")
-            .populate("services", "name currentPrice type");
+            .populate("tenantId", "username email phoneNumber");
 
         if (!contract) {
-            return res.status(404).json({ success: false, message: "Contract not found" });
+            return res
+                .status(404)
+                .json({ success: false, message: "Contract not found" });
         }
 
         // Fetch tenant's UserInfo separately
-        const tenantInfo = await UserInfo.findOne({ userId: contract.tenantId._id });
+        const tenantInfo = await UserInfo.findOne({
+            userId: contract.tenantId._id,
+        });
 
         // Convert to plain object and fix Decimal128 fields
         const contractData = contract.toObject();
 
         // Fix roomType currentPrice (Decimal128 → Number)
         if (contractData.roomId?.roomTypeId?.currentPrice) {
-            contractData.roomId.roomTypeId.currentPrice = parseFloat(contractData.roomId.roomTypeId.currentPrice.toString());
+            contractData.roomId.roomTypeId.currentPrice = parseFloat(
+                contractData.roomId.roomTypeId.currentPrice.toString(),
+            );
         }
         // Fix service currentPrice (Decimal128 → Number)
         if (contractData.services) {
-            contractData.services = contractData.services.map(s => ({
+            contractData.services = contractData.services.map((s) => ({
                 ...s,
-                currentPrice: s.currentPrice ? parseFloat(s.currentPrice.toString()) : 0
+                currentPrice: s.currentPrice
+                    ? parseFloat(s.currentPrice.toString())
+                    : 0,
             }));
         }
 
@@ -258,14 +294,14 @@ exports.getContractById = async (req, res) => {
             success: true,
             data: {
                 ...contractData,
-                tenantInfo: tenantInfo ? tenantInfo.toObject() : null
-            }
+                tenantInfo: tenantInfo ? tenantInfo.toObject() : null,
+            },
         });
     } catch (error) {
         console.error("Get Contract By ID Error:", error);
         res.status(500).json({
             success: false,
-            message: "Server Error"
+            message: "Server Error",
         });
     }
 };
@@ -321,18 +357,20 @@ exports.getMyContracts = async (req, res) => {
 exports.uploadContractImages = async (req, res) => {
     try {
         if (!req.files || req.files.length === 0) {
-            return res.status(400).json({ success: false, message: "No files uploaded" });
+            return res
+                .status(400)
+                .json({ success: false, message: "No files uploaded" });
         }
-        const imageUrls = req.files.map(file => file.path);
+        const imageUrls = req.files.map((file) => file.path);
         res.status(200).json({
             success: true,
-            data: imageUrls
+            data: imageUrls,
         });
     } catch (error) {
         console.error("Upload Contract Images Error:", error);
         res.status(500).json({
             success: false,
-            message: "Upload failed: " + (error.message || "Internal Server Error")
+            message: "Upload failed: " + (error.message || "Internal Server Error"),
         });
     }
 };
