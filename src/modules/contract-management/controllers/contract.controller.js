@@ -254,6 +254,17 @@ exports.getContractById = async (req, res) => {
       userId: contract.tenantId._id,
     });
 
+    // Fetch BookService for this contract (with populated service names/prices)
+    const bookServiceRecord = await BookService.findOne({
+      contractId: contract._id,
+    }).populate("services.serviceId", "name currentPrice type description");
+
+    // Fetch room assets/devices
+    const RoomDevice = require("../../room-floor-management/models/roomdevices.model");
+    const roomAssets = await RoomDevice.find({
+      roomTypeId: contract.roomId?.roomTypeId?._id,
+    }).populate("deviceId", "name brand model unit");
+
     // Convert to plain object and fix Decimal128 fields
     const contractData = contract.toObject();
 
@@ -273,11 +284,33 @@ exports.getContractById = async (req, res) => {
       }));
     }
 
+    // Map bookServices with populated data
+    const bookServices = bookServiceRecord
+      ? bookServiceRecord.services.map((s) => ({
+          serviceId: s.serviceId?._id,
+          name: s.serviceId?.name || "—",
+          currentPrice: s.serviceId?.currentPrice
+            ? parseFloat(s.serviceId.currentPrice.toString())
+            : 0,
+          type: s.serviceId?.type || "",
+          quantity: s.quantity || null,
+        }))
+      : [];
+
+    // Map room assets
+    const assets = roomAssets.map((a) => ({
+      deviceId: a.deviceId,
+      quantity: a.quantity,
+      condition: a.condition,
+    }));
+
     res.status(200).json({
       success: true,
       data: {
         ...contractData,
         tenantInfo: tenantInfo ? tenantInfo.toObject() : null,
+        bookServices,
+        assets,
       },
     });
   } catch (error) {
