@@ -47,6 +47,25 @@ exports.createContract = async (req, res) => {
             if (room.status === "Occupied") throw new Error("Room is currently occupied.");
         }
 
+        // 1.5. Validate startDate: chỉ được tối đa 7 ngày từ khi bắt đầu cọc (nếu có deposit)
+        if (depositId) {
+            const deposit = await Deposit.findById(depositId).session(session);
+            if (deposit) {
+                const depositCreatedDate = new Date(deposit.createdAt);
+                const maxStartDate = new Date(depositCreatedDate.getTime() + 7 * 24 * 60 * 60 * 1000);
+                const contractStartDate = new Date(contractDetails.startDate);
+
+                if (contractStartDate > maxStartDate) {
+                    throw new Error(
+                        `Ngày bắt đầu thuê không được quá 7 ngày từ khi đặt cọc. ` +
+                        `Ngày cọc: ${depositCreatedDate.toLocaleDateString('vi-VN')}, ` +
+                        `Hạn cuối: ${maxStartDate.toLocaleDateString('vi-VN')}, ` +
+                        `Ngày bắt đầu: ${contractStartDate.toLocaleDateString('vi-VN')}`
+                    );
+                }
+            }
+        }
+
         // Get room price and deposit from roomType
         const roomPrice = parseFloat(room.roomTypeId?.currentPrice?.toString() || "0");
         const depositAmount = roomPrice; // Deposit = 1 month rent
@@ -121,9 +140,10 @@ exports.createContract = async (req, res) => {
 
         await newContract.save({ session });
 
-        // 4. Update Room Status
-        room.status = "Occupied";
-        await room.save({ session });
+        // 4. NOT Update Room Status immediately to "Occupied"
+        // Phòng vẫn giữ trạng thái "Deposited" cho đến khi hợp đồng bắt đầu (trên startDate)
+        // Status sẽ được thay đổi bởi cron job hoặc trigger vào ngày startDate
+        // room.status = "Occupied";  // DISABLED: Status thay đổi khi ngày bắt đầu đến
 
         // 5. Deposit remains "Held" status when linked to a contract (no status change needed)
 

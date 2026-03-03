@@ -222,26 +222,13 @@ exports.sepayWebhook = async (req, res) => {
             return res.status(200).json({ success: true, message: "Amount mismatch" });
         }
 
-        // --- 5. Sinh mã codeDeposit: CHN-P310-020226 ---
-        const generateCodeDeposit = (roomName) => {
-            const now = new Date();
-            const day = String(now.getDate()).padStart(2, '0');
-            const month = String(now.getMonth() + 1).padStart(2, '0');
-            const year = String(now.getFullYear()).slice(-2); // Lấy 2 số cuối năm
-            const dateStr = `${day}${month}${year}`; // DDMMYY
-            const roomShort = roomName.replace(/Phòng\s*/gi, 'P').replace(/[^a-zA-Z0-9]/g, '');
-            return `CHN-${roomShort}-${dateStr}`;
-        };
-
-        const roomForCode = await Room.findById(deposit.room._id || deposit.room);
-        const codeDeposit = generateCodeDeposit(roomForCode?.name || 'P000');
-
-        // --- 6. Cập nhật trạng thái Deposit → "Held" ---
+        // --- 5. Cập nhật trạng thái Deposit → "Held" + Thiết lập hết hạn 7 ngày ---
         deposit.status = "Held";
-        deposit.codeDeposit = codeDeposit;
+        // Thiết lập hết hạn = 7 ngày kể từ thanh toán thành công
+        deposit.expireAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
         await deposit.save();
 
-        // --- 6.5 Tạo Payment record với status "Success" ---
+        // --- 6. Tạo Payment record với status "Success" ---
         const payment = new Payment({
             depositId: deposit._id,
             amount: transferAmount,
@@ -253,6 +240,7 @@ exports.sepayWebhook = async (req, res) => {
         console.log(`[SEPAY WEBHOOK] ✅ Payment created: ${payment._id}`);
 
         // --- 7. Cập nhật trạng thái Phòng → "Deposited" ---
+        const roomForCode = await Room.findById(deposit.room._id || deposit.room);
         if (roomForCode) {
             roomForCode.status = "Deposited";
             await roomForCode.save();
