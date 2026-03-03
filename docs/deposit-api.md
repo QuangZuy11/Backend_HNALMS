@@ -122,7 +122,11 @@ GET /deposits/status/HNLMS1709123456789
 | `Refunded` | `Available` | Đã hoàn tiền cọc |
 | `Forfeited` | `Available` | Mất cọc (vi phạm hợp đồng) |
 
-> **Lưu ý:** Khi hết 5 phút chưa thanh toán, deposit sẽ bị **XÓA** khỏi database, chỉ lưu lại Payment với status `Failed`.
+> **Lưu ý về Trạng thái phòng:**
+> - Khi **deposited thành công**: Trạng thái phòng = `Deposited` (giữ phòng)
+> - Khi **tạo hợp đồng**: Trạng thái phòng vẫn = `Deposited` (KHÔNG đổi ngay)
+> - Khi **đến ngày bắt đầu thuê**: Trạng thái phòng tự động = `Occupied` (qua cron job hàng ngày)
+> - Khi hết 5 phút chưa thanh toán, deposit sẽ bị **XÓA** khỏi database, chỉ lưu lại Payment với status `Failed`.
 
 #### Response Errors
 | Status | Message |
@@ -193,6 +197,39 @@ POST /deposits/webhook/sepay
   "content": "HNLMS1709123456789 dat coc phong",
   "transferType": "in"
 }
+```
+
+---
+
+### 5. Quy tắc về Ngày Bắt Đầu Thuê (Contract Start Date)
+
+Khi tạo hợp đồng sau khi đặt cọc, **ngày bắt đầu thuê** phải tuân theo quy tắc sau:
+
+#### Quy tắc
+- **Không được vượt quá 7 ngày** tính từ ngày bắt đầu cọc
+- Nếu ngày bắt đầu thuê > 7 ngày từ ngày cọc → Hệ thống sẽ từ chối tạo hợp đồng
+
+#### Ví dụ
+| Ngày Cọc | Hạn Cuối | Ngày Bắt Đầu | Kết Quả | Ghi Chú |
+|----------|----------|--------------|--------|--------|
+| 03/03/2026 | 10/03/2026 | 09/03/2026 | ✅ Hợp lệ | Còn 1 ngày |
+| 03/03/2026 | 10/03/2026 | 10/03/2026 | ❌ Không hợp lệ | Đúng hạn nhưng vượt |
+| 03/03/2026 | 10/03/2026 | 11/03/2026 | ❌ Không hợp lệ | Quá hạn 1 ngày |
+
+#### Quy Trình Thay Đổi Trạng Thái Phòng
+```
+STEP 1: Thanh toán cọc thành công
+         ├─ Deposit Status: Pending → Held
+         └─ Room Status: Available → Deposited
+
+STEP 2: Tạo hợp đồng (ngay hoặc sau)
+         ├─ Check: startDate phải ≤ 7 ngày từ ngày cọc
+         ├─ Nếu FAIL → Lỗi, không tạo hợp đồng
+         └─ Nếu OK → Tạo hợp đồng
+            └─ Room Status: Vẫn DEPOSITED (chưa đổi)
+
+STEP 3: Khi đến ngày bắt đầu hợp đồng (Cron Job)
+         └─ Room Status: Deposited → Occupied (tự động lúc 00:01)
 ```
 
 ---

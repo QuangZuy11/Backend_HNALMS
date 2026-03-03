@@ -18,11 +18,6 @@ const contractSchema = new Schema(
       ref: "User",
       required: true,
     },
-    // Optional: link to a deposit if created from one
-    depositId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Deposits",
-    },
     // Number of people staying
     personInRoom: {
       type: Number,
@@ -36,7 +31,7 @@ const contractSchema = new Schema(
         cccd: String,
         phone: String,
         _id: false,
-      }
+      },
     ],
     startDate: {
       type: Date,
@@ -54,16 +49,9 @@ const contractSchema = new Schema(
     },
     status: {
       type: String,
-      enum: ["active", "expired", "terminated", "pending"], // added 'terminated' and 'pending'
+      enum: ["active", "expired", "terminated", "pending"],
       default: "active",
     },
-    // Services included in this contract (monthly Fixed services)
-    services: [
-      {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "Service",
-      }
-    ],
     // Terms & Conditions (Optional snapshot or ref)
     terms: {
       content: String, // Or link to a static terms file
@@ -72,7 +60,7 @@ const contractSchema = new Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 const Contract = mongoose.model("Contracts", contractSchema, "contracts");

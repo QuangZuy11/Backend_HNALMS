@@ -2,6 +2,7 @@ require("dotenv").config();
 const app = require("./src/app");
 const emailService = require("./src/modules/notification-management/services/email.service");
 const { startDepositExpirationJob } = require("./src/shared/jobs/deposit-expiration.job");
+const contractStartJob = require("./src/modules/contract-management/jobs/contract-start.job");
 
 const PORT = process.env.PORT || 9999;
 
@@ -12,4 +13,5 @@ app.listen(PORT, async () => {
     await emailService.verifyEmailConfig();
     // Start cron jobs
     startDepositExpirationJob();
+    contractStartJob();
 });
