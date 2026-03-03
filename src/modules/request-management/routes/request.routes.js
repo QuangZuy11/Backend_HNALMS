@@ -40,6 +40,20 @@ router.get(
 );
 
 /**
+ * Lấy invoiceCode kế tiếp cho hóa đơn sửa chữa
+ * GET /api/requests/repair/next-invoice-code
+ * Chỉ dành cho role manager
+ *
+ * NOTE: route này phải đặt TRƯỚC /repair/:requestId để tránh bị match nhầm.
+ */
+router.get(
+  "/repair/next-invoice-code",
+  authenticate,
+  authorize("manager"),
+  requestController.getNextRepairInvoiceCode
+);
+
+/**
  * Lấy danh sách yêu cầu sửa chữa của tenant hiện tại
  * GET /api/requests/repair/my-requests
  * Dành cho tenant

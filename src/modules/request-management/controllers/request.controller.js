@@ -305,3 +305,24 @@ exports.deleteRepairRequest = async (req, res) => {
     });
   }
 };
+
+/**
+ * Lấy invoiceCode kế tiếp cho hóa đơn sửa chữa (manager)
+ * GET /api/requests/repair/next-invoice-code
+ */
+exports.getNextRepairInvoiceCode = async (req, res) => {
+  try {
+    const invoiceCode = await requestService.getNextRepairInvoiceCode();
+    res.json({
+      success: true,
+      message: "Lấy mã hóa đơn sửa chữa kế tiếp thành công",
+      data: { invoiceCode },
+    });
+  } catch (error) {
+    console.error("Get next repair invoice code error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Server error",
+    });
+  }
+};

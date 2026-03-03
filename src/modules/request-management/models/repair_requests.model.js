@@ -29,7 +29,7 @@ const RepairRequestSchema = new Schema({
   },
   status: {
     type: String,
-    enum: ["Pending", "Processing", "Done"],
+    enum: ["Pending", "Processing", "Done", "Unpair"],
     required: true,
     default: "Pending"
   },
@@ -46,10 +46,8 @@ const RepairRequestSchema = new Schema({
     enum: ["REVENUE", "EXPENSE"],
     default: null,
   },
-  // Trạng thái thanh toán: tách riêng với trạng thái xử lý (status)
-  // - NONE   : chưa phát sinh nghĩa vụ thanh toán (mới tạo, đang xử lý, hoặc sửa miễn phí không cần thu)
-  // - UNPAID : đã phát sinh hóa đơn nhưng cư dân chưa thanh toán (chờ thanh toán)
-  // - PAID   : hóa đơn/phiếu chi đã hoàn tất
+  // (Deprecated) Trạng thái thanh toán: không còn dùng cho luồng yêu cầu sửa chữa.
+  // Luồng "sửa chữa có phí" dùng status = Unpair thay cho paymentStatus.
   paymentStatus: {
     type: String,
     enum: ["NONE", "UNPAID", "PAID"],
