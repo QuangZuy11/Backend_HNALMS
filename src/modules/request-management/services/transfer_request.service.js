@@ -65,7 +65,11 @@ const getAvailableRoomsForTransfer = async (tenantId) => {
   // Kiểm tra tenant có hợp đồng active không
   const contract = await Contract.findOne({ tenantId, status: "active" });
   if (!contract) {
-    throw { status: 400, message: "Bạn không có hợp đồng hiệu lực. Không thể yêu cầu chuyển phòng." };
+    throw {
+      status: 400,
+      message:
+        "Bạn không có hợp đồng hiệu lực. Không thể yêu cầu chuyển phòng.",
+    };
   }
 
   // Lấy danh sách phòng Available (loại trừ phòng hiện tại)
@@ -75,13 +79,18 @@ const getAvailableRoomsForTransfer = async (tenantId) => {
     _id: { $ne: contract.roomId },
   })
     .populate("floorId", "name")
-    .populate("roomTypeId", "typeName currentPrice personMax description images")
+    .populate(
+      "roomTypeId",
+      "typeName currentPrice personMax description images",
+    )
     .lean();
 
   // Fix Decimal128
   const data = rooms.map((room) => {
     if (room.roomTypeId?.currentPrice) {
-      room.roomTypeId.currentPrice = parseFloat(room.roomTypeId.currentPrice.toString());
+      room.roomTypeId.currentPrice = parseFloat(
+        room.roomTypeId.currentPrice.toString(),
+      );
     }
     return room;
   });
@@ -96,14 +105,20 @@ const createTransferRequest = async (tenantId, body) => {
   const { targetRoomId, transferDate, reason } = body;
 
   // 1. Kiểm tra tenant có hợp đồng active
-  const contract = await Contract.findOne({ tenantId, status: "active" })
-    .populate({
-      path: "roomId",
-      populate: { path: "roomTypeId", select: "currentPrice typeName" },
-    });
+  const contract = await Contract.findOne({
+    tenantId,
+    status: "active",
+  }).populate({
+    path: "roomId",
+    populate: { path: "roomTypeId", select: "currentPrice typeName" },
+  });
 
   if (!contract) {
-    throw { status: 400, message: "Bạn không có hợp đồng hiệu lực. Không thể yêu cầu chuyển phòng." };
+    throw {
+      status: 400,
+      message:
+        "Bạn không có hợp đồng hiệu lực. Không thể yêu cầu chuyển phòng.",
+    };
   }
 
   // 2. Kiểm tra tenant không có yêu cầu chuyển phòng đang Pending
@@ -112,7 +127,11 @@ const createTransferRequest = async (tenantId, body) => {
     status: "Pending",
   });
   if (existingPending) {
-    throw { status: 400, message: "Bạn đã có một yêu cầu chuyển phòng đang chờ duyệt. Vui lòng đợi kết quả trước khi tạo yêu cầu mới." };
+    throw {
+      status: 400,
+      message:
+        "Bạn đã có một yêu cầu chuyển phòng đang chờ duyệt. Vui lòng đợi kết quả trước khi tạo yêu cầu mới.",
+    };
   }
 
   // Kiểm tra không có yêu cầu đã Approved chưa Completed
@@ -121,16 +140,26 @@ const createTransferRequest = async (tenantId, body) => {
     status: "Approved",
   });
   if (existingApproved) {
-    throw { status: 400, message: "Bạn đã có yêu cầu chuyển phòng được duyệt đang chờ bàn giao. Vui lòng hoàn tất trước khi tạo yêu cầu mới." };
+    throw {
+      status: 400,
+      message:
+        "Bạn đã có yêu cầu chuyển phòng được duyệt đang chờ bàn giao. Vui lòng hoàn tất trước khi tạo yêu cầu mới.",
+    };
   }
 
   // 3. Kiểm tra phòng mới
-  const targetRoom = await Room.findById(targetRoomId).populate("roomTypeId", "currentPrice typeName personMax");
+  const targetRoom = await Room.findById(targetRoomId).populate(
+    "roomTypeId",
+    "currentPrice typeName personMax",
+  );
   if (!targetRoom) {
     throw { status: 404, message: "Phòng muốn chuyển đến không tồn tại." };
   }
   if (targetRoom.status !== "Available") {
-    throw { status: 400, message: "Phòng muốn chuyển đến không ở trạng thái Trống (Available)." };
+    throw {
+      status: 400,
+      message: "Phòng muốn chuyển đến không ở trạng thái Trống (Available).",
+    };
   }
   if (!targetRoom.isActive) {
     throw { status: 400, message: "Phòng muốn chuyển đến đang bị tạm ngưng." };
@@ -138,15 +167,20 @@ const createTransferRequest = async (tenantId, body) => {
 
   // 4. Không cho chuyển vào chính phòng mình
   if (contract.roomId._id.toString() === targetRoomId) {
-    throw { status: 400, message: "Không thể chuyển vào chính phòng bạn đang ở." };
+    throw {
+      status: 400,
+      message: "Không thể chuyển vào chính phòng bạn đang ở.",
+    };
   }
 
   // 5. Kiểm tra số người ở hiện tại <= personMax phòng mới
   const personMax = targetRoom.roomTypeId?.personMax || 1;
-  if (contract.personInRoom > personMax) {
+  const totalPeople =
+    (contract.coResidents ? contract.coResidents.length : 0) + 1;
+  if (totalPeople > personMax) {
     throw {
       status: 400,
-      message: `Số người hiện tại (${contract.personInRoom}) vượt quá giới hạn phòng mới (tối đa ${personMax} người).`,
+      message: `Số người hiện tại (${totalPeople}) vượt quá giới hạn phòng mới (tối đa ${personMax} người).`,
     };
   }
 
@@ -155,12 +189,19 @@ const createTransferRequest = async (tenantId, body) => {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   if (transferDateObj < today) {
-    throw { status: 400, message: "Ngày chuyển phòng không được là ngày trong quá khứ." };
+    throw {
+      status: 400,
+      message: "Ngày chuyển phòng không được là ngày trong quá khứ.",
+    };
   }
 
   // 7. Tính toán chênh lệch tiền thuê (proration)
-  const oldPrice = parseFloat(contract.roomId.roomTypeId?.currentPrice?.toString() || "0");
-  const newPrice = parseFloat(targetRoom.roomTypeId?.currentPrice?.toString() || "0");
+  const oldPrice = parseFloat(
+    contract.roomId.roomTypeId?.currentPrice?.toString() || "0",
+  );
+  const newPrice = parseFloat(
+    targetRoom.roomTypeId?.currentPrice?.toString() || "0",
+  );
   const proration = calculateProration(oldPrice, newPrice, transferDateObj);
 
   // 8. Tạo yêu cầu
@@ -198,7 +239,7 @@ const createTransferRequest = async (tenantId, body) => {
   // Fix Decimal128
   if (populated.targetRoomId?.roomTypeId?.currentPrice) {
     populated.targetRoomId.roomTypeId.currentPrice = parseFloat(
-      populated.targetRoomId.roomTypeId.currentPrice.toString()
+      populated.targetRoomId.roomTypeId.currentPrice.toString(),
     );
   }
 
@@ -230,7 +271,7 @@ const getMyTransferRequests = async (tenantId) => {
   return requests.map((r) => {
     if (r.targetRoomId?.roomTypeId?.currentPrice) {
       r.targetRoomId.roomTypeId.currentPrice = parseFloat(
-        r.targetRoomId.roomTypeId.currentPrice.toString()
+        r.targetRoomId.roomTypeId.currentPrice.toString(),
       );
     }
     return r;
@@ -246,7 +287,10 @@ const cancelTransferRequest = async (tenantId, requestId) => {
     throw { status: 404, message: "Không tìm thấy yêu cầu chuyển phòng." };
   }
   if (request.status !== "Pending") {
-    throw { status: 400, message: `Không thể hủy yêu cầu ở trạng thái "${request.status}". Chỉ có thể hủy khi đang chờ duyệt.` };
+    throw {
+      status: 400,
+      message: `Không thể hủy yêu cầu ở trạng thái "${request.status}". Chỉ có thể hủy khi đang chờ duyệt.`,
+    };
   }
 
   request.status = "Cancelled";

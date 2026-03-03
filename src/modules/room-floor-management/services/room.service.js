@@ -170,7 +170,9 @@ exports.getRoomDetail = async (roomId) => {
 
     const roomData = room.toObject();
     if (roomData.roomTypeId && roomData.roomTypeId.currentPrice) {
-      roomData.roomTypeId.currentPrice = parseFloat(roomData.roomTypeId.currentPrice.toString());
+      roomData.roomTypeId.currentPrice = parseFloat(
+        roomData.roomTypeId.currentPrice.toString(),
+      );
     }
     roomData.assets = roomAssets;
     return roomData;
@@ -276,7 +278,7 @@ exports.importRoomsFromFile = async (file) => {
     }
 
     const floorId = floorMap.get(String(floorName).trim().toLowerCase());
-    
+
     // [SỬA Ở ĐÂY 2] Lấy ra object RoomType tương ứng thay vì chỉ lấy ID
     const roomTypeData = typeMap.get(String(typeName).trim().toLowerCase());
 
@@ -305,7 +307,7 @@ exports.importRoomsFromFile = async (file) => {
       roomCode: String(roomCode),
       name: String(name),
       floorId,
-      roomTypeId: roomTypeData._id,         // ID của loại phòng
+      roomTypeId: roomTypeData._id, // ID của loại phòng
       price: roomTypeData.currentPrice || 0, // <--- ĐÂY LÀ DÒNG QUAN TRỌNG NHẤT
       personMax: roomTypeData.personMax || 1, // (Tùy chọn) Có thể kế thừa luôn số người tối đa
       description: desc,
@@ -352,7 +354,7 @@ exports.getMyRoom = async (tenantId) => {
   // Tìm hợp đồng hoạt động của tenant
   const contract = await Contract.findOne({
     tenantId: tenantObjectId,
-    status: "active"
+    status: "active",
   })
     .populate({
       path: "roomId",
@@ -360,34 +362,40 @@ exports.getMyRoom = async (tenantId) => {
       populate: [
         {
           path: "floorId",
-          select: "name description status"
+          select: "name description status",
         },
         {
           path: "roomTypeId",
-          select: "typeName currentPrice description images personMax status"
-        }
-      ]
+          select: "typeName currentPrice description images personMax status",
+        },
+      ],
     })
     .populate({
       path: "depositCode",
-      select: "name phone email room amount status createdDate"
+      select: "name phone email room amount status createdDate",
     })
     .lean();
 
   if (!contract) {
-    throw { status: 404, message: "Không tìm thấy hợp đồng hoạt động. Bạn không đang thuê phòng nào." };
+    throw {
+      status: 404,
+      message:
+        "Không tìm thấy hợp đồng hoạt động. Bạn không đang thuê phòng nào.",
+    };
   }
 
   console.log("✅ Tìm thấy contract:", {
     contractCode: contract.contractCode,
     roomId: contract.roomId?._id,
-    depositCode: contract.depositCode?._id
+    depositCode: contract.depositCode?._id,
   });
 
   // Lấy thiết bị/tài sản của phòng
   let assets = [];
   if (contract.roomId && contract.roomId.roomTypeId) {
-    assets = await RoomDevice.find({ roomTypeId: contract.roomId.roomTypeId._id })
+    assets = await RoomDevice.find({
+      roomTypeId: contract.roomId.roomTypeId._id,
+    })
       .populate("deviceId", "name brand model type")
       .lean();
   }
@@ -397,12 +405,11 @@ exports.getMyRoom = async (tenantId) => {
     contract: {
       _id: contract._id,
       contractCode: contract.contractCode,
-      personInRoom: contract.personInRoom,
       startDate: contract.startDate,
       endDate: contract.endDate,
       status: contract.status,
       image: contract.image || [],
-      deposit: contract.depositCode || null
+      deposit: contract.depositCode || null,
     },
     room: {
       _id: contract.roomId._id,
@@ -413,7 +420,7 @@ exports.getMyRoom = async (tenantId) => {
       isActive: contract.roomId.isActive,
       floor: contract.roomId.floorId || null,
       roomType: contract.roomId.roomTypeId || null,
-      assets: assets || []
-    }
+      assets: assets || [],
+    },
   };
 };

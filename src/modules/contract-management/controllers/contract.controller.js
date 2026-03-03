@@ -61,12 +61,12 @@ exports.createContract = async (req, res) => {
     );
     const depositAmount = roomPrice; // Deposit = 1 month rent
 
-    // Validate personInRoom <= personMax from roomType
+    // Validate co-residents count <= personMax from roomType
     const personMax = room.roomTypeId?.personMax || 1;
-    const personInRoom = (coResidents ? coResidents.length : 0) + 1; // Tenant + Co-residents
-    if (personInRoom > personMax) {
+    const totalPeople = (coResidents ? coResidents.length : 0) + 1; // Tenant + Co-residents
+    if (totalPeople > personMax) {
       throw new Error(
-        `Số người ở (${personInRoom}) vượt quá giới hạn của loại phòng (tối đa ${personMax} người).`,
+        `Số người ở (${totalPeople}) vượt quá giới hạn của loại phòng (tối đa ${personMax} người).`,
       );
     }
 
@@ -121,7 +121,6 @@ exports.createContract = async (req, res) => {
       contractCode: generateContractCode(room.name),
       roomId: room._id,
       tenantId: user._id,
-      personInRoom,
       coResidents,
       startDate: contractDetails.startDate,
       endDate: endDate,
@@ -292,49 +291,61 @@ exports.getContractById = async (req, res) => {
 
 // Tenant xem hợp đồng của mình
 exports.getMyContracts = async (req, res) => {
-    try {
-        const tenantId = req.user?.userId;
-        if (!tenantId) {
-            return res.status(401).json({ success: false, message: "Unauthorized - Không tìm thấy thông tin người dùng" });
-        }
-
-        const contracts = await Contract.find({ tenantId })
-            .populate({
-                path: "roomId",
-                select: "name roomCode status roomTypeId floorId",
-                populate: [
-                    { path: "roomTypeId", select: "typeName currentPrice personMax description images" },
-                    { path: "floorId", select: "name" }
-                ]
-            })
-            .populate("depositId", "name phone email room amount status createdDate")
-            .populate("services", "name currentPrice type")
-            .sort({ createdAt: -1 })
-            .lean();
-
-        // Fix Decimal128 fields
-        const data = contracts.map(c => {
-            if (c.roomId?.roomTypeId?.currentPrice) {
-                c.roomId.roomTypeId.currentPrice = parseFloat(c.roomId.roomTypeId.currentPrice.toString());
-            }
-            if (c.services) {
-                c.services = c.services.map(s => ({
-                    ...s,
-                    currentPrice: s.currentPrice ? parseFloat(s.currentPrice.toString()) : 0
-                }));
-            }
-            return c;
-        });
-
-        res.status(200).json({
-            success: true,
-            count: data.length,
-            data
-        });
-    } catch (error) {
-        console.error("Get My Contracts Error:", error);
-        res.status(500).json({ success: false, message: error.message || "Server Error" });
+  try {
+    const tenantId = req.user?.userId;
+    if (!tenantId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized - Không tìm thấy thông tin người dùng",
+      });
     }
+
+    const contracts = await Contract.find({ tenantId })
+      .populate({
+        path: "roomId",
+        select: "name roomCode status roomTypeId floorId",
+        populate: [
+          {
+            path: "roomTypeId",
+            select: "typeName currentPrice personMax description images",
+          },
+          { path: "floorId", select: "name" },
+        ],
+      })
+      .populate("depositId", "name phone email room amount status createdDate")
+      .populate("services", "name currentPrice type")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    // Fix Decimal128 fields
+    const data = contracts.map((c) => {
+      if (c.roomId?.roomTypeId?.currentPrice) {
+        c.roomId.roomTypeId.currentPrice = parseFloat(
+          c.roomId.roomTypeId.currentPrice.toString(),
+        );
+      }
+      if (c.services) {
+        c.services = c.services.map((s) => ({
+          ...s,
+          currentPrice: s.currentPrice
+            ? parseFloat(s.currentPrice.toString())
+            : 0,
+        }));
+      }
+      return c;
+    });
+
+    res.status(200).json({
+      success: true,
+      count: data.length,
+      data,
+    });
+  } catch (error) {
+    console.error("Get My Contracts Error:", error);
+    res
+      .status(500)
+      .json({ success: false, message: error.message || "Server Error" });
+  }
 };
 
 // Upload contract images to Cloudinary
