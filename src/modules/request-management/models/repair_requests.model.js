@@ -46,13 +46,7 @@ const RepairRequestSchema = new Schema({
     enum: ["REVENUE", "EXPENSE"],
     default: null,
   },
-  // (Deprecated) Trạng thái thanh toán: không còn dùng cho luồng yêu cầu sửa chữa.
-  // Luồng "sửa chữa có phí" dùng status = Unpair thay cho paymentStatus.
-  paymentStatus: {
-    type: String,
-    enum: ["NONE", "UNPAID", "PAID"],
-    default: "NONE",
-  },
+ 
   createdDate: {
     type: Date,
     default: Date.now

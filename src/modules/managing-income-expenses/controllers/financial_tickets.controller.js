@@ -123,7 +123,65 @@ const getPaymentTickets = async (req, res) => {
   }
 };
 
+/**
+ * PATCH /api/financial-tickets/:id/status
+ * Cập nhật trạng thái thanh toán cho phiếu chi (Payment)
+ * Body: { status: "Paid" | "Unpaid" }
+ */
+const updatePaymentTicketStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body || {};
+
+    const allowed = ["Paid", "Unpaid"];
+    if (!allowed.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Trạng thái không hợp lệ. Chỉ chấp nhận "Paid" hoặc "Unpaid".',
+      });
+    }
+
+    const updateQuery = {
+      $set: {
+        status,
+      },
+    };
+
+    if (status === "Paid") {
+      updateQuery.$set.accountantPaidAt = new Date();
+    } else {
+      updateQuery.$set.accountantPaidAt = null;
+    }
+
+    const updated = await FinancialTicket.findOneAndUpdate(
+      { _id: id, type: "Payment" },
+      updateQuery,
+      { new: true }
+    ).lean();
+
+    if (!updated) {
+      return res.status(404).json({
+        success: false,
+        message: "Không tìm thấy phiếu chi",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: updated,
+      message: "Cập nhật trạng thái thành công",
+    });
+  } catch (error) {
+    console.error("Error updating payment ticket status:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Không thể cập nhật trạng thái phiếu chi",
+    });
+  }
+};
+
 module.exports = {
   getPaymentTickets,
+  updatePaymentTicketStatus,
 };
 

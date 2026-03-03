@@ -54,6 +54,30 @@ router.get(
 );
 
 /**
+ * Lấy paymentVoucher kế tiếp cho phiếu chi sửa chữa miễn phí
+ * GET /api/requests/repair/next-payment-voucher
+ * Chỉ dành cho role manager
+ */
+router.get(
+  "/repair/next-payment-voucher",
+  authenticate,
+  authorize("manager"),
+  requestController.getNextRepairPaymentVoucher
+);
+
+/**
+ * Lấy paymentVoucher kế tiếp cho phiếu chi bảo trì
+ * GET /api/requests/maintenance/next-payment-voucher
+ * Chỉ dành cho role manager
+ */
+router.get(
+  "/maintenance/next-payment-voucher",
+  authenticate,
+  authorize("manager"),
+  requestController.getNextMaintenancePaymentVoucher
+);
+
+/**
  * Lấy danh sách yêu cầu sửa chữa của tenant hiện tại
  * GET /api/requests/repair/my-requests
  * Dành cho tenant

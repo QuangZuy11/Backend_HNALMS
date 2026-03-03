@@ -8,6 +8,8 @@ const Invoice = require("../../invoice-management/models/invoice.model");
 const FinancialTicket = require("../../managing-income-expenses/models/financial_tickets");
 
 const REPAIR_INVOICE_PREFIX = "INV-RP-";
+const PAYMENT_VOUCHER_PREFIX = "PMV-RP-";
+const MAINTENANCE_PAYMENT_VOUCHER_PREFIX = "PMV-MT-";
 
 // Helper: chuẩn hoá chuỗi tiếng Việt để tìm kiếm không phân biệt dấu, hoa/thường
 const normalizeVietnamese = (str = "") =>
@@ -422,6 +424,94 @@ const getNextRepairInvoiceCode = async () => {
 };
 
 /**
+ * Lấy paymentVoucher kế tiếp cho phiếu chi sửa chữa miễn phí (manager)
+ * Format: PMV-RP-XXXX (4 số, tăng dần)
+ * @returns {string} paymentVoucher
+ */
+const getNextPaymentVoucherCode = async () => {
+  const latest = await FinancialTicket.findOne({
+    type: "Payment",
+    paymentVoucher: { $regex: `^${PAYMENT_VOUCHER_PREFIX}\\d{4}$` },
+  })
+    .select("paymentVoucher")
+    .sort({ paymentVoucher: -1 })
+    .lean();
+
+  let nextNumber = 1;
+  if (latest?.paymentVoucher) {
+    const suffix = latest.paymentVoucher.slice(PAYMENT_VOUCHER_PREFIX.length);
+    const parsed = parseInt(suffix, 10);
+    if (!Number.isNaN(parsed)) {
+      nextNumber = parsed + 1;
+    }
+  }
+
+  for (let i = 0; i < 100; i++) {
+    if (nextNumber > 9999) {
+      throw new Error("Đã vượt quá giới hạn mã phiếu chi sửa chữa (9999)");
+    }
+
+    const candidate = `${PAYMENT_VOUCHER_PREFIX}${String(nextNumber).padStart(
+      4,
+      "0"
+    )}`;
+    // eslint-disable-next-line no-await-in-loop
+    const exists = await FinancialTicket.exists({ paymentVoucher: candidate });
+    if (!exists) return candidate;
+
+    nextNumber += 1;
+  }
+
+  throw new Error(
+    "Không thể tạo mã phiếu chi sửa chữa kế tiếp, vui lòng thử lại"
+  );
+};
+
+/**
+ * Lấy paymentVoucher kế tiếp cho phiếu chi bảo trì (manager)
+ * Format: PMV-MT-XXXX (4 số, tăng dần)
+ * @returns {string} paymentVoucher
+ */
+const getNextMaintenancePaymentVoucherCode = async () => {
+  const latest = await FinancialTicket.findOne({
+    type: "Payment",
+    paymentVoucher: { $regex: `^${MAINTENANCE_PAYMENT_VOUCHER_PREFIX}\\d{4}$` },
+  })
+    .select("paymentVoucher")
+    .sort({ paymentVoucher: -1 })
+    .lean();
+
+  let nextNumber = 1;
+  if (latest?.paymentVoucher) {
+    const suffix = latest.paymentVoucher.slice(MAINTENANCE_PAYMENT_VOUCHER_PREFIX.length);
+    const parsed = parseInt(suffix, 10);
+    if (!Number.isNaN(parsed)) {
+      nextNumber = parsed + 1;
+    }
+  }
+
+  for (let i = 0; i < 100; i++) {
+    if (nextNumber > 9999) {
+      throw new Error("Đã vượt quá giới hạn mã phiếu chi bảo trì (9999)");
+    }
+
+    const candidate = `${MAINTENANCE_PAYMENT_VOUCHER_PREFIX}${String(nextNumber).padStart(
+      4,
+      "0"
+    )}`;
+    // eslint-disable-next-line no-await-in-loop
+    const exists = await FinancialTicket.exists({ paymentVoucher: candidate });
+    if (!exists) return candidate;
+
+    nextNumber += 1;
+  }
+
+  throw new Error(
+    "Không thể tạo mã phiếu chi bảo trì kế tiếp, vui lòng thử lại"
+  );
+};
+
+/**
  * Cập nhật trạng thái yêu cầu sửa chữa
  * @param {string} requestId - ID của yêu cầu
  * @param {"Pending"|"Processing"|"Done"} status - Trạng thái mới
@@ -454,6 +544,24 @@ const updateRepairRequestStatus = async (
   // thì chuyển trạng thái request sang "Unpair" (chờ thanh toán) và KHÔNG dùng paymentStatus.
   const nextStatus =
     status === "Done" && paymentType === "REVENUE" ? "Unpair" : status;
+
+  // Không cho phép chuyển trạng thái lùi về bước trước
+  // Thứ tự: Pending (0) -> Processing (1) -> Done (2) -> Unpair (3)
+  const statusRank = {
+    Pending: 0,
+    Processing: 1,
+    Done: 2,
+    Unpair: 3,
+  };
+
+  const currentRank = statusRank[request.status] ?? 0;
+  const targetRank = statusRank[nextStatus];
+
+  if (targetRank < currentRank) {
+    throw new Error(
+      "Không thể chuyển trạng thái lùi về bước trước. Vui lòng chọn trạng thái tiếp theo."
+    );
+  }
 
   request.status = nextStatus;
 
@@ -521,11 +629,15 @@ const updateRepairRequestStatus = async (
 
     // 2. Tạo phiếu chi nội bộ nếu frontend gửi kèm dữ liệu financialTicket (sửa chữa miễn phí)
     if (financialTicketData) {
-      const { type = "Payment", amount, title } = financialTicketData;
+      const { type = "Payment", amount, title, paymentVoucher } =
+        financialTicketData;
 
       if (amount === undefined || amount === null) {
         throw new Error("Thiếu số tiền cho phiếu chi");
       }
+
+      const voucherCode =
+        paymentVoucher || (await getNextPaymentVoucherCode());
 
       const newTicket = new FinancialTicket({
         type: type || "Payment",
@@ -534,6 +646,7 @@ const updateRepairRequestStatus = async (
         referenceId: request._id,
         status: "Created",
         transactionDate: new Date(),
+        paymentVoucher: voucherCode,
       });
 
       await newTicket.save();
@@ -638,6 +751,8 @@ module.exports = {
   getRepairRequestsByTenant,
   getRepairRequestById,
   getNextRepairInvoiceCode,
+  getNextPaymentVoucherCode,
+  getNextMaintenancePaymentVoucherCode,
   updateRepairRequestStatus,
   deleteRepairRequest,
 };

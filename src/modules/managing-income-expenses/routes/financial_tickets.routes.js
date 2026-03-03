@@ -13,5 +13,13 @@ router.get(
   financialTicketsController.getPaymentTickets
 );
 
+// Cập nhật trạng thái phiếu chi (Payment) - chỉ dành cho kế toán
+router.patch(
+  "/:id/status",
+  authenticate,
+  authorize("accountant"),
+  financialTicketsController.updatePaymentTicketStatus
+);
+
 module.exports = router;
 

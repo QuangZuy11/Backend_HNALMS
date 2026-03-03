@@ -183,6 +183,7 @@ exports.updateRepairStatus = async (req, res) => {
       financialTitle,
       financialAmount,
       financialType,
+      paymentVoucher,
       // Loại thanh toán (REVENUE / EXPENSE)
       paymentType,
     } = req.body || {};
@@ -210,6 +211,7 @@ exports.updateRepairStatus = async (req, res) => {
             type: financialType || "Payment",
             title: financialTitle,
             amount: financialAmount,
+            paymentVoucher,
           }
         : null;
 
@@ -320,6 +322,48 @@ exports.getNextRepairInvoiceCode = async (req, res) => {
     });
   } catch (error) {
     console.error("Get next repair invoice code error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Server error",
+    });
+  }
+};
+
+/**
+ * Lấy paymentVoucher kế tiếp cho phiếu chi sửa chữa miễn phí (manager)
+ * GET /api/requests/repair/next-payment-voucher
+ */
+exports.getNextRepairPaymentVoucher = async (req, res) => {
+  try {
+    const paymentVoucher = await requestService.getNextPaymentVoucherCode();
+    res.json({
+      success: true,
+      message: "Lấy mã phiếu chi sửa chữa kế tiếp thành công",
+      data: { paymentVoucher },
+    });
+  } catch (error) {
+    console.error("Get next repair payment voucher error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Server error",
+    });
+  }
+};
+
+/**
+ * Lấy paymentVoucher kế tiếp cho phiếu chi bảo trì (manager)
+ * GET /api/requests/maintenance/next-payment-voucher
+ */
+exports.getNextMaintenancePaymentVoucher = async (req, res) => {
+  try {
+    const paymentVoucher = await requestService.getNextMaintenancePaymentVoucherCode();
+    res.json({
+      success: true,
+      message: "Lấy mã phiếu chi bảo trì kế tiếp thành công",
+      data: { paymentVoucher },
+    });
+  } catch (error) {
+    console.error("Get next maintenance payment voucher error:", error);
     res.status(500).json({
       success: false,
       message: error.message || "Server error",

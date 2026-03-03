@@ -39,6 +39,16 @@ const FinancialTicketSchema = new Schema(
       default: "Created",
       trim: true,
     },
+    // Ngày kế toán xác nhận đã thanh toán (chỉ dùng cho Payment)
+    accountantPaidAt: {
+      type: Date,
+      default: null,
+    },
+    paymentVoucher: {
+      type: String,
+      default: null,
+      index: true,
+    },
     transactionDate: {
       type: Date,
       default: Date.now,
