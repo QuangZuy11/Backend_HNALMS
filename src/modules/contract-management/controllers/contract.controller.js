@@ -113,7 +113,19 @@ exports.createContract = async (req, res) => {
     });
     await userInfo.save({ session });
 
-    // 3. Create Contract Record
+    // 3. Find the Deposit linked to this room (status = "Held")
+    let linkedDepositId = depositId || null;
+    if (!linkedDepositId && room.status === "Deposited") {
+      const deposit = await Deposit.findOne({
+        room: room._id,
+        status: "Held",
+      }).session(session);
+      if (deposit) {
+        linkedDepositId = deposit._id;
+      }
+    }
+
+    // 4. Create Contract Record
     const endDate = new Date(contractDetails.startDate);
     endDate.setMonth(endDate.getMonth() + contractDetails.duration);
 
@@ -121,6 +133,7 @@ exports.createContract = async (req, res) => {
       contractCode: generateContractCode(room.name),
       roomId: room._id,
       tenantId: user._id,
+      depositId: linkedDepositId,
       coResidents,
       startDate: contractDetails.startDate,
       endDate: endDate,
@@ -131,18 +144,18 @@ exports.createContract = async (req, res) => {
 
     await newContract.save({ session });
 
-    // 4. Create BookService record (separate collection for service subscriptions)
+    // 4. Create BookService record (1 document per contract, array of services)
     if (bookServices && bookServices.length > 0) {
+      const contractStartDate = new Date(contractDetails.startDate);
       const bookServiceRecord = new BookService({
         contractId: newContract._id,
-        services: bookServices.map((s) => {
-          const entry = { serviceId: s.serviceId };
-          // Only include quantity for quantity_based services (vehicle parking)
-          if (s.category === "quantity_based" && s.quantity) {
-            entry.quantity = s.quantity;
-          }
-          return entry;
-        }),
+        services: bookServices.map((s) => ({
+          serviceId: s.serviceId,
+          quantity:
+            s.category === "quantity_based" && s.quantity ? s.quantity : 1,
+          startDate: contractStartDate,
+          endDate: null,
+        })),
       });
       await bookServiceRecord.save({ session });
     }

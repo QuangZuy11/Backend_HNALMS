@@ -18,6 +18,11 @@ const contractSchema = new Schema(
       ref: "User",
       required: true,
     },
+    depositId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Deposits",
+      default: null,
+    },
     // List of co-residents (if any)
     coResidents: [
       {
