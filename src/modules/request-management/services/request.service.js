@@ -567,6 +567,47 @@ const getRepairRequestById = async (requestId) => {
 };
 
 /**
+ * Cập nhật yêu cầu sửa chữa (chỉ tenant, chỉ khi Pending)
+ * @param {string} requestId
+ * @param {string} tenantId - Để xác thực quyền
+ * @param {Object} data - { type?, description?, images? }
+ */
+const updateRepairRequestByTenant = async (requestId, tenantId, data) => {
+  try {
+    const request = await RepairRequest.findById(requestId);
+    if (!request) throw new Error("Yêu cầu sửa chữa không tồn tại");
+
+    if (request.tenantId.toString() !== tenantId.toString()) {
+      throw Object.assign(new Error("Bạn không có quyền cập nhật yêu cầu này"), { status: 403 });
+    }
+
+    if (request.status !== "Pending") {
+      throw Object.assign(new Error("Chỉ có thể cập nhật yêu cầu ở trạng thái Pending"), { status: 400 });
+    }
+
+    if (data.devicesId !== undefined) {
+      const device = await Device.findById(data.devicesId);
+      if (!device) throw Object.assign(new Error("Thiết bị không tồn tại"), { status: 404 });
+      request.devicesId = data.devicesId;
+    }
+    if (data.type !== undefined) request.type = data.type;
+    if (data.description !== undefined) request.description = data.description;
+    if (data.images !== undefined) request.images = data.images;
+
+    await request.save();
+
+    const populated = await RepairRequest.findById(requestId)
+      .populate({ path: "tenantId", select: "username email phoneNumber role", model: User })
+      .populate({ path: "devicesId", select: "name brand model category unit price description", model: Device })
+      .lean();
+
+    return populated;
+  } catch (error) {
+    throw error;
+  }
+};
+
+/**
  * Xóa yêu cầu sửa chữa
  * @param {string} requestId - ID của yêu cầu
  * @returns {Object} Deletion result
@@ -598,5 +639,6 @@ module.exports = {
   getRepairRequestsByTenant,
   getRepairRequestById,
   updateRepairRequestStatus,
+  updateRepairRequestByTenant,
   deleteRepairRequest,
 };
