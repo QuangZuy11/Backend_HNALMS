@@ -87,5 +87,52 @@ class ServiceController {
       handleError(res, error);
     }
   }
+
+  // GET /api/services/list  - Tenant xem toàn bộ dịch vụ với trạng thái book
+  async getAllServicesForTenant(req, res) {
+    try {
+      const tenantId = req.user?.userId;
+      if (!tenantId) {
+        return res.status(401).json({ success: false, message: "Không tìm thấy thông tin người dùng" });
+      }
+      const data = await ServiceService.getAllServicesForTenant(tenantId);
+      res.status(200).json({ success: true, count: data.length, data });
+    } catch (error) {
+      handleError(res, error);
+    }
+  }
+
+  // POST /api/services/book  - Tenant đăng ký dịch vụ Extension
+  async bookService(req, res) {
+    try {
+      const tenantId = req.user?.userId;
+      if (!tenantId) {
+        return res.status(401).json({ success: false, message: "Không tìm thấy thông tin người dùng" });
+      }
+      const { serviceId, quantity } = req.body;
+      if (!serviceId) {
+        return res.status(400).json({ success: false, message: "serviceId là bắt buộc" });
+      }
+      const data = await ServiceService.bookServiceForTenant(tenantId, serviceId, quantity);
+      res.status(201).json({ success: true, message: "Đăng ký dịch vụ thành công", data });
+    } catch (error) {
+      handleError(res, error);
+    }
+  }
+
+  // DELETE /api/services/book/:serviceId  - Tenant huỷ đăng ký dịch vụ Extension
+  async cancelBookedService(req, res) {
+    try {
+      const tenantId = req.user?.userId;
+      if (!tenantId) {
+        return res.status(401).json({ success: false, message: "Không tìm thấy thông tin người dùng" });
+      }
+      const { serviceId } = req.params;
+      const result = await ServiceService.cancelBookedServiceForTenant(tenantId, serviceId);
+      res.status(200).json({ success: true, message: result.message });
+    } catch (error) {
+      handleError(res, error);
+    }
+  }
 }
 module.exports = new ServiceController();
