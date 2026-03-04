@@ -233,11 +233,41 @@ class InvoiceService {
   }
 
   async getInvoiceById(id) {
-    const invoice = await Invoice.findById(id).populate("roomId", "name floorId");
+    const invoice = await Invoice.findById(id)
+      .populate({
+        path: "roomId",
+        select: "name roomCode floorId roomTypeId",
+        populate: [
+          { path: "floorId", select: "name" },
+          { path: "roomTypeId", select: "typeName currentPrice" },
+        ],
+      })
+      .lean();
+
     if (!invoice) {
       throw new Error("Không tìm thấy hóa đơn này.");
     }
-    return invoice;
+
+    // Fix Decimal128 → Number cho currentPrice
+    if (invoice.roomId?.roomTypeId?.currentPrice) {
+      invoice.roomId.roomTypeId.currentPrice = parseFloat(
+        invoice.roomId.roomTypeId.currentPrice.toString()
+      );
+    }
+
+    // Lấy thông tin tenant qua contract đang active của phòng
+    const contract = await Contract.findOne({
+      roomId: invoice.roomId?._id,
+      status: "active",
+    })
+      .select("tenantId contractCode startDate endDate")
+      .populate("tenantId", "username email phoneNumber");
+
+    return {
+      ...invoice,
+      tenant: contract?.tenantId || null,
+      contractCode: contract?.contractCode || null,
+    };
   }
 
   // Lấy hóa đơn theo TenantId (có phân trang)
@@ -281,6 +311,55 @@ class InvoiceService {
         limit,
         totalPages: Math.ceil(total / limit),
       },
+    };
+  }
+
+  // Tenant xem chi tiết 1 hóa đơn của chính mình (có kiểm tra quyền sở hữu)
+  async getMyInvoiceById(tenantId, invoiceId) {
+    // Bước 1: Tìm contract active của tenant để lấy roomId
+    const contracts = await Contract.find({ tenantId, status: "active" }).select("roomId contractCode startDate endDate");
+    if (contracts.length === 0) {
+      throw new Error("Bạn không có hợp đồng thuê nào đang hoạt động.");
+    }
+
+    const roomIds = contracts.map(c => c.roomId.toString());
+
+    // Bước 2: Tìm hóa đơn và kiểm tra hóa đơn này có thuộc phòng của tenant không
+    const invoice = await Invoice.findById(invoiceId)
+      .populate({
+        path: "roomId",
+        select: "name roomCode floorId roomTypeId",
+        populate: [
+          { path: "floorId", select: "name" },
+          { path: "roomTypeId", select: "typeName currentPrice" },
+        ],
+      })
+      .lean();
+
+    if (!invoice) {
+      throw new Error("Không tìm thấy hóa đơn.");
+    }
+
+    // Bước 3: Kiểm tra hóa đơn có thuộc phòng của tenant không
+    if (!roomIds.includes(invoice.roomId._id.toString())) {
+      throw new Error("Bạn không có quyền xem hóa đơn này.");
+    }
+
+    // Fix Decimal128 → Number
+    if (invoice.roomId?.roomTypeId?.currentPrice) {
+      invoice.roomId.roomTypeId.currentPrice = parseFloat(
+        invoice.roomId.roomTypeId.currentPrice.toString()
+      );
+    }
+
+    // Bước 4: Lấy contract tương ứng với phòng của hóa đơn
+    const contract = contracts.find(c => c.roomId.toString() === invoice.roomId._id.toString());
+
+    return {
+      ...invoice,
+      contractCode: contract?.contractCode || null,
+      contractStartDate: contract?.startDate || null,
+      contractEndDate: contract?.endDate || null,
     };
   }
 }

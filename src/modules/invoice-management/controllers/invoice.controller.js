@@ -51,5 +51,21 @@ class InvoiceController {
       res.status(500).json({ success: false, message: error.message });
     }
   }
+
+  // Tenant xem chi tiết 1 hóa đơn của chính mình
+  async getMyInvoiceById(req, res) {
+    try {
+      const tenantId = req.user?.userId;
+      if (!tenantId) {
+        return res.status(401).json({ success: false, message: "Unauthorized - Vui lòng đăng nhập" });
+      }
+
+      const invoice = await invoiceService.getMyInvoiceById(tenantId, req.params.id);
+      res.status(200).json({ success: true, data: invoice });
+    } catch (error) {
+      const statusCode = error.message.includes("quyền") ? 403 : error.message.includes("Không tìm thấy") ? 404 : 500;
+      res.status(statusCode).json({ success: false, message: error.message });
+    }
+  }
 }
 module.exports = new InvoiceController();
