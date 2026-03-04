@@ -18,11 +18,6 @@ const contractSchema = new Schema(
       ref: "User",
       required: true,
     },
-    // Number of people staying
-    personInRoom: {
-      type: Number,
-      default: 1,
-    },
     // List of co-residents (if any)
     coResidents: [
       {
