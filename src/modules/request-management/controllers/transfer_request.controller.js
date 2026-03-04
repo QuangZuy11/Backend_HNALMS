@@ -40,17 +40,50 @@ exports.createTransferRequest = async (req, res) => {
       return res.status(401).json({ success: false, message: "Unauthorized" });
     }
 
-    const result = await transferService.createTransferRequest(tenantId, req.body);
+    const result = await transferService.createTransferRequest(
+      tenantId,
+      req.body,
+    );
 
     res.status(201).json({
       success: true,
-      message: "Tạo yêu cầu chuyển phòng thành công. Vui lòng đợi quản lý xác nhận.",
+      message:
+        "Tạo yêu cầu chuyển phòng thành công. Vui lòng đợi quản lý xác nhận.",
       data: result,
     });
   } catch (error) {
     console.error("Create transfer request error:", error);
     const status = error.status || 500;
     res.status(status).json({
+      success: false,
+      message: error.message || "Server error",
+    });
+  }
+};
+
+/**
+ * [MANAGER] Lấy tất cả yêu cầu chuyển phòng
+ * GET /api/requests/transfer
+ */
+exports.getAllTransferRequests = async (req, res) => {
+  try {
+    const TransferRequest = require("../models/transfer_request.model");
+    const requests = await TransferRequest.find()
+      .populate("tenantId", "fullName phoneNumber email")
+      .populate("contractId", "contractId")
+      .populate("currentRoomId", "name")
+      .populate("targetRoomId", "name")
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({
+      success: true,
+      message: "Lấy danh sách yêu cầu chuyển phòng thành công",
+      count: requests.length,
+      data: requests,
+    });
+  } catch (error) {
+    console.error("Get all transfer requests error:", error);
+    res.status(500).json({
       success: false,
       message: error.message || "Server error",
     });
@@ -97,7 +130,10 @@ exports.cancelTransferRequest = async (req, res) => {
       return res.status(401).json({ success: false, message: "Unauthorized" });
     }
 
-    const result = await transferService.cancelTransferRequest(tenantId, req.params.id);
+    const result = await transferService.cancelTransferRequest(
+      tenantId,
+      req.params.id,
+    );
 
     res.status(200).json({
       success: true,
