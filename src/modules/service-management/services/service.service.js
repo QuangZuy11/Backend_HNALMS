@@ -1,4 +1,6 @@
 const Service = require("../models/service.model");
+const BookService = require("../models/bookservice.model");
+const Contract = require("../../contract-management/models/contract.model");
 const PriceHistory = require("../../room-floor-management/models/pricehistory.model");
 const mongoose = require("mongoose");
 
@@ -127,6 +129,38 @@ exports.updateService = async (id, data) => {
     session.endSession();
     throw error;
   }
+};
+
+/**
+ * Lấy danh sách dịch vụ đã đăng ký của tenant (qua hợp đồng active)
+ * @param {string} tenantId - ID của tenant
+ * @returns {Array} Danh sách BookService kèm thông tin dịch vụ và hợp đồng
+ */
+exports.getBookedServicesByTenant = async (tenantId) => {
+  // Tìm hợp đồng đang active của tenant
+  const contract = await Contract.findOne({ tenantId, status: "active" }).lean();
+  if (!contract) {
+    return [];
+  }
+
+  const bookService = await BookService.findOne({ contractId: contract._id })
+    .populate({
+      path: "services.serviceId",
+      select: "name currentPrice description type isActive",
+    })
+    .lean();
+
+  if (!bookService || !bookService.services || bookService.services.length === 0) {
+    return [];
+  }
+
+  // Flatten: trả về mảng dịch vụ kèm thông tin hợp đồng
+  return bookService.services.map((item) => ({
+    serviceId: item.serviceId,
+    quantity: item.quantity ?? 1,
+    contractId: contract._id,
+    contractCode: contract.contractCode ?? null,
+  }));
 };
 
 /**

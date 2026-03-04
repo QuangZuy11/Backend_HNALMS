@@ -18,10 +18,10 @@ const contractSchema = new Schema(
       ref: "User",
       required: true,
     },
-    // Number of people staying
-    personInRoom: {
-      type: Number,
-      default: 1,
+    depositId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Deposits",
+      default: null,
     },
     // List of co-residents (if any)
     coResidents: [

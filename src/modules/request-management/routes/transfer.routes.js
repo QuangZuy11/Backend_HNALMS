@@ -41,6 +41,72 @@ router.post(
 );
 
 /**
+ * [MANAGER] Lấy danh sách tất cả yêu cầu chuyển phòng
+ * GET /api/requests/transfer
+ * Query: ?status=Pending&search=abc&page=1&limit=10
+ */
+router.get(
+  "/",
+  authenticate,
+  authorize("manager"),
+  transferController.getAllTransferRequests
+);
+
+/**
+ * [MANAGER] Lấy chi tiết yêu cầu chuyển phòng
+ * GET /api/requests/transfer/:id
+ */
+router.get(
+  "/:id",
+  authenticate,
+  transferController.getTransferRequestById
+);
+
+/**
+ * [MANAGER] Duyệt yêu cầu chuyển phòng
+ * PATCH /api/requests/transfer/:id/approve
+ */
+router.patch(
+  "/:id/approve",
+  authenticate,
+  authorize("manager"),
+  transferController.approveTransferRequest
+);
+
+/**
+ * [MANAGER] Từ chối yêu cầu chuyển phòng
+ * PATCH /api/requests/transfer/:id/reject
+ */
+router.patch(
+  "/:id/reject",
+  authenticate,
+  authorize("manager"),
+  transferController.rejectTransferRequest
+);
+
+/**
+ * [TENANT] Cập nhật yêu cầu chuyển phòng (chỉ khi Pending)
+ * PUT /api/requests/transfer/:id
+ */
+router.put(
+  "/:id",
+  authenticate,
+  authorize("Tenant"),
+  transferController.updateTransferRequest
+);
+
+/**
+ * [TENANT] Xóa yêu cầu chuyển phòng (chỉ khi Pending)
+ * DELETE /api/requests/transfer/:id
+ */
+router.delete(
+  "/:id",
+  authenticate,
+  authorize("Tenant"),
+  transferController.deleteTransferRequest
+);
+
+/**
  * [TENANT] Hủy yêu cầu chuyển phòng (chỉ khi Pending)
  * PATCH /api/requests/transfer/:id/cancel
  */

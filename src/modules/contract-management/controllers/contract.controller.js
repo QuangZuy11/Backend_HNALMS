@@ -77,14 +77,14 @@ exports.createContract = async (req, res) => {
         );
         const depositAmount = roomPrice; // Deposit = 1 month rent
 
-        // Validate personInRoom <= personMax from roomType
-        const personMax = room.roomTypeId?.personMax || 1;
-        const personInRoom = (coResidents ? coResidents.length : 0) + 1; // Tenant + Co-residents
-        if (personInRoom > personMax) {
-            throw new Error(
-                `Số người ở (${personInRoom}) vượt quá giới hạn của loại phòng (tối đa ${personMax} người).`,
-            );
-        }
+    // Validate co-residents count <= personMax from roomType
+    const personMax = room.roomTypeId?.personMax || 1;
+    const totalPeople = (coResidents ? coResidents.length : 0) + 1; // Tenant + Co-residents
+    if (totalPeople > personMax) {
+      throw new Error(
+        `Số người ở (${totalPeople}) vượt quá giới hạn của loại phòng (tối đa ${personMax} người).`,
+      );
+    }
 
         // 2. Always Create New Tenant Account
         const passwordRaw = generateRandomString(8);
@@ -129,40 +129,52 @@ exports.createContract = async (req, res) => {
         });
         await userInfo.save({ session });
 
-        // 3. Create Contract Record
-        const endDate = new Date(contractDetails.startDate);
-        endDate.setMonth(endDate.getMonth() + contractDetails.duration);
+    // 3. Find the Deposit linked to this room (status = "Held")
+    let linkedDepositId = depositId || null;
+    if (!linkedDepositId && room.status === "Deposited") {
+      const deposit = await Deposit.findOne({
+        room: room._id,
+        status: "Held",
+      }).session(session);
+      if (deposit) {
+        linkedDepositId = deposit._id;
+      }
+    }
 
-        const newContract = new Contract({
-            contractCode: generateContractCode(room.name),
-            roomId: room._id,
-            tenantId: user._id,
-            personInRoom,
-            coResidents,
-            startDate: contractDetails.startDate,
-            endDate: endDate,
-            duration: contractDetails.duration,
-            status: "active",
-            images: req.body.images || [],
-        });
+    // 4. Create Contract Record
+    const endDate = new Date(contractDetails.startDate);
+    endDate.setMonth(endDate.getMonth() + contractDetails.duration);
+
+    const newContract = new Contract({
+      contractCode: generateContractCode(room.name),
+      roomId: room._id,
+      tenantId: user._id,
+      depositId: linkedDepositId,
+      coResidents,
+      startDate: contractDetails.startDate,
+      endDate: endDate,
+      duration: contractDetails.duration,
+      status: "active",
+      images: req.body.images || [],
+    });
 
         await newContract.save({ session });
 
-        // 4. Create BookService record (separate collection for service subscriptions)
-        if (bookServices && bookServices.length > 0) {
-            const bookServiceRecord = new BookService({
-                contractId: newContract._id,
-                services: bookServices.map((s) => {
-                    const entry = { serviceId: s.serviceId };
-                    // Only include quantity for quantity_based services (vehicle parking)
-                    if (s.category === "quantity_based" && s.quantity) {
-                        entry.quantity = s.quantity;
-                    }
-                    return entry;
-                }),
-            });
-            await bookServiceRecord.save({ session });
-        }
+    // 4. Create BookService record (1 document per contract, array of services)
+    if (bookServices && bookServices.length > 0) {
+      const contractStartDate = new Date(contractDetails.startDate);
+      const bookServiceRecord = new BookService({
+        contractId: newContract._id,
+        services: bookServices.map((s) => ({
+          serviceId: s.serviceId,
+          quantity:
+            s.category === "quantity_based" && s.quantity ? s.quantity : 1,
+          startDate: contractStartDate,
+          endDate: null,
+        })),
+      });
+      await bookServiceRecord.save({ session });
+    }
 
         // 5. Update Room Status
         room.status = "Occupied";
@@ -266,91 +278,136 @@ exports.getContractById = async (req, res) => {
                 .json({ success: false, message: "Contract not found" });
         }
 
-        // Fetch tenant's UserInfo separately
-        const tenantInfo = await UserInfo.findOne({
-            userId: contract.tenantId._id,
-        });
+    // Fetch tenant's UserInfo separately
+    const tenantInfo = await UserInfo.findOne({
+      userId: contract.tenantId._id,
+    });
+
+    // Fetch BookService for this contract (with populated service names/prices)
+    const bookServiceRecord = await BookService.findOne({
+      contractId: contract._id,
+    }).populate("services.serviceId", "name currentPrice type description");
+
+    // Fetch room assets/devices
+    const RoomDevice = require("../../room-floor-management/models/roomdevices.model");
+    const roomAssets = await RoomDevice.find({
+      roomTypeId: contract.roomId?.roomTypeId?._id,
+    }).populate("deviceId", "name brand model unit");
 
         // Convert to plain object and fix Decimal128 fields
         const contractData = contract.toObject();
 
-        // Fix roomType currentPrice (Decimal128 → Number)
-        if (contractData.roomId?.roomTypeId?.currentPrice) {
-            contractData.roomId.roomTypeId.currentPrice = parseFloat(
-                contractData.roomId.roomTypeId.currentPrice.toString(),
-            );
-        }
-        // Fix service currentPrice (Decimal128 → Number)
-        if (contractData.services) {
-            contractData.services = contractData.services.map((s) => ({
-                ...s,
-                currentPrice: s.currentPrice
-                    ? parseFloat(s.currentPrice.toString())
-                    : 0,
-            }));
-        }
-
-        res.status(200).json({
-            success: true,
-            data: {
-                ...contractData,
-                tenantInfo: tenantInfo ? tenantInfo.toObject() : null,
-            },
-        });
-    } catch (error) {
-        console.error("Get Contract By ID Error:", error);
-        res.status(500).json({
-            success: false,
-            message: "Server Error",
-        });
+    // Fix roomType currentPrice (Decimal128 → Number)
+    if (contractData.roomId?.roomTypeId?.currentPrice) {
+      contractData.roomId.roomTypeId.currentPrice = parseFloat(
+        contractData.roomId.roomTypeId.currentPrice.toString(),
+      );
     }
+    // Fix service currentPrice (Decimal128 → Number)
+    if (contractData.services) {
+      contractData.services = contractData.services.map((s) => ({
+        ...s,
+        currentPrice: s.currentPrice
+          ? parseFloat(s.currentPrice.toString())
+          : 0,
+      }));
+    }
+
+    // Map bookServices with populated data
+    const bookServices = bookServiceRecord
+      ? bookServiceRecord.services.map((s) => ({
+          serviceId: s.serviceId?._id,
+          name: s.serviceId?.name || "—",
+          currentPrice: s.serviceId?.currentPrice
+            ? parseFloat(s.serviceId.currentPrice.toString())
+            : 0,
+          type: s.serviceId?.type || "",
+          quantity: s.quantity || null,
+        }))
+      : [];
+
+    // Map room assets
+    const assets = roomAssets.map((a) => ({
+      deviceId: a.deviceId,
+      quantity: a.quantity,
+      condition: a.condition,
+    }));
+
+    res.status(200).json({
+      success: true,
+      data: {
+        ...contractData,
+        tenantInfo: tenantInfo ? tenantInfo.toObject() : null,
+        bookServices,
+        assets,
+      },
+    });
+  } catch (error) {
+    console.error("Get Contract By ID Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server Error",
+    });
+  }
 };
 
 // Tenant xem hợp đồng của mình
 exports.getMyContracts = async (req, res) => {
-    try {
-        const tenantId = req.user?.userId;
-        if (!tenantId) {
-            return res.status(401).json({ success: false, message: "Unauthorized - Không tìm thấy thông tin người dùng" });
-        }
-
-        const contracts = await Contract.find({ tenantId })
-            .populate({
-                path: "roomId",
-                select: "name roomCode status roomTypeId floorId",
-                populate: [
-                    { path: "roomTypeId", select: "typeName currentPrice personMax description images" },
-                    { path: "floorId", select: "name" }
-                ]
-            })
-            .populate("depositId", "name phone email room amount status createdDate")
-            .populate("services", "name currentPrice type")
-            .sort({ createdAt: -1 })
-            .lean();
-
-        // Fix Decimal128 fields
-        const data = contracts.map(c => {
-            if (c.roomId?.roomTypeId?.currentPrice) {
-                c.roomId.roomTypeId.currentPrice = parseFloat(c.roomId.roomTypeId.currentPrice.toString());
-            }
-            if (c.services) {
-                c.services = c.services.map(s => ({
-                    ...s,
-                    currentPrice: s.currentPrice ? parseFloat(s.currentPrice.toString()) : 0
-                }));
-            }
-            return c;
-        });
-
-        res.status(200).json({
-            success: true,
-            count: data.length,
-            data
-        });
-    } catch (error) {
-        console.error("Get My Contracts Error:", error);
-        res.status(500).json({ success: false, message: error.message || "Server Error" });
+  try {
+    const tenantId = req.user?.userId;
+    if (!tenantId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized - Không tìm thấy thông tin người dùng",
+      });
     }
+
+    const contracts = await Contract.find({ tenantId })
+      .populate({
+        path: "roomId",
+        select: "name roomCode status roomTypeId floorId",
+        populate: [
+          {
+            path: "roomTypeId",
+            select: "typeName currentPrice personMax description images",
+          },
+          { path: "floorId", select: "name" },
+        ],
+      })
+      .populate("depositId", "name phone email room amount status createdDate")
+      .populate("services", "name currentPrice type")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    // Fix Decimal128 fields
+    const data = contracts.map((c) => {
+      if (c.roomId?.roomTypeId?.currentPrice) {
+        c.roomId.roomTypeId.currentPrice = parseFloat(
+          c.roomId.roomTypeId.currentPrice.toString(),
+        );
+      }
+      if (c.services) {
+        c.services = c.services.map((s) => ({
+          ...s,
+          currentPrice: s.currentPrice
+            ? parseFloat(s.currentPrice.toString())
+            : 0,
+        }));
+      }
+      return c;
+    });
+
+    res.status(200).json({
+      success: true,
+      count: data.length,
+      data,
+    });
+  } catch (error) {
+    console.error("Get My Contracts Error:", error);
+    res
+      .status(500)
+      .json({ success: false, message: error.message || "Server Error" });
+  }
 };
 
 // Upload contract images to Cloudinary
@@ -373,4 +430,246 @@ exports.uploadContractImages = async (req, res) => {
             message: "Upload failed: " + (error.message || "Internal Server Error"),
         });
     }
+};
+
+// Update Contract (duration, coResidents, optional services, images)
+exports.updateContract = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { id } = req.params;
+    const { duration, coResidents, optionalServices, images } = req.body;
+
+    // 1. Find and validate contract
+    const contract = await Contract.findById(id)
+      .populate({ path: "roomId", populate: { path: "roomTypeId" } })
+      .session(session);
+    if (!contract) throw new Error("Không tìm thấy hợp đồng.");
+    if (contract.status !== "active")
+      throw new Error("Chỉ có thể sửa hợp đồng đang hiệu lực.");
+
+    // 2. Update duration & endDate if changed
+    if (duration && duration !== contract.duration) {
+      if (duration < 6) throw new Error("Thời hạn thuê tối thiểu 6 tháng.");
+      const newEndDate = new Date(contract.startDate);
+      newEndDate.setMonth(newEndDate.getMonth() + Number(duration));
+      contract.duration = Number(duration);
+      contract.endDate = newEndDate;
+    }
+
+    // 3. Update co-residents if provided
+    if (coResidents !== undefined) {
+      const personMax = contract.roomId?.roomTypeId?.personMax || 1;
+      const totalPeople = (coResidents ? coResidents.length : 0) + 1;
+      if (totalPeople > personMax) {
+        throw new Error(
+          `Số người ở (${totalPeople}) vượt quá giới hạn (tối đa ${personMax} người).`,
+        );
+      }
+      contract.coResidents = coResidents;
+    }
+
+    // 4. Update images if provided
+    if (images !== undefined) {
+      if (!images || images.length === 0)
+        throw new Error("Phải có ít nhất 1 ảnh hợp đồng.");
+      contract.images = images;
+    }
+
+    await contract.save({ session });
+
+    // 5. Update optional services in BookService record
+    if (optionalServices !== undefined) {
+      const bookServiceRecord = await BookService.findOne({
+        contractId: contract._id,
+      }).session(session);
+
+      if (bookServiceRecord) {
+        // Keep all fixed_monthly services, replace only quantity_based ones
+        const Service = require("../../service-management/models/service.model");
+        const allServices = await Service.find({ isActive: true }).session(
+          session,
+        );
+
+        const getCategory = (name) => {
+          const n = name.toLowerCase();
+          if (n.includes("xe máy") || n.includes("xe đạp"))
+            return "quantity_based";
+          if (
+            n.includes("thang máy") ||
+            n.includes("elevator") ||
+            n.includes("vệ sinh") ||
+            n.includes("điện") ||
+            n.includes("nước") ||
+            n.includes("internet") ||
+            n.includes("wifi")
+          )
+            return "fixed_monthly";
+          return "quantity_based";
+        };
+
+        // Build a map of service id -> name for category lookup
+        const serviceNameMap = {};
+        allServices.forEach((s) => {
+          serviceNameMap[s._id.toString()] = s.name;
+        });
+
+        // Keep fixed_monthly services from existing record
+        const fixedServices = bookServiceRecord.services.filter((s) => {
+          const name = serviceNameMap[s.serviceId.toString()] || "";
+          return getCategory(name) === "fixed_monthly";
+        });
+
+        // Build new optional services entries
+        const newOptional = optionalServices.map((s) => ({
+          serviceId: s.serviceId,
+          quantity: s.quantity || 1,
+          startDate: s.startDate || contract.startDate,
+          endDate: s.endDate || null,
+        }));
+
+        bookServiceRecord.services = [...fixedServices, ...newOptional];
+        await bookServiceRecord.save({ session });
+      }
+    }
+
+    await session.commitTransaction();
+    session.endSession();
+
+    res.status(200).json({
+      success: true,
+      message: "Cập nhật hợp đồng thành công.",
+      data: contract,
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
+    console.error("Update Contract Error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Internal Server Error",
+    });
+  }
+};
+
+// Update Contract (duration, coResidents, optional services, images)
+exports.updateContract = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { id } = req.params;
+    const { duration, coResidents, optionalServices, images } = req.body;
+
+    // 1. Find and validate contract
+    const contract = await Contract.findById(id)
+      .populate({ path: "roomId", populate: { path: "roomTypeId" } })
+      .session(session);
+    if (!contract) throw new Error("Không tìm thấy hợp đồng.");
+    if (contract.status !== "active")
+      throw new Error("Chỉ có thể sửa hợp đồng đang hiệu lực.");
+
+    // 2. Update duration & endDate if changed
+    if (duration && duration !== contract.duration) {
+      if (duration < 6) throw new Error("Thời hạn thuê tối thiểu 6 tháng.");
+      const newEndDate = new Date(contract.startDate);
+      newEndDate.setMonth(newEndDate.getMonth() + Number(duration));
+      contract.duration = Number(duration);
+      contract.endDate = newEndDate;
+    }
+
+    // 3. Update co-residents if provided
+    if (coResidents !== undefined) {
+      const personMax = contract.roomId?.roomTypeId?.personMax || 1;
+      const totalPeople = (coResidents ? coResidents.length : 0) + 1;
+      if (totalPeople > personMax) {
+        throw new Error(
+          `Số người ở (${totalPeople}) vượt quá giới hạn (tối đa ${personMax} người).`,
+        );
+      }
+      contract.coResidents = coResidents;
+    }
+
+    // 4. Update images if provided
+    if (images !== undefined) {
+      if (!images || images.length === 0)
+        throw new Error("Phải có ít nhất 1 ảnh hợp đồng.");
+      contract.images = images;
+    }
+
+    await contract.save({ session });
+
+    // 5. Update optional services in BookService record
+    if (optionalServices !== undefined) {
+      const bookServiceRecord = await BookService.findOne({
+        contractId: contract._id,
+      }).session(session);
+
+      if (bookServiceRecord) {
+        // Keep all fixed_monthly services, replace only quantity_based ones
+        const Service = require("../../service-management/models/service.model");
+        const allServices = await Service.find({ isActive: true }).session(
+          session,
+        );
+
+        const getCategory = (name) => {
+          const n = name.toLowerCase();
+          if (n.includes("xe máy") || n.includes("xe đạp"))
+            return "quantity_based";
+          if (
+            n.includes("thang máy") ||
+            n.includes("elevator") ||
+            n.includes("vệ sinh") ||
+            n.includes("điện") ||
+            n.includes("nước") ||
+            n.includes("internet") ||
+            n.includes("wifi")
+          )
+            return "fixed_monthly";
+          return "quantity_based";
+        };
+
+        // Build a map of service id -> name for category lookup
+        const serviceNameMap = {};
+        allServices.forEach((s) => {
+          serviceNameMap[s._id.toString()] = s.name;
+        });
+
+        // Keep fixed_monthly services from existing record
+        const fixedServices = bookServiceRecord.services.filter((s) => {
+          const name = serviceNameMap[s.serviceId.toString()] || "";
+          return getCategory(name) === "fixed_monthly";
+        });
+
+        // Build new optional services entries
+        const newOptional = optionalServices.map((s) => ({
+          serviceId: s.serviceId,
+          quantity: s.quantity || 1,
+          startDate: s.startDate || contract.startDate,
+          endDate: s.endDate || null,
+        }));
+
+        bookServiceRecord.services = [...fixedServices, ...newOptional];
+        await bookServiceRecord.save({ session });
+      }
+    }
+
+    await session.commitTransaction();
+    session.endSession();
+
+    res.status(200).json({
+      success: true,
+      message: "Cập nhật hợp đồng thành công.",
+      data: contract,
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
+    console.error("Update Contract Error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Internal Server Error",
+    });
+  }
 };

@@ -168,7 +168,10 @@ exports.updateComplaint = async (req, res) => {
     }
 
     // Only owner can update pending complaint
-    if (complaint.tenantId.toString() !== userId) {
+    const ownerIdUpdate = complaint.tenantId?._id
+      ? complaint.tenantId._id.toString()
+      : complaint.tenantId.toString();
+    if (ownerIdUpdate !== userId.toString()) {
       return errorResponse(
         res,
         "Bạn không có quyền cập nhật khiếu nại này",
@@ -274,7 +277,10 @@ exports.deleteComplaint = async (req, res) => {
     }
 
     // Only owner can delete pending complaint
-    if (complaint.tenantId.toString() !== userId) {
+    const ownerIdDelete = complaint.tenantId?._id
+      ? complaint.tenantId._id.toString()
+      : complaint.tenantId.toString();
+    if (ownerIdDelete !== userId.toString()) {
       return errorResponse(
         res,
         "Bạn không có quyền xóa khiếu nại này",

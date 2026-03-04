@@ -67,6 +67,60 @@ const validateCreateRepairRequest = (data) => {
 };
 
 /**
+ * Validate repair request update (tenant)
+ * @param {Object} data - Request body
+ * @returns {Object} {valid: boolean, errors: Array}
+ */
+const validateUpdateRepairRequest = (data) => {
+  const errors = [];
+
+  if (!data.type && !data.description && !data.images && !data.devicesId) {
+    errors.push("Ít nhất một trường phải được cập nhật (type, devicesId, description, images)");
+    return { valid: false, errors };
+  }
+
+  if (data.devicesId !== undefined) {
+    if (typeof data.devicesId !== "string") {
+      errors.push("Device ID phải là chuỗi ký tự");
+    } else if (!/^[a-fA-F0-9]{24}$/.test(data.devicesId)) {
+      errors.push("Device ID không hợp lệ");
+    }
+  }
+
+  if (data.type !== undefined) {
+    const validTypes = ["Sửa chữa", "Bảo trì"];
+    if (!validTypes.includes(data.type)) {
+      errors.push(`Loại yêu cầu phải là một trong: ${validTypes.join(", ")}`);
+    }
+  }
+
+  if (data.description !== undefined) {
+    if (typeof data.description !== "string" || data.description.trim().length === 0) {
+      errors.push("Mô tả không được trống");
+    } else if (data.description.length < 10) {
+      errors.push("Mô tả phải có ít nhất 10 ký tự");
+    } else if (data.description.length > 2000) {
+      errors.push("Mô tả không được vượt quá 2000 ký tự");
+    }
+  }
+
+  if (data.images !== undefined) {
+    if (!Array.isArray(data.images)) {
+      errors.push("Images phải là mảng");
+    } else if (data.images.length > 10) {
+      errors.push("Không được tải lên quá 10 hình ảnh");
+    } else if (data.images.length > 0) {
+      const invalidUrls = data.images.filter(
+        (url) => typeof url !== "string" || (!url.startsWith("http://") && !url.startsWith("https://"))
+      );
+      if (invalidUrls.length > 0) errors.push("Một số URL hình ảnh không hợp lệ");
+    }
+  }
+
+  return { valid: errors.length === 0, errors };
+};
+
+/**
  * Middleware validator cho việc tạo yêu cầu sửa chữa
  */
 const validateCreateRepairRequestMiddleware = (req, res, next) => {
@@ -83,7 +137,17 @@ const validateCreateRepairRequestMiddleware = (req, res, next) => {
   next();
 };
 
+const validateUpdateRepairRequestMiddleware = (req, res, next) => {
+  const validation = validateUpdateRepairRequest(req.body);
+  if (!validation.valid) {
+    return res.status(400).json({ success: false, message: "Validation failed", errors: validation.errors });
+  }
+  next();
+};
+
 module.exports = {
   validateCreateRepairRequest,
   validateCreateRepairRequestMiddleware,
+  validateUpdateRepairRequest,
+  validateUpdateRepairRequestMiddleware,
 };

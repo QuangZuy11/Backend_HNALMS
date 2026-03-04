@@ -1,13 +1,22 @@
 const requestService = require("../services/request.service");
+const cloudinary = require("cloudinary").v2;
+require("dotenv").config();
+
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_NAME,
+  api_key: process.env.CLOUDINARY_KEY,
+  api_secret: process.env.CLOUDINARY_SECRET,
+});
 
 /**
  * Tạo yêu cầu sửa chữa/bảo trì mới
  * POST /api/requests/repair
- * Body: { devicesId, type, description, images? }
+ * Body (multipart/form-data): { devicesId, type, description, images?: File[] }
+ * hoặc Body (JSON): { devicesId, type, description, images?: string[] }
  */
 exports.createRepairRequest = async (req, res) => {
   try {
-    const { devicesId, type, description, images } = req.body;
+    const { devicesId, type, description } = req.body;
     const tenantId = req.user?.userId;
 
     if (!tenantId) {
@@ -15,6 +24,42 @@ exports.createRepairRequest = async (req, res) => {
         success: false,
         message: "Không tìm thấy thông tin người dùng",
       });
+    }
+
+    let images = [];
+
+    // Nếu có file ảnh gửi kèm (multipart/form-data) → upload lên Cloudinary
+    if (req.files && req.files.images) {
+      let files = req.files.images;
+      if (!Array.isArray(files)) files = [files];
+
+      if (files.length > 10) {
+        return res.status(400).json({ success: false, message: "Không được upload quá 10 ảnh" });
+      }
+
+      const allowedExtensions = [".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif", ".bmp", ".tiff"];
+      const invalidFiles = files.filter((f) => {
+        const mimetypeOk = f.mimetype && f.mimetype.toLowerCase().startsWith("image/");
+        const extOk = f.name && allowedExtensions.includes(require("path").extname(f.name).toLowerCase());
+        return !mimetypeOk && !extOk;
+      });
+      if (invalidFiles.length > 0) {
+        return res.status(400).json({ success: false, message: "Chỉ chấp nhận file ảnh (JPEG, PNG, WebP, GIF, HEIC,...)" });
+      }
+
+      const uploadResults = await Promise.all(
+        files.map((file) =>
+          cloudinary.uploader.upload(file.tempFilePath, {
+            folder: "repair_requests",
+            resource_type: "auto",
+            transformation: [{ width: 1200, height: 1200, crop: "limit" }, { quality: "auto" }],
+          })
+        )
+      );
+      images = uploadResults.map((r) => r.secure_url);
+    } else if (req.body.images) {
+      // Nếu gửi URL sẵn (JSON body)
+      images = Array.isArray(req.body.images) ? req.body.images : [req.body.images];
     }
 
     const newRequest = await requestService.createRepairRequest({
@@ -134,7 +179,7 @@ exports.getRepairRequestById = async (req, res) => {
 
     // Kiểm tra quyền truy cập
     // Tenant chỉ được xem request của mình
-    if (req.user.role === "Tenant" && request.tenantId._id.toString() !== req.user.userId) {
+    if (req.user.role === "Tenant" && request.tenantId._id.toString() !== req.user.userId.toString()) {
       return res.status(403).json({
         success: false,
         message: "Bạn không có quyền xem yêu cầu này",
@@ -256,6 +301,68 @@ exports.updateRepairStatus = async (req, res) => {
 };
 
 /**
+ * Cập nhật yêu cầu sửa chữa (tenant, chỉ khi Pending)
+ * PUT /api/requests/repair/:requestId
+ * Body (multipart/form-data): { type?, devicesId?, description?, images?: File[] }
+ * hoặc Body (JSON): { type?, devicesId?, description?, images?: string[] }
+ */
+exports.updateRepairRequest = async (req, res) => {
+  try {
+    const { requestId } = req.params;
+    const tenantId = req.user?.userId;
+
+    if (!tenantId) {
+      return res.status(401).json({ success: false, message: "Không tìm thấy thông tin người dùng" });
+    }
+
+    const { type, devicesId, description } = req.body;
+    let images;
+
+    // Nếu có file ảnh gửi kèm (multipart/form-data) → upload lên Cloudinary
+    if (req.files && req.files.images) {
+      let files = req.files.images;
+      if (!Array.isArray(files)) files = [files];
+
+      if (files.length > 10) {
+        return res.status(400).json({ success: false, message: "Không được upload quá 10 ảnh" });
+      }
+
+      const allowedExtensions = [".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif", ".bmp", ".tiff"];
+      const invalidFiles = files.filter((f) => {
+        const mimetypeOk = f.mimetype && f.mimetype.toLowerCase().startsWith("image/");
+        const extOk = f.name && allowedExtensions.includes(require("path").extname(f.name).toLowerCase());
+        return !mimetypeOk && !extOk;
+      });
+      if (invalidFiles.length > 0) {
+        return res.status(400).json({ success: false, message: "Chỉ chấp nhận file ảnh (JPEG, PNG, WebP, GIF, HEIC,...)" });
+      }
+
+      const uploadResults = await Promise.all(
+        files.map((file) =>
+          cloudinary.uploader.upload(file.tempFilePath, {
+            folder: "repair_requests",
+            resource_type: "auto",
+            transformation: [{ width: 1200, height: 1200, crop: "limit" }, { quality: "auto" }],
+          })
+        )
+      );
+      images = uploadResults.map((r) => r.secure_url);
+    } else if (req.body.images !== undefined) {
+      // Nếu gửi URL sẵn (JSON body)
+      images = req.body.images;
+    }
+
+    const updated = await requestService.updateRepairRequestByTenant(requestId, tenantId, { type, devicesId, description, images });
+
+    res.json({ success: true, message: "Cập nhật yêu cầu thành công", data: updated });
+  } catch (error) {
+    console.error("Update repair request error:", error);
+    const status = error.status || (error.message.includes("không tồn tại") ? 404 : 500);
+    res.status(status).json({ success: false, message: error.message || "Server error" });
+  }
+};
+
+/**
  * Xóa yêu cầu sửa chữa
  * DELETE /api/requests/repair/:requestId
  * Dành cho manager hoặc tenant (chỉ xóa request của mình, status = Pending)
@@ -270,7 +377,7 @@ exports.deleteRepairRequest = async (req, res) => {
     // Kiểm tra quyền xóa
     if (req.user.role === "Tenant") {
       // Tenant chỉ được xóa request của mình và phải ở status Pending
-      if (request.tenantId._id.toString() !== req.user.userId) {
+      if (request.tenantId._id.toString() !== req.user.userId.toString()) {
         return res.status(403).json({
           success: false,
           message: "Bạn không có quyền xóa yêu cầu này",
