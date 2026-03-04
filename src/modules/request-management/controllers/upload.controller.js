@@ -37,11 +37,13 @@ exports.uploadImage = async (req, res) => {
     });
 
     // Validate file type
-    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif'];
-    if (!allowedTypes.includes(file.mimetype)) {
+    const allowedExtensions = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.heic', '.heif', '.bmp', '.tiff'];
+    const mimetypeOk = file.mimetype && file.mimetype.toLowerCase().startsWith('image/');
+    const extOk = file.name && allowedExtensions.includes(require('path').extname(file.name).toLowerCase());
+    if (!mimetypeOk && !extOk) {
       return res.status(400).json({
         success: false,
-        message: 'Chỉ chấp nhận file ảnh (JPEG, PNG, WebP, GIF)'
+        message: 'Chỉ chấp nhận file ảnh (JPEG, PNG, WebP, GIF, HEIC,...)'
       });
     }
 
@@ -109,13 +111,17 @@ exports.uploadMultipleImages = async (req, res) => {
     }
 
     // Validate file types
-    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif'];
-    const invalidFiles = files.filter(f => !allowedTypes.includes(f.mimetype));
+    const allowedExtensions = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.heic', '.heif', '.bmp', '.tiff'];
+    const invalidFiles = files.filter((f) => {
+      const mimetypeOk = f.mimetype && f.mimetype.toLowerCase().startsWith('image/');
+      const extOk = f.name && allowedExtensions.includes(require('path').extname(f.name).toLowerCase());
+      return !mimetypeOk && !extOk;
+    });
     
     if (invalidFiles.length > 0) {
       return res.status(400).json({
         success: false,
-        message: 'Chỉ chấp nhận file ảnh (JPEG, PNG, WebP, GIF)'
+        message: 'Chỉ chấp nhận file ảnh (JPEG, PNG, WebP, GIF, HEIC,...)'
       });
     }
 
