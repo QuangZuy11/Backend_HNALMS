@@ -62,5 +62,30 @@ class ServiceController {
       handleError(res, error);
     }
   }
+
+  // GET /api/services/my-services  (tenant tự xem)
+  async getMyBookedServices(req, res) {
+    try {
+      const tenantId = req.user?.userId;
+      if (!tenantId) {
+        return res.status(401).json({ success: false, message: "Không tìm thấy thông tin người dùng" });
+      }
+      const data = await ServiceService.getBookedServicesByTenant(tenantId);
+      res.status(200).json({ success: true, count: data.length, data });
+    } catch (error) {
+      handleError(res, error);
+    }
+  }
+
+  // GET /api/services/tenant/:tenantId  (manager xem dịch vụ của một tenant cụ thể)
+  async getBookedServicesByTenant(req, res) {
+    try {
+      const { tenantId } = req.params;
+      const data = await ServiceService.getBookedServicesByTenant(tenantId);
+      res.status(200).json({ success: true, count: data.length, data });
+    } catch (error) {
+      handleError(res, error);
+    }
+  }
 }
 module.exports = new ServiceController();
