@@ -374,26 +374,49 @@ exports.getMyContracts = async (req, res) => {
           { path: "floorId", select: "name" },
         ],
       })
-      .populate("depositId", "name phone email room amount status createdDate")
-      .populate("services", "name currentPrice type")
+      .populate("depositId", "name phone email room amount status createdAt")
       .sort({ createdAt: -1 })
       .lean();
 
-    // Fix Decimal128 fields
+    // Lấy BookService cho tất cả hợp đồng cùng lúc
+    const contractIds = contracts.map((c) => c._id);
+    const bookServices = await BookService.find({ contractId: { $in: contractIds } })
+      .populate({
+        path: "services.serviceId",
+        select: "name currentPrice type description",
+      })
+      .lean();
+
+    // Map bookService theo contractId để lookup nhanh
+    const bookServiceMap = {};
+    for (const bs of bookServices) {
+      bookServiceMap[bs.contractId.toString()] = bs.services || [];
+    }
+
+    // Fix Decimal128 và gắn services
     const data = contracts.map((c) => {
       if (c.roomId?.roomTypeId?.currentPrice) {
         c.roomId.roomTypeId.currentPrice = parseFloat(
           c.roomId.roomTypeId.currentPrice.toString(),
         );
       }
-      if (c.services) {
-        c.services = c.services.map((s) => ({
-          ...s,
-          currentPrice: s.currentPrice
-            ? parseFloat(s.currentPrice.toString())
+
+      // Gắn services từ BookService
+      const rawServices = bookServiceMap[c._id.toString()] || [];
+      c.services = rawServices.map((item) => {
+        const svc = item.serviceId || {};
+        return {
+          _id: svc._id,
+          name: svc.name,
+          currentPrice: svc.currentPrice
+            ? parseFloat(svc.currentPrice.toString())
             : 0,
-        }));
-      }
+          type: svc.type,
+          description: svc.description,
+          quantity: item.quantity ?? 1,
+        };
+      });
+
       return c;
     });
 
