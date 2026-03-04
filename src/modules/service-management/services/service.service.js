@@ -1,5 +1,5 @@
 const Service = require("../models/service.model");
-const BookService = require("../models/bookservice.model");
+const BookService = require("../../contract-management/models/bookservice.model");
 const Contract = require("../../contract-management/models/contract.model");
 const PriceHistory = require("../../room-floor-management/models/pricehistory.model");
 const mongoose = require("mongoose");
@@ -190,4 +190,106 @@ exports.deleteService = async (id) => {
     session.endSession();
     throw error;
   }
+};
+
+/**
+ * Lấy toàn bộ danh sách dịch vụ cho tenant (Service List Screen)
+ * - Fixed: hiển thị, không cho book/huỷ
+ * - Extension: hiển thị, cho book nếu chưa đăng ký, cho huỷ nếu đã đăng ký
+ * @param {string} tenantId
+ */
+exports.getAllServicesForTenant = async (tenantId) => {
+  const contract = await Contract.findOne({ tenantId, status: "active" }).lean();
+
+  let bookedServiceIds = new Set();
+  if (contract) {
+    const bookService = await BookService.findOne({ contractId: contract._id }).lean();
+    if (bookService?.services?.length) {
+      bookService.services.forEach((item) => {
+        bookedServiceIds.add(item.serviceId.toString());
+      });
+    }
+  }
+
+  const services = await Service.find({ isActive: true }).sort({ type: 1, name: 1 }).lean();
+
+  return services.map((svc) => {
+    const isBooked = bookedServiceIds.has(svc._id.toString());
+    const isFixed = svc.type === "Fixed";
+    return {
+      ...svc,
+      isBooked,
+      canBook: !isFixed && !isBooked && !!contract,
+      canCancel: !isFixed && isBooked,
+    };
+  });
+};
+
+/**
+ * Tenant đăng ký thêm dịch vụ Extension
+ * @param {string} tenantId
+ * @param {string} serviceId
+ * @param {number} quantity
+ */
+exports.bookServiceForTenant = async (tenantId, serviceId, quantity = 1) => {
+  const service = await Service.findById(serviceId);
+  if (!service) throw { status: 404, message: "Dịch vụ không tồn tại." };
+  if (!service.isActive) throw { status: 400, message: "Dịch vụ này hiện không khả dụng." };
+  if (service.type === "Fixed") {
+    throw { status: 400, message: "Dịch vụ cố định (Fixed) không thể đăng ký thêm." };
+  }
+
+  const contract = await Contract.findOne({ tenantId, status: "active" }).lean();
+  if (!contract) throw { status: 400, message: "Bạn không có hợp đồng hiệu lực." };
+
+  let bookService = await BookService.findOne({ contractId: contract._id });
+  if (!bookService) {
+    bookService = new BookService({ contractId: contract._id, services: [] });
+  }
+
+  const alreadyBooked = bookService.services.some(
+    (item) => item.serviceId.toString() === serviceId.toString()
+  );
+  if (alreadyBooked) throw { status: 400, message: "Bạn đã đăng ký dịch vụ này rồi." };
+
+  bookService.services.push({ serviceId, quantity });
+  await bookService.save();
+
+  return {
+    serviceId: service._id,
+    name: service.name,
+    currentPrice: service.currentPrice,
+    type: service.type,
+    quantity,
+    contractId: contract._id,
+  };
+};
+
+/**
+ * Tenant huỷ đăng ký dịch vụ Extension
+ * @param {string} tenantId
+ * @param {string} serviceId
+ */
+exports.cancelBookedServiceForTenant = async (tenantId, serviceId) => {
+  const service = await Service.findById(serviceId);
+  if (!service) throw { status: 404, message: "Dịch vụ không tồn tại." };
+  if (service.type === "Fixed") {
+    throw { status: 400, message: "Dịch vụ cố định (Fixed) không thể huỷ đăng ký." };
+  }
+
+  const contract = await Contract.findOne({ tenantId, status: "active" }).lean();
+  if (!contract) throw { status: 400, message: "Bạn không có hợp đồng hiệu lực." };
+
+  const bookService = await BookService.findOne({ contractId: contract._id });
+  if (!bookService) throw { status: 404, message: "Bạn chưa đăng ký dịch vụ nào." };
+
+  const existingIndex = bookService.services.findIndex(
+    (item) => item.serviceId.toString() === serviceId.toString()
+  );
+  if (existingIndex === -1) throw { status: 404, message: "Bạn chưa đăng ký dịch vụ này." };
+
+  bookService.services.splice(existingIndex, 1);
+  await bookService.save();
+
+  return { message: "Huỷ đăng ký dịch vụ thành công." };
 };
