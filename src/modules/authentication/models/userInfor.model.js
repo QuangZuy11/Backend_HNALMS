@@ -1,43 +1,42 @@
-const mongoose = require('mongoose');
-const User = require('./user.model');
+const mongoose = require("mongoose");
+const User = require("./user.model");
 const userInfoSchema = new mongoose.Schema(
   {
     userId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
+      ref: "User",
       required: true,
-      unique: true // đảm bảo 1 User chỉ có 1 UserInfo
+      unique: true, // đảm bảo 1 User chỉ có 1 UserInfo
     },
 
     fullname: {
       type: String,
-      trim: true
+      trim: true,
     },
 
     cccd: {
       type: String,
       trim: true,
-      unique: true,
-      sparse: true // cho phép nhiều document có cccd = null
     },
 
     address: {
       type: String,
-      trim: true
+      trim: true,
     },
 
     dob: {
-      type: Date
+      type: Date,
     },
 
     gender: {
       type: String,
-      enum: ['Male', 'Female', 'Other']
-    }
+      enum: ["Male", "Female", "Other"],
+    },
   },
   {
-    timestamps: true
-  }
+    timestamps: true,
+    autoIndex: false, // Prevent Mongoose from auto-creating indexes (manage manually)
+  },
 );
 
-module.exports = mongoose.model('UserInfo', userInfoSchema);
+module.exports = mongoose.model("UserInfo", userInfoSchema);

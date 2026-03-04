@@ -15,9 +15,9 @@ const bookServiceSchema = new Schema(
           ref: "Service",
           required: true,
         },
-        // quantity: only for quantity_based services (vehicle parking)
-        // Omitted for fixed_monthly and per_person services
-        quantity: { type: Number },
+        quantity: { type: Number, default: 1 },
+        startDate: { type: Date, required: true },
+        endDate: { type: Date, default: null },
         _id: false,
       },
     ],
