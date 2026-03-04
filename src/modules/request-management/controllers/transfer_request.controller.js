@@ -113,3 +113,73 @@ exports.cancelTransferRequest = async (req, res) => {
     });
   }
 };
+
+/**
+ * [MANAGER] Lấy danh sách tất cả yêu cầu chuyển phòng
+ * GET /api/requests/transfer
+ * Query: ?status=Pending&search=abc&page=1&limit=10
+ */
+exports.getAllTransferRequests = async (req, res) => {
+  try {
+    const { status, search, page, limit } = req.query || {};
+    const result = await transferService.getAllTransferRequestsForManager({ status, search, page, limit });
+    res.status(200).json({
+      success: true,
+      message: "Lấy danh sách yêu cầu chuyển phòng thành công",
+      ...result,
+    });
+  } catch (error) {
+    console.error("Get all transfer requests error:", error);
+    const status = error.status || 500;
+    res.status(status).json({ success: false, message: error.message || "Server error" });
+  }
+};
+
+/**
+ * [MANAGER] Lấy chi tiết yêu cầu chuyển phòng
+ * GET /api/requests/transfer/:id
+ */
+exports.getTransferRequestById = async (req, res) => {
+  try {
+    const result = await transferService.getTransferRequestById(req.params.id);
+    res.status(200).json({ success: true, message: "Lấy chi tiết thành công", data: result });
+  } catch (error) {
+    console.error("Get transfer request by id error:", error);
+    const status = error.status || 500;
+    res.status(status).json({ success: false, message: error.message || "Server error" });
+  }
+};
+
+/**
+ * [MANAGER] Duyệt yêu cầu chuyển phòng
+ * PATCH /api/requests/transfer/:id/approve
+ * Body: { managerNote? }
+ */
+exports.approveTransferRequest = async (req, res) => {
+  try {
+    const { managerNote } = req.body || {};
+    const result = await transferService.approveTransferRequest(req.params.id, managerNote);
+    res.status(200).json({ success: true, message: "Đã duyệt yêu cầu chuyển phòng", data: result });
+  } catch (error) {
+    console.error("Approve transfer request error:", error);
+    const status = error.status || 500;
+    res.status(status).json({ success: false, message: error.message || "Server error" });
+  }
+};
+
+/**
+ * [MANAGER] Từ chối yêu cầu chuyển phòng
+ * PATCH /api/requests/transfer/:id/reject
+ * Body: { rejectReason }
+ */
+exports.rejectTransferRequest = async (req, res) => {
+  try {
+    const { rejectReason } = req.body || {};
+    const result = await transferService.rejectTransferRequest(req.params.id, rejectReason);
+    res.status(200).json({ success: true, message: "Đã từ chối yêu cầu chuyển phòng", data: result });
+  } catch (error) {
+    console.error("Reject transfer request error:", error);
+    const status = error.status || 500;
+    res.status(status).json({ success: false, message: error.message || "Server error" });
+  }
+};
