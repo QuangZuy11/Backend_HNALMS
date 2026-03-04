@@ -1,7 +1,7 @@
 const Invoice = require("../models/invoice.model");
 const Room = require("../../room-floor-management/models/room.model");
 const MeterReading = require('../models/meterreading.model');
-const BookService = require('../../service-management/models/bookservice.model');
+const BookService = require('../../contract-management/models/bookservice.model');
 const Service = require("../../service-management/models/service.model");
 // [MỚI] Import model Contract
 const Contract = require('../../contract-management/models/contract.model');
