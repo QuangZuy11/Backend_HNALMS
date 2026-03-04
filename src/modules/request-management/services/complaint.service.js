@@ -178,6 +178,20 @@ const updateComplaintRequest = async (id, data) => {
  */
 const updateComplaintStatus = async (id, status, response, responderId) => {
   try {
+    const statusRank = { Pending: 0, Processing: 1, Done: 2 };
+    const current = await ComplaintRequest.findById(id).select("status").lean();
+    if (!current) {
+      throw new Error("Khiếu nại không tồn tại");
+    }
+
+    const currentRank = statusRank[current.status] ?? -1;
+    const nextRank = statusRank[status] ?? -1;
+
+    // Không cho chuyển lùi hoặc chuyển lại cùng trạng thái
+    if (nextRank <= currentRank) {
+      throw new Error("Không thể chuyển lùi trạng thái khiếu nại");
+    }
+
     const updateData = {
       status,
       ...(response && { response }),

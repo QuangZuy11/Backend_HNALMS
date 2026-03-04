@@ -99,13 +99,16 @@ exports.createRepairRequest = async (req, res) => {
  */
 exports.getRepairRequests = async (req, res) => {
   try {
-    const { roomSearch, tenantSearch, page, limit } = req.query || {};
+    const { roomSearch, tenantSearch, page, limit, type } = req.query || {};
     const filters = {};
     if (roomSearch && roomSearch.trim()) {
       filters.roomSearch = roomSearch.trim();
     }
     if (tenantSearch && tenantSearch.trim()) {
       filters.tenantSearch = tenantSearch.trim();
+    }
+    if (type && type.trim()) {
+      filters.type = type.trim();
     }
     if (page) {
       filters.page = page;
@@ -231,6 +234,7 @@ exports.updateRepairStatus = async (req, res) => {
       financialTitle,
       financialAmount,
       financialType,
+      paymentVoucher,
       // Loại thanh toán (REVENUE / EXPENSE)
       paymentType,
     } = req.body || {};
@@ -258,6 +262,7 @@ exports.updateRepairStatus = async (req, res) => {
             type: financialType || "Payment",
             title: financialTitle,
             amount: financialAmount,
+            paymentVoucher,
           }
         : null;
 
@@ -409,6 +414,69 @@ exports.deleteRepairRequest = async (req, res) => {
       });
     }
 
+    res.status(500).json({
+      success: false,
+      message: error.message || "Server error",
+    });
+  }
+};
+
+/**
+ * Lấy invoiceCode kế tiếp cho hóa đơn sửa chữa (manager)
+ * GET /api/requests/repair/next-invoice-code
+ */
+exports.getNextRepairInvoiceCode = async (req, res) => {
+  try {
+    const invoiceCode = await requestService.getNextRepairInvoiceCode();
+    res.json({
+      success: true,
+      message: "Lấy mã hóa đơn sửa chữa kế tiếp thành công",
+      data: { invoiceCode },
+    });
+  } catch (error) {
+    console.error("Get next repair invoice code error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Server error",
+    });
+  }
+};
+
+/**
+ * Lấy paymentVoucher kế tiếp cho phiếu chi sửa chữa miễn phí (manager)
+ * GET /api/requests/repair/next-payment-voucher
+ */
+exports.getNextRepairPaymentVoucher = async (req, res) => {
+  try {
+    const paymentVoucher = await requestService.getNextPaymentVoucherCode();
+    res.json({
+      success: true,
+      message: "Lấy mã phiếu chi sửa chữa kế tiếp thành công",
+      data: { paymentVoucher },
+    });
+  } catch (error) {
+    console.error("Get next repair payment voucher error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Server error",
+    });
+  }
+};
+
+/**
+ * Lấy paymentVoucher kế tiếp cho phiếu chi bảo trì (manager)
+ * GET /api/requests/maintenance/next-payment-voucher
+ */
+exports.getNextMaintenancePaymentVoucher = async (req, res) => {
+  try {
+    const paymentVoucher = await requestService.getNextMaintenancePaymentVoucherCode();
+    res.json({
+      success: true,
+      message: "Lấy mã phiếu chi bảo trì kế tiếp thành công",
+      data: { paymentVoucher },
+    });
+  } catch (error) {
+    console.error("Get next maintenance payment voucher error:", error);
     res.status(500).json({
       success: false,
       message: error.message || "Server error",

@@ -7,6 +7,10 @@ const Contract = require("../../contract-management/models/contract.model");
 const Invoice = require("../../invoice-management/models/invoice.model");
 const FinancialTicket = require("../../managing-income-expenses/models/financial_tickets");
 
+const REPAIR_INVOICE_PREFIX = "INV-RP-";
+const PAYMENT_VOUCHER_PREFIX = "PMV-RP-";
+const MAINTENANCE_PAYMENT_VOUCHER_PREFIX = "PMV-MT-";
+
 // Helper: chuẩn hoá chuỗi tiếng Việt để tìm kiếm không phân biệt dấu, hoa/thường
 const normalizeVietnamese = (str = "") =>
   str
@@ -26,7 +30,7 @@ const attachComputedCost = async (requests) => {
 
   // Query song song Invoice và FinancialTicket dựa vào repairRequestId/referenceId
   const queryPromises = [];
-  
+
   // Query Invoice cho các request có paymentType = REVENUE
   if (revenueRequests.length > 0) {
     const revenueRequestIds = revenueRequests.map((r) => r._id.toString());
@@ -163,9 +167,17 @@ const getRepairRequests = async (filters = {}) => {
     // Tối ưu: Giới hạn số lượng query để tránh timeout
     // Load tối đa 500 records để xử lý filter và pagination (giảm để tránh timeout)
     const MAX_QUERY_LIMIT = 500;
-    
+
     // Query RepairRequest với limit để tránh load quá nhiều dữ liệu
-    const repairRequests = await RepairRequest.find({})
+    // Mặc định: danh sách sửa chữa chỉ lấy type = "Sửa chữa".
+    // Có thể truyền filters.type = "Bảo trì" để lấy danh sách bảo trì.
+    const allowedTypes = ["Sửa chữa", "Bảo trì"];
+    const requestType =
+      typeof filters.type === "string" && allowedTypes.includes(filters.type)
+        ? filters.type
+        : "Sửa chữa";
+
+    const repairRequests = await RepairRequest.find({ type: requestType })
       .populate({
         path: "tenantId",
         select: "username email phoneNumber role",
@@ -244,7 +256,7 @@ const getRepairRequests = async (filters = {}) => {
     for (let request of repairRequests) {
       if (request.tenantId) {
         const tenantIdStr = request.tenantId._id.toString();
-        
+
         // Lấy fullname từ map
         const fullname = userInfoMap.get(tenantIdStr);
         if (fullname !== undefined) {
@@ -285,7 +297,7 @@ const getRepairRequests = async (filters = {}) => {
     // Nếu có filter nhưng chưa filter ở trên (trường hợp không có tenantSearch/roomSearch),
     // hoặc cần filter lại để đảm bảo chính xác (do normalizeVietnamese không thể dùng trong MongoDB query)
     let filteredRequests = repairRequests;
-    
+
     if (filters.roomSearch && filters.roomSearch.trim()) {
       const searchTerm = normalizeVietnamese(filters.roomSearch.trim());
       filteredRequests = filteredRequests.filter((request) => {
@@ -380,6 +392,134 @@ const getRepairRequestsByTenant = async (tenantId) => {
 };
 
 /**
+ * Lấy invoiceCode kế tiếp cho hóa đơn sửa chữa (manager)
+ * Format: INV-RP-XXXX (4 số, tăng dần)
+ * @returns {string} invoiceCode
+ */
+const getNextRepairInvoiceCode = async () => {
+  // Lấy hóa đơn mới nhất theo prefix (sort string works vì luôn 4 chữ số)
+  const latest = await Invoice.findOne({
+    invoiceCode: { $regex: `^${REPAIR_INVOICE_PREFIX}\\d{4}$` },
+  })
+    .select("invoiceCode")
+    .sort({ invoiceCode: -1 })
+    .lean();
+
+  let nextNumber = 1;
+  if (latest?.invoiceCode) {
+    const suffix = latest.invoiceCode.slice(REPAIR_INVOICE_PREFIX.length);
+    const parsed = parseInt(suffix, 10);
+    if (!Number.isNaN(parsed)) {
+      nextNumber = parsed + 1;
+    }
+  }
+
+  // Tránh race condition đơn giản: dò tới khi tìm được code chưa tồn tại
+  for (let i = 0; i < 100; i++) {
+    if (nextNumber > 9999) {
+      throw new Error("Đã vượt quá giới hạn mã hóa đơn sửa chữa (9999)");
+    }
+
+    const candidate = `${REPAIR_INVOICE_PREFIX}${String(nextNumber).padStart(4, "0")}`;
+    // eslint-disable-next-line no-await-in-loop
+    const exists = await Invoice.exists({ invoiceCode: candidate });
+    if (!exists) return candidate;
+
+    nextNumber += 1;
+  }
+
+  throw new Error("Không thể tạo mã hóa đơn sửa chữa kế tiếp, vui lòng thử lại");
+};
+
+/**
+ * Lấy paymentVoucher kế tiếp cho phiếu chi sửa chữa miễn phí (manager)
+ * Format: PMV-RP-XXXX (4 số, tăng dần)
+ * @returns {string} paymentVoucher
+ */
+const getNextPaymentVoucherCode = async () => {
+  const latest = await FinancialTicket.findOne({
+    type: "Payment",
+    paymentVoucher: { $regex: `^${PAYMENT_VOUCHER_PREFIX}\\d{4}$` },
+  })
+    .select("paymentVoucher")
+    .sort({ paymentVoucher: -1 })
+    .lean();
+
+  let nextNumber = 1;
+  if (latest?.paymentVoucher) {
+    const suffix = latest.paymentVoucher.slice(PAYMENT_VOUCHER_PREFIX.length);
+    const parsed = parseInt(suffix, 10);
+    if (!Number.isNaN(parsed)) {
+      nextNumber = parsed + 1;
+    }
+  }
+
+  for (let i = 0; i < 100; i++) {
+    if (nextNumber > 9999) {
+      throw new Error("Đã vượt quá giới hạn mã phiếu chi sửa chữa (9999)");
+    }
+
+    const candidate = `${PAYMENT_VOUCHER_PREFIX}${String(nextNumber).padStart(
+      4,
+      "0"
+    )}`;
+    // eslint-disable-next-line no-await-in-loop
+    const exists = await FinancialTicket.exists({ paymentVoucher: candidate });
+    if (!exists) return candidate;
+
+    nextNumber += 1;
+  }
+
+  throw new Error(
+    "Không thể tạo mã phiếu chi sửa chữa kế tiếp, vui lòng thử lại"
+  );
+};
+
+/**
+ * Lấy paymentVoucher kế tiếp cho phiếu chi bảo trì (manager)
+ * Format: PMV-MT-XXXX (4 số, tăng dần)
+ * @returns {string} paymentVoucher
+ */
+const getNextMaintenancePaymentVoucherCode = async () => {
+  const latest = await FinancialTicket.findOne({
+    type: "Payment",
+    paymentVoucher: { $regex: `^${MAINTENANCE_PAYMENT_VOUCHER_PREFIX}\\d{4}$` },
+  })
+    .select("paymentVoucher")
+    .sort({ paymentVoucher: -1 })
+    .lean();
+
+  let nextNumber = 1;
+  if (latest?.paymentVoucher) {
+    const suffix = latest.paymentVoucher.slice(MAINTENANCE_PAYMENT_VOUCHER_PREFIX.length);
+    const parsed = parseInt(suffix, 10);
+    if (!Number.isNaN(parsed)) {
+      nextNumber = parsed + 1;
+    }
+  }
+
+  for (let i = 0; i < 100; i++) {
+    if (nextNumber > 9999) {
+      throw new Error("Đã vượt quá giới hạn mã phiếu chi bảo trì (9999)");
+    }
+
+    const candidate = `${MAINTENANCE_PAYMENT_VOUCHER_PREFIX}${String(nextNumber).padStart(
+      4,
+      "0"
+    )}`;
+    // eslint-disable-next-line no-await-in-loop
+    const exists = await FinancialTicket.exists({ paymentVoucher: candidate });
+    if (!exists) return candidate;
+
+    nextNumber += 1;
+  }
+
+  throw new Error(
+    "Không thể tạo mã phiếu chi bảo trì kế tiếp, vui lòng thử lại"
+  );
+};
+
+/**
  * Cập nhật trạng thái yêu cầu sửa chữa
  * @param {string} requestId - ID của yêu cầu
  * @param {"Pending"|"Processing"|"Done"|"Unpaid"|"Paid"} status - Trạng thái mới
@@ -411,7 +551,30 @@ const updateRepairRequestStatus = async (
     throw new Error("Yêu cầu sửa chữa không tồn tại");
   }
 
-  request.status = status;
+  // Luồng đặc biệt: khi manager hoàn thành "sửa chữa có phí" (status=Done + paymentType=REVENUE)
+  // thì chuyển trạng thái request sang "Unpair" (chờ thanh toán) và KHÔNG dùng paymentStatus.
+  const nextStatus =
+    status === "Done" && paymentType === "REVENUE" ? "Unpair" : status;
+
+  // Không cho phép chuyển trạng thái lùi về bước trước
+  // Thứ tự: Pending (0) -> Processing (1) -> Done (2) -> Unpair (3)
+  const statusRank = {
+    Pending: 0,
+    Processing: 1,
+    Done: 2,
+    Unpair: 3,
+  };
+
+  const currentRank = statusRank[request.status] ?? 0;
+  const targetRank = statusRank[nextStatus];
+
+  if (targetRank < currentRank) {
+    throw new Error(
+      "Không thể chuyển trạng thái lùi về bước trước. Vui lòng chọn trạng thái tiếp theo."
+    );
+  }
+
+  request.status = nextStatus;
 
   // Xử lý khi chuyển sang Đã xử lý (Done) hoặc Chưa thanh toán (Unpaid)
   if (status === "Done" || status === "Unpaid") {
@@ -481,11 +644,15 @@ const updateRepairRequestStatus = async (
 
     // 2. Tạo phiếu chi nội bộ nếu frontend gửi kèm dữ liệu financialTicket (sửa chữa miễn phí)
     if (financialTicketData) {
-      const { type = "Payment", amount, title } = financialTicketData;
+      const { type = "Payment", amount, title, paymentVoucher } =
+        financialTicketData;
 
       if (amount === undefined || amount === null) {
         throw new Error("Thiếu số tiền cho phiếu chi");
       }
+
+      const voucherCode =
+        paymentVoucher || (await getNextPaymentVoucherCode());
 
       const newTicket = new FinancialTicket({
         type: type || "Payment",
@@ -494,6 +661,7 @@ const updateRepairRequestStatus = async (
         referenceId: request._id,
         status: "Created",
         transactionDate: new Date(),
+        paymentVoucher: voucherCode,
       });
 
       await newTicket.save();
@@ -615,7 +783,7 @@ const updateRepairRequestByTenant = async (requestId, tenantId, data) => {
 const deleteRepairRequest = async (requestId) => {
   try {
     const request = await RepairRequest.findById(requestId);
-    
+
     if (!request) {
       throw new Error("Yêu cầu sửa chữa không tồn tại");
     }
@@ -638,6 +806,9 @@ module.exports = {
   getRepairRequests,
   getRepairRequestsByTenant,
   getRepairRequestById,
+  getNextRepairInvoiceCode,
+  getNextPaymentVoucherCode,
+  getNextMaintenancePaymentVoucherCode,
   updateRepairRequestStatus,
   updateRepairRequestByTenant,
   deleteRepairRequest,
