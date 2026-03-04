@@ -33,5 +33,39 @@ class InvoiceController {
       res.status(404).json({ success: false, message: error.message });
     }
   }
+
+  // Lấy hóa đơn theo TenantId (có phân trang)
+  async getInvoicesByTenant(req, res) {
+    try {
+      const { tenantId } = req.params;
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit) || 10;
+
+      const result = await invoiceService.getInvoicesByTenantId(tenantId, page, limit);
+      res.status(200).json({
+        success: true,
+        data: result.invoices,
+        pagination: result.pagination,
+      });
+    } catch (error) {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  // Tenant xem chi tiết 1 hóa đơn của chính mình
+  async getMyInvoiceById(req, res) {
+    try {
+      const tenantId = req.user?.userId;
+      if (!tenantId) {
+        return res.status(401).json({ success: false, message: "Unauthorized - Vui lòng đăng nhập" });
+      }
+
+      const invoice = await invoiceService.getMyInvoiceById(tenantId, req.params.id);
+      res.status(200).json({ success: true, data: invoice });
+    } catch (error) {
+      const statusCode = error.message.includes("quyền") ? 403 : error.message.includes("Không tìm thấy") ? 404 : 500;
+      res.status(statusCode).json({ success: false, message: error.message });
+    }
+  }
 }
 module.exports = new InvoiceController();

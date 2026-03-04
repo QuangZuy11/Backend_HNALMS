@@ -29,10 +29,11 @@ const depositSchema = new Schema(
       unique: true,
       sparse: true, // cho phép null nhưng unique khi có giá trị
     },
+    // codeDeposit: DEPRECATED - Không còn sử dụng từ 03/03/2026
     codeDeposit: {
       type: String,
       unique: true,
-      sparse: true, // Format: CHN-P310-020226
+      sparse: true, // Format cũ: CHN-P310-020226 (giữ lại để backward compatible)
     },
     status: {
       type: String,

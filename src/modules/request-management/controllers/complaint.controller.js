@@ -12,7 +12,7 @@ const { successResponse, errorResponse } = require("../../../shared/utils/respon
  */
 exports.createComplaint = async (req, res) => {
   try {
-    const { content, category, priority } = req.body;
+    const { content, category } = req.body;
     const tenantId = req.user?.userId;
 
     // Validate required fields
@@ -28,8 +28,7 @@ exports.createComplaint = async (req, res) => {
     const complaint = await complaintService.createComplaintRequest({
       tenantId,
       content,
-      category,
-      priority: priority || "Low"
+      category
     });
 
     return successResponse(
@@ -155,7 +154,7 @@ exports.getComplaintList = async (req, res) => {
 exports.updateComplaint = async (req, res) => {
   try {
     const { id } = req.params;
-    const { content, category, priority } = req.body;
+    const { content, category } = req.body;
     const userId = req.user?.userId;
 
     const complaint = await complaintService.getComplaintById(id);
@@ -169,7 +168,10 @@ exports.updateComplaint = async (req, res) => {
     }
 
     // Only owner can update pending complaint
-    if (complaint.tenantId.toString() !== userId) {
+    const ownerIdUpdate = complaint.tenantId?._id
+      ? complaint.tenantId._id.toString()
+      : complaint.tenantId.toString();
+    if (ownerIdUpdate !== userId.toString()) {
       return errorResponse(
         res,
         "Bạn không có quyền cập nhật khiếu nại này",
@@ -187,8 +189,7 @@ exports.updateComplaint = async (req, res) => {
 
     const updatedComplaint = await complaintService.updateComplaintRequest(id, {
       content,
-      category,
-      priority
+      category
     });
 
     return successResponse(
@@ -248,6 +249,13 @@ exports.updateComplaintStatus = async (req, res) => {
     );
   } catch (error) {
     console.error("Update complaint status error:", error);
+    // Invalid transition / not found should be 400-level
+    if (
+      error.message?.includes("Không thể chuyển lùi") ||
+      error.message?.includes("không tồn tại")
+    ) {
+      return errorResponse(res, error.message, 400);
+    }
     return errorResponse(
       res,
       error.message || "Lỗi khi cập nhật trạng thái khiếu nại",
@@ -276,7 +284,10 @@ exports.deleteComplaint = async (req, res) => {
     }
 
     // Only owner can delete pending complaint
-    if (complaint.tenantId.toString() !== userId) {
+    const ownerIdDelete = complaint.tenantId?._id
+      ? complaint.tenantId._id.toString()
+      : complaint.tenantId.toString();
+    if (ownerIdDelete !== userId.toString()) {
       return errorResponse(
         res,
         "Bạn không có quyền xóa khiếu nại này",

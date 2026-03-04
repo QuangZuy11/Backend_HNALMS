@@ -8,12 +8,12 @@ const Contract = require("../../contract-management/models/contract.model");
 
 /**
  * Tạo yêu cầu khiếu nại mới
- * @param {Object} data - {tenantId, content, category, priority}
+ * @param {Object} data - {tenantId, content, category}
  * @returns {Object} Complaint request vừa tạo
  */
 const createComplaintRequest = async (data) => {
   try {
-    const { tenantId, content, category, priority } = data;
+    const { tenantId, content, category } = data;
 
     // Validate input
     if (!tenantId || !content || !category) {
@@ -24,7 +24,6 @@ const createComplaintRequest = async (data) => {
       tenantId,
       content,
       category,
-      priority: priority || "Low",
       status: "Pending"
     });
 
@@ -142,19 +141,18 @@ const getComplaintsList = async (filters = {}, page = 1, limit = 10) => {
 };
 
 /**
- * Cập nhật thông tin khiếu nại (chỉ content, category, priority)
+ * Cập nhật thông tin khiếu nại (chỉ content, category)
  * @param {string} id - Complaint ID
- * @param {Object} data - {content, category, priority}
+ * @param {Object} data - {content, category}
  * @returns {Object} Updated complaint
  */
 const updateComplaintRequest = async (id, data) => {
   try {
-    const { content, category, priority } = data;
+    const { content, category } = data;
 
     const updateData = {};
     if (content) updateData.content = content;
     if (category) updateData.category = category;
-    if (priority) updateData.priority = priority;
 
     const complaint = await ComplaintRequest.findByIdAndUpdate(
       id,
@@ -180,6 +178,20 @@ const updateComplaintRequest = async (id, data) => {
  */
 const updateComplaintStatus = async (id, status, response, responderId) => {
   try {
+    const statusRank = { Pending: 0, Processing: 1, Done: 2 };
+    const current = await ComplaintRequest.findById(id).select("status").lean();
+    if (!current) {
+      throw new Error("Khiếu nại không tồn tại");
+    }
+
+    const currentRank = statusRank[current.status] ?? -1;
+    const nextRank = statusRank[status] ?? -1;
+
+    // Không cho chuyển lùi hoặc chuyển lại cùng trạng thái
+    if (nextRank <= currentRank) {
+      throw new Error("Không thể chuyển lùi trạng thái khiếu nại");
+    }
+
     const updateData = {
       status,
       ...(response && { response }),
@@ -226,8 +238,7 @@ const getComplaintStatistics = async () => {
       pendingCount,
       processingCount,
       doneCount,
-      byCategory,
-      byPriority
+      byCategory
     ] = await Promise.all([
       ComplaintRequest.countDocuments(),
       ComplaintRequest.countDocuments({ status: "Pending" }),
@@ -241,14 +252,6 @@ const getComplaintStatistics = async () => {
           }
         },
         { $sort: { count: -1 } }
-      ]),
-      ComplaintRequest.aggregate([
-        {
-          $group: {
-            _id: "$priority",
-            count: { $sum: 1 }
-          }
-        }
       ])
     ]);
 
@@ -260,7 +263,6 @@ const getComplaintStatistics = async () => {
         done: doneCount
       },
       byCategory,
-      byPriority,
       completionRate: totalComplaints > 0 
         ? ((doneCount / totalComplaints) * 100).toFixed(2) 
         : 0
@@ -289,25 +291,6 @@ const getComplaintsByCategory = async (category) => {
   }
 };
 
-/**
- * Lấy khiếu nại theo priority
- * @param {string} priority - "Low", "Medium", "High"
- * @returns {Array} Complaints
- */
-const getComplaintsByPriority = async (priority) => {
-  try {
-    const complaints = await ComplaintRequest.find({ priority })
-      .populate("tenantId", "username email phoneNumber")
-      .populate("responseBy", "username email role")
-      .sort({ createdDate: -1 })
-      .lean();
-
-    return complaints;
-  } catch (error) {
-    throw new Error(`Error fetching complaints by priority: ${error.message}`);
-  }
-};
-
 module.exports = {
   createComplaintRequest,
   getComplaintById,
@@ -316,6 +299,5 @@ module.exports = {
   updateComplaintStatus,
   deleteComplaint,
   getComplaintStatistics,
-  getComplaintsByCategory,
-  getComplaintsByPriority
+  getComplaintsByCategory
 };

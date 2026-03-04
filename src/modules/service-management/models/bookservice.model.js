@@ -1,51 +1,39 @@
 const mongoose = require("mongoose");
 
-const roomServiceSchema = new mongoose.Schema(
+// Sub-schema cho từng dịch vụ trong mảng
+const bookedServiceItemSchema = new mongoose.Schema(
   {
-    contractId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Contracts", // Liên kết đến bảng Hợp đồng
-      required: [true, "Hợp đồng đăng ký là bắt buộc"],
-    },
     serviceId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "Service", // Liên kết đến bảng Service bạn vừa đưa
+      ref: "Service",
       required: [true, "Dịch vụ đăng ký là bắt buộc"],
     },
     quantity: {
       type: Number,
       default: 1,
-      min: [1, "Số lượng ít nhất phải là 1"], // Dùng cho trường hợp đăng ký 2 vé xe, 2 người...
+      min: [1, "Số lượng ít nhất phải là 1"],
     },
-    startDate: {
-      type: Date,
-      required: [true, "Ngày bắt đầu là bắt buộc"],
-      default: Date.now,
+  },
+  { _id: false }
+);
+
+// Schema chính: 1 document per contract, chứa mảng services
+const bookServiceSchema = new mongoose.Schema(
+  {
+    contractId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Contracts",
+      required: [true, "Hợp đồng đăng ký là bắt buộc"],
+      unique: true, // Mỗi hợp đồng chỉ có 1 bản ghi BookService
     },
-    endDate: {
-      type: Date,
-      // Có thể null. Nếu null nghĩa là dịch vụ gia hạn hàng tháng cho đến khi khách báo hủy
-    },
-    status: {
-      type: String,
-      enum: ["Active", "Canceled"],
-      default: "Active",
-      /* - Active: Đang sử dụng (sẽ bị tính tiền khi tạo hóa đơn hàng tháng)
-        - Canceled: Khách báo hủy giữa chừng
-        - Completed: Dịch vụ đã kết thúc (đã qua endDate)
-      */
-    },
-    note: {
-      type: String, // Ghi chú thêm (VD: Biển số xe: 29A1-12345)
-      default: "",
+    services: {
+      type: [bookedServiceItemSchema],
+      default: [],
     },
   },
   {
-    timestamps: true, // Tự động có createdAt, updatedAt
+    timestamps: true,
   }
 );
 
-// Đảm bảo 1 phòng không đăng ký trùng 1 dịch vụ đang Active (Tùy chọn, nếu bạn muốn chặn)
- roomServiceSchema.index({ contractId: 1, serviceId: 1, status: 1 }, { unique: true, partialFilterExpression: { status: 'Active' } });
-
-module.exports = mongoose.models.BookService || mongoose.model("BookService", roomServiceSchema);
+module.exports = mongoose.models.BookService || mongoose.model("BookService", bookServiceSchema);
