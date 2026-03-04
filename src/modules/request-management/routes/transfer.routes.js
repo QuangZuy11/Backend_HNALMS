@@ -85,6 +85,28 @@ router.patch(
 );
 
 /**
+ * [TENANT] Cập nhật yêu cầu chuyển phòng (chỉ khi Pending)
+ * PUT /api/requests/transfer/:id
+ */
+router.put(
+  "/:id",
+  authenticate,
+  authorize("Tenant"),
+  transferController.updateTransferRequest
+);
+
+/**
+ * [TENANT] Xóa yêu cầu chuyển phòng (chỉ khi Pending)
+ * DELETE /api/requests/transfer/:id
+ */
+router.delete(
+  "/:id",
+  authenticate,
+  authorize("Tenant"),
+  transferController.deleteTransferRequest
+);
+
+/**
  * [TENANT] Hủy yêu cầu chuyển phòng (chỉ khi Pending)
  * PATCH /api/requests/transfer/:id/cancel
  */
