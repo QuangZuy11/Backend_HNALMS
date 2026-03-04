@@ -249,6 +249,13 @@ exports.updateComplaintStatus = async (req, res) => {
     );
   } catch (error) {
     console.error("Update complaint status error:", error);
+    // Invalid transition / not found should be 400-level
+    if (
+      error.message?.includes("Không thể chuyển lùi") ||
+      error.message?.includes("không tồn tại")
+    ) {
+      return errorResponse(res, error.message, 400);
+    }
     return errorResponse(
       res,
       error.message || "Lỗi khi cập nhật trạng thái khiếu nại",

@@ -51,6 +51,44 @@ router.get(
 );
 
 /**
+ * Lấy invoiceCode kế tiếp cho hóa đơn sửa chữa
+ * GET /api/requests/repair/next-invoice-code
+ * Chỉ dành cho role manager
+ *
+ * NOTE: route này phải đặt TRƯỚC /repair/:requestId để tránh bị match nhầm.
+ */
+router.get(
+  "/repair/next-invoice-code",
+  authenticate,
+  authorize("manager"),
+  requestController.getNextRepairInvoiceCode
+);
+
+/**
+ * Lấy paymentVoucher kế tiếp cho phiếu chi sửa chữa miễn phí
+ * GET /api/requests/repair/next-payment-voucher
+ * Chỉ dành cho role manager
+ */
+router.get(
+  "/repair/next-payment-voucher",
+  authenticate,
+  authorize("manager"),
+  requestController.getNextRepairPaymentVoucher
+);
+
+/**
+ * Lấy paymentVoucher kế tiếp cho phiếu chi bảo trì
+ * GET /api/requests/maintenance/next-payment-voucher
+ * Chỉ dành cho role manager
+ */
+router.get(
+  "/maintenance/next-payment-voucher",
+  authenticate,
+  authorize("manager"),
+  requestController.getNextMaintenancePaymentVoucher
+);
+
+/**
  * Lấy danh sách yêu cầu sửa chữa của tenant hiện tại
  * GET /api/requests/repair/my-requests
  * Dành cho tenant
