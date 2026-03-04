@@ -6,7 +6,7 @@ const UserSchema = new Schema({
     phoneNumber: { type: String, required: true },
     email: { type: String, required: true, index: true, trim: true, lowercase: true },
     password: { type: String, required: true },
-    role: { type: String, enum: ['admin', 'manager', 'owner', 'Tenant', 'accountant'], default: 'Tenant' },
+    role: { type: String, enum: ['admin', 'manager', 'owner', 'Tenant', 'a'], default: 'Tenant' },
     status: { type: String, enum: ['active', 'inactive', 'suspended'], default: 'active' },
     createdBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
     createdAt: { type: Date, default: Date.now }

@@ -30,7 +30,7 @@ const attachComputedCost = async (requests) => {
 
   // Query song song Invoice và FinancialTicket dựa vào repairRequestId/referenceId
   const queryPromises = [];
-  
+
   // Query Invoice cho các request có paymentType = REVENUE
   if (revenueRequests.length > 0) {
     const revenueRequestIds = revenueRequests.map((r) => r._id.toString());
@@ -167,9 +167,17 @@ const getRepairRequests = async (filters = {}) => {
     // Tối ưu: Giới hạn số lượng query để tránh timeout
     // Load tối đa 500 records để xử lý filter và pagination (giảm để tránh timeout)
     const MAX_QUERY_LIMIT = 500;
-    
+
     // Query RepairRequest với limit để tránh load quá nhiều dữ liệu
-    const repairRequests = await RepairRequest.find({})
+    // Mặc định: danh sách sửa chữa chỉ lấy type = "Sửa chữa".
+    // Có thể truyền filters.type = "Bảo trì" để lấy danh sách bảo trì.
+    const allowedTypes = ["Sửa chữa", "Bảo trì"];
+    const requestType =
+      typeof filters.type === "string" && allowedTypes.includes(filters.type)
+        ? filters.type
+        : "Sửa chữa";
+
+    const repairRequests = await RepairRequest.find({ type: requestType })
       .populate({
         path: "tenantId",
         select: "username email phoneNumber role",
@@ -248,7 +256,7 @@ const getRepairRequests = async (filters = {}) => {
     for (let request of repairRequests) {
       if (request.tenantId) {
         const tenantIdStr = request.tenantId._id.toString();
-        
+
         // Lấy fullname từ map
         const fullname = userInfoMap.get(tenantIdStr);
         if (fullname !== undefined) {
@@ -289,7 +297,7 @@ const getRepairRequests = async (filters = {}) => {
     // Nếu có filter nhưng chưa filter ở trên (trường hợp không có tenantSearch/roomSearch),
     // hoặc cần filter lại để đảm bảo chính xác (do normalizeVietnamese không thể dùng trong MongoDB query)
     let filteredRequests = repairRequests;
-    
+
     if (filters.roomSearch && filters.roomSearch.trim()) {
       const searchTerm = normalizeVietnamese(filters.roomSearch.trim());
       filteredRequests = filteredRequests.filter((request) => {
@@ -727,7 +735,7 @@ const getRepairRequestById = async (requestId) => {
 const deleteRepairRequest = async (requestId) => {
   try {
     const request = await RepairRequest.findById(requestId);
-    
+
     if (!request) {
       throw new Error("Yêu cầu sửa chữa không tồn tại");
     }

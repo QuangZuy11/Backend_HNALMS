@@ -54,13 +54,16 @@ exports.createRepairRequest = async (req, res) => {
  */
 exports.getRepairRequests = async (req, res) => {
   try {
-    const { roomSearch, tenantSearch, page, limit } = req.query || {};
+    const { roomSearch, tenantSearch, page, limit, type } = req.query || {};
     const filters = {};
     if (roomSearch && roomSearch.trim()) {
       filters.roomSearch = roomSearch.trim();
     }
     if (tenantSearch && tenantSearch.trim()) {
       filters.tenantSearch = tenantSearch.trim();
+    }
+    if (type && type.trim()) {
+      filters.type = type.trim();
     }
     if (page) {
       filters.page = page;

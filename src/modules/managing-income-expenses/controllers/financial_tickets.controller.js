@@ -3,6 +3,131 @@ const RepairRequest = require("../../request-management/models/repair_requests.m
 const Contract = require("../../contract-management/models/contract.model");
 const Room = require("../../room-floor-management/models/room.model");
 
+const buildTodayVoucherPrefix = () => {
+  const now = new Date();
+  const dd = String(now.getDate()).padStart(2, "0");
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const yyyy = now.getFullYear();
+  return `PAY-${dd}${mm}${yyyy}-`;
+};
+
+const getNextManualPaymentVoucher = async () => {
+  const prefix = buildTodayVoucherPrefix();
+
+  const latest = await FinancialTicket.findOne({
+    type: "Payment",
+    paymentVoucher: { $regex: `^${prefix}\\d{4}$` },
+  })
+    .select("paymentVoucher")
+    .sort({ paymentVoucher: -1 })
+    .lean();
+
+  let nextNumber = 1;
+  if (latest?.paymentVoucher) {
+    const suffix = latest.paymentVoucher.slice(prefix.length);
+    const parsed = parseInt(suffix, 10);
+    if (!Number.isNaN(parsed)) {
+      nextNumber = parsed + 1;
+    }
+  }
+
+  for (let i = 0; i < 100; i += 1) {
+    if (nextNumber > 9999) {
+      throw new Error("Đã vượt quá giới hạn mã phiếu chi trong ngày (9999)");
+    }
+
+    const candidate = `${prefix}${String(nextNumber).padStart(4, "0")}`;
+    // eslint-disable-next-line no-await-in-loop
+    const exists = await FinancialTicket.exists({ paymentVoucher: candidate });
+    if (!exists) return candidate;
+
+    nextNumber += 1;
+  }
+
+  throw new Error("Không thể tạo mã phiếu chi mới, vui lòng thử lại");
+};
+
+/**
+ * GET /api/financial-tickets/payments/next-voucher
+ * Lấy mã phiếu chi kế tiếp theo format PAY-DDMMYYYY-XXXX
+ */
+const getNextPaymentVoucherCode = async (_req, res) => {
+  try {
+    const paymentVoucher = await getNextManualPaymentVoucher();
+
+    return res.status(200).json({
+      success: true,
+      data: { paymentVoucher },
+      message: "Lấy mã phiếu chi kế tiếp thành công",
+    });
+  } catch (error) {
+    console.error("Error getting next manual payment voucher:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Không thể tạo mã phiếu chi",
+    });
+  }
+};
+
+/**
+ * POST /api/financial-tickets/payments
+ * Tạo phiếu chi thủ công cho manager nhập liệu
+ * Body: { title, amount, status: "Unpaid" | "Paid" }
+ */
+const createManualPaymentTicket = async (req, res) => {
+  try {
+    const { title, amount, status } = req.body || {};
+
+    if (!title || !String(title).trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Vui lòng nhập tiêu đề",
+      });
+    }
+
+    const amountNumber = Number(amount);
+    if (!Number.isFinite(amountNumber) || amountNumber < 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Số tiền không hợp lệ",
+      });
+    }
+
+    const allowed = ["Paid", "Unpaid"];
+    if (!allowed.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Trạng thái không hợp lệ. Chỉ chấp nhận "Paid" hoặc "Unpaid".',
+      });
+    }
+
+    const paymentVoucher = await getNextManualPaymentVoucher();
+
+    const newTicket = await FinancialTicket.create({
+      type: "Payment",
+      amount: amountNumber,
+      title: String(title).trim(),
+      status,
+      paymentVoucher,
+      transactionDate: new Date(),
+      accountantPaidAt: status === "Paid" ? new Date() : null,
+      referenceId: null,
+    });
+
+    return res.status(201).json({
+      success: true,
+      data: newTicket,
+      message: "Tạo phiếu chi thành công",
+    });
+  } catch (error) {
+    console.error("Error creating manual payment ticket:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Không thể tạo phiếu chi",
+    });
+  }
+};
+
 /**
  * GET /api/financial-tickets/payments
  * Lấy danh sách phiếu chi (Payment) cho kế toán
@@ -20,7 +145,6 @@ const getPaymentTickets = async (req, res) => {
         filter.transactionDate.$gte = new Date(from);
       }
       if (to) {
-        // bao gồm cả ngày "to" đến cuối ngày
         const endDate = new Date(to);
         endDate.setHours(23, 59, 59, 999);
         filter.transactionDate.$lte = endDate;
@@ -31,7 +155,6 @@ const getPaymentTickets = async (req, res) => {
       filter.title = { $regex: keyword, $options: "i" };
     }
 
-    // Lấy tất cả phiếu chi
     let tickets = await FinancialTicket.find(filter)
       .populate({
         path: "referenceId",
@@ -41,14 +164,13 @@ const getPaymentTickets = async (req, res) => {
       .sort({ transactionDate: -1 })
       .lean();
 
-    // Nếu có filter theo roomSearch (tìm kiếm theo tên phòng hoặc roomCode), lọc lại
     if (roomSearch && roomSearch.trim()) {
       const searchTerm = roomSearch.trim().toLowerCase();
       const filteredTickets = [];
-      
+
       for (const ticket of tickets) {
         if (ticket.referenceId && ticket.referenceId.tenantId) {
-          // Tìm hợp đồng active của tenant để lấy roomId
+          // eslint-disable-next-line no-await-in-loop
           const activeContract = await Contract.findOne({
             tenantId: ticket.referenceId.tenantId,
             status: "active",
@@ -64,23 +186,21 @@ const getPaymentTickets = async (req, res) => {
             const room = activeContract.roomId;
             const roomName = (room.name || "").toLowerCase();
             const roomCode = (room.roomCode || "").toLowerCase();
-            
-            // Tìm kiếm trong tên phòng hoặc roomCode
+
             if (roomName.includes(searchTerm) || roomCode.includes(searchTerm)) {
               filteredTickets.push(ticket);
             }
           }
         }
       }
-      
+
       tickets = filteredTickets;
     }
 
-    // Populate thông tin phòng cho mỗi ticket
     const ticketsWithRoom = await Promise.all(
       tickets.map(async (ticket) => {
         let roomInfo = null;
-        
+
         if (ticket.referenceId && ticket.referenceId.tenantId) {
           const activeContract = await Contract.findOne({
             tenantId: ticket.referenceId.tenantId,
@@ -183,5 +303,6 @@ const updatePaymentTicketStatus = async (req, res) => {
 module.exports = {
   getPaymentTickets,
   updatePaymentTicketStatus,
+  getNextPaymentVoucherCode,
+  createManualPaymentTicket,
 };
-
