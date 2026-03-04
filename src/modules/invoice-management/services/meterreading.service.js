@@ -30,25 +30,31 @@ class MeterReadingService {
     const incurredCost = usageAmount * unitPrice; // Thành tiền
     const serviceName = serviceInfo.name || serviceInfo.serviceName || "Dịch vụ";
     
-    // Tạo chuỗi định dạng hiển thị cho Hóa đơn (Giống hệt lúc tạo hàng loạt)
+    // Tạo chuỗi định dạng hiển thị cho Hóa đơn 
     const formattedItemName = `Tiền ${serviceName.toLowerCase()} (Cũ: ${data.oldIndex} - Mới: ${data.newIndex})`;
-    const searchKeyword = `tiền ${serviceName.toLowerCase()}`; // Keyword để tìm kiếm
+    const searchKeyword = `tiền ${serviceName.toLowerCase()}`; 
 
-    // 3. Cập nhật vào mảng 'items' của Hóa đơn Nháp
+    // [MỚI] Tạo chuỗi tìm kiếm Hóa đơn nháp đúng của tháng/năm hiện tại
+    const now = new Date();
+    const month = now.getMonth() + 1; 
+    const year = now.getFullYear();
+    const titlePattern = `tháng ${month}/${year}`;
+
+    // 3. Tìm Hóa đơn Nháp của phòng này VÀ của tháng hiện tại
     const draftInvoice = await Invoice.findOne({
       roomId: data.roomId,
       type: "Periodic",
-      status: "Draft" 
+      status: "Draft",
+      title: { $regex: titlePattern, $options: "i" } // Đảm bảo không bắt nhầm hóa đơn nháp của tháng trước
     });
 
     if (draftInvoice) {
-      // [SỬA LỖI] Tìm item có chứa chữ "Tiền điện" hoặc "Tiền nước" bằng .includes()
       const existingItemIndex = draftInvoice.items.findIndex(
         item => item.itemName.toLowerCase().includes(searchKeyword)
       );
 
       if (existingItemIndex > -1) {
-        // NẾU ĐÃ CÓ => Cập nhật đè lên toàn bộ (Gồm cả tên mới, số mới, tiền mới)
+        // NẾU ĐÃ CÓ => Cập nhật đè lên 
         draftInvoice.items[existingItemIndex].itemName = formattedItemName;
         draftInvoice.items[existingItemIndex].oldIndex = data.oldIndex;
         draftInvoice.items[existingItemIndex].newIndex = data.newIndex;
@@ -56,7 +62,7 @@ class MeterReadingService {
         draftInvoice.items[existingItemIndex].unitPrice = unitPrice;
         draftInvoice.items[existingItemIndex].amount = incurredCost;
       } else {
-        // NẾU CHƯA CÓ => Thêm mới vào mảng
+        // NẾU CHƯA CÓ => Thêm mới
         draftInvoice.items.push({
           itemName: formattedItemName,
           oldIndex: data.oldIndex,
@@ -67,7 +73,7 @@ class MeterReadingService {
         });
       }
 
-      // 4. Tính lại Tổng tiền
+      // Tính lại Tổng tiền
       draftInvoice.totalAmount = draftInvoice.items.reduce((sum, item) => sum + (item.amount || 0), 0);
       await draftInvoice.save();
     }
@@ -100,18 +106,21 @@ class MeterReadingService {
       
       const costDifference = usageDifference * unitPrice;
 
+      const now = new Date();
+      const month = now.getMonth() + 1; 
+      const year = now.getFullYear();
+      const titlePattern = `tháng ${month}/${year}`;
+
       const draftInvoice = await Invoice.findOne({
         roomId: reading.roomId,
         type: "Periodic",
-        status: "Draft"
+        status: "Draft",
+        title: { $regex: titlePattern, $options: "i" }
       });
 
       if (draftInvoice) {
         draftInvoice.totalAmount += costDifference; 
         if (draftInvoice.totalAmount < 0) draftInvoice.totalAmount = 0; 
-        
-        // Lưu ý: Nếu muốn UI tự nhảy số chi tiết, ở đây cũng phải sửa mảng items.
-        // Tuy nhiên với luồng Undo -> Add mới thì ta không dùng updateReading này nên không sao.
         await draftInvoice.save();
       }
     }
@@ -136,11 +145,17 @@ class MeterReadingService {
     const reading = await MeterReading.findById(id);
     if (!reading) throw new Error("Không tìm thấy bản ghi để xóa.");
 
-    // Bước 1: Tìm hóa đơn nháp liên quan để trừ tiền
+    const now = new Date();
+    const month = now.getMonth() + 1; 
+    const year = now.getFullYear();
+    const titlePattern = `tháng ${month}/${year}`;
+
+    // Tìm hóa đơn nháp liên quan để trừ tiền
     const draftInvoice = await Invoice.findOne({
       roomId: reading.roomId,
       type: "Periodic",
-      status: "Draft"
+      status: "Draft",
+      title: { $regex: titlePattern, $options: "i" }
     });
 
     if (draftInvoice) {
@@ -150,18 +165,18 @@ class MeterReadingService {
       if (serviceName) {
         const searchKeyword = `tiền ${serviceName.toLowerCase()}`;
 
-        // [SỬA LỖI] Lọc bỏ dịch vụ này ra khỏi mảng items bằng .includes()
+        // Lọc bỏ dịch vụ này ra khỏi mảng items
         draftInvoice.items = draftInvoice.items.filter(
           item => !item.itemName.toLowerCase().includes(searchKeyword)
         );
         
-        // Tính toán lại tổng tiền sau khi đã loại bỏ cái bị sai
+        // Tính toán lại tổng tiền
         draftInvoice.totalAmount = draftInvoice.items.reduce((sum, item) => sum + (item.amount || 0), 0);
         await draftInvoice.save();
       }
     }
 
-    // Bước 2: Xóa bản ghi trong DB
+    // Xóa bản ghi trong DB
     await MeterReading.findByIdAndDelete(id);
     return true;
   }
