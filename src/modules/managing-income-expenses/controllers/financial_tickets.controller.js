@@ -11,6 +11,14 @@ const buildTodayVoucherPrefix = () => {
   return `PAY-${dd}${mm}${yyyy}-`;
 };
 
+const buildTodayReceiptPrefix = () => {
+  const now = new Date();
+  const dd = String(now.getDate()).padStart(2, "0");
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const yyyy = now.getFullYear();
+  return `RC-${dd}${mm}${yyyy}-`;
+};
+
 const getNextManualPaymentVoucher = async () => {
   const prefix = buildTodayVoucherPrefix();
 
@@ -86,10 +94,10 @@ const createManualPaymentTicket = async (req, res) => {
     }
 
     const amountNumber = Number(amount);
-    if (!Number.isFinite(amountNumber) || amountNumber < 0) {
+    if (!Number.isFinite(amountNumber) || amountNumber < 1000) {
       return res.status(400).json({
         success: false,
-        message: "Số tiền không hợp lệ",
+        message: "Số tiền không hợp lệ. Số tiền phải lớn hơn hoặc bằng 1.000 VNĐ",
       });
     }
 
@@ -244,8 +252,177 @@ const getPaymentTickets = async (req, res) => {
 };
 
 /**
+ * GET /api/financial-tickets/receipts
+ * Lấy danh sách phiếu thu (Receipt) cho kế toán
+ * Query params: from, to, keyword, status ("Paid" | "Unpaid")
+ */
+const getReceiptTickets = async (req, res) => {
+  try {
+    const { from, to, keyword, status } = req.query || {};
+
+    const filter = { type: "Receipt" };
+
+    if (from || to) {
+      filter.transactionDate = {};
+      if (from) {
+        filter.transactionDate.$gte = new Date(from);
+      }
+      if (to) {
+        const endDate = new Date(to);
+        endDate.setHours(23, 59, 59, 999);
+        filter.transactionDate.$lte = endDate;
+      }
+    }
+
+    if (keyword) {
+      filter.title = { $regex: keyword, $options: "i" };
+    }
+
+    if (status && typeof status === "string") {
+      const normalized = status.trim();
+      if (["Paid", "Unpaid"].includes(normalized)) {
+        filter.status = normalized;
+      }
+    }
+
+    const tickets = await FinancialTicket.find(filter)
+      .sort({ transactionDate: -1 })
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      data: tickets,
+      total: tickets.length,
+    });
+  } catch (error) {
+    console.error("Error fetching receipt tickets:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Không thể lấy danh sách phiếu thu",
+    });
+  }
+};
+
+const getNextManualReceiptVoucher = async () => {
+  const prefix = buildTodayReceiptPrefix();
+
+  const latest = await FinancialTicket.findOne({
+    type: "Receipt",
+    paymentVoucher: { $regex: `^${prefix}\\d{4}$` },
+  })
+    .select("paymentVoucher")
+    .sort({ paymentVoucher: -1 })
+    .lean();
+
+  let nextNumber = 1;
+  if (latest?.paymentVoucher) {
+    const suffix = latest.paymentVoucher.slice(prefix.length);
+    const parsed = parseInt(suffix, 10);
+    if (!Number.isNaN(parsed)) {
+      nextNumber = parsed + 1;
+    }
+  }
+
+  for (let i = 0; i < 100; i += 1) {
+    if (nextNumber > 9999) {
+      throw new Error("Đã vượt quá giới hạn mã phiếu thu trong ngày (9999)");
+    }
+
+    const candidate = `${prefix}${String(nextNumber).padStart(4, "0")}`;
+    // eslint-disable-next-line no-await-in-loop
+    const exists = await FinancialTicket.exists({ paymentVoucher: candidate });
+    if (!exists) return candidate;
+
+    nextNumber += 1;
+  }
+
+  throw new Error("Không thể tạo mã phiếu thu mới, vui lòng thử lại");
+};
+
+/**
+ * GET /api/financial-tickets/receipts/next-voucher
+ * Lấy mã phiếu thu kế tiếp theo format RC-DDMMYYYY-XXXX
+ */
+const getNextReceiptVoucherCode = async (_req, res) => {
+  try {
+    const paymentVoucher = await getNextManualReceiptVoucher();
+
+    return res.status(200).json({
+      success: true,
+      data: { paymentVoucher },
+      message: "Lấy mã phiếu thu kế tiếp thành công",
+    });
+  } catch (error) {
+    console.error("Error getting next manual receipt voucher:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Không thể tạo mã phiếu thu",
+    });
+  }
+};
+
+/**
+ * POST /api/financial-tickets/receipts
+ * Tạo phiếu thu thủ công
+ * Body: { title, amount, status: "Unpaid" | "Paid" }
+ */
+const createManualReceiptTicket = async (req, res) => {
+  try {
+    const { title, amount, status } = req.body || {};
+
+    if (!title || !String(title).trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Vui lòng nhập tiêu đề",
+      });
+    }
+
+    const amountNumber = Number(amount);
+    if (!Number.isFinite(amountNumber) || amountNumber < 1000) {
+      return res.status(400).json({
+        success: false,
+        message: "Số tiền không hợp lệ. Số tiền phải lớn hơn hoặc bằng 1.000 VNĐ",
+      });
+    }
+
+    const allowed = ["Paid", "Unpaid"];
+    if (!allowed.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Trạng thái không hợp lệ. Chỉ chấp nhận "Paid" hoặc "Unpaid".',
+      });
+    }
+
+    const paymentVoucher = await getNextManualReceiptVoucher();
+
+    const newTicket = await FinancialTicket.create({
+      type: "Receipt",
+      amount: amountNumber,
+      title: String(title).trim(),
+      status,
+      paymentVoucher,
+      transactionDate: new Date(),
+      accountantPaidAt: status === "Paid" ? new Date() : null,
+      referenceId: null,
+    });
+
+    return res.status(201).json({
+      success: true,
+      data: newTicket,
+      message: "Tạo phiếu thu thành công",
+    });
+  } catch (error) {
+    console.error("Error creating manual receipt ticket:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Không thể tạo phiếu thu",
+    });
+  }
+};
+
+/**
  * PATCH /api/financial-tickets/:id/status
- * Cập nhật trạng thái thanh toán cho phiếu chi (Payment)
+ * Cập nhật trạng thái thanh toán cho phiếu chi / phiếu thu (Payment / Receipt)
  * Body: { status: "Paid" | "Unpaid" }
  */
 const updatePaymentTicketStatus = async (req, res) => {
@@ -274,7 +451,7 @@ const updatePaymentTicketStatus = async (req, res) => {
     }
 
     const updated = await FinancialTicket.findOneAndUpdate(
-      { _id: id, type: "Payment" },
+      { _id: id, type: { $in: ["Payment", "Receipt"] } },
       updateQuery,
       { new: true }
     ).lean();
@@ -282,7 +459,7 @@ const updatePaymentTicketStatus = async (req, res) => {
     if (!updated) {
       return res.status(404).json({
         success: false,
-        message: "Không tìm thấy phiếu chi",
+        message: "Không tìm thấy phiếu",
       });
     }
 
@@ -292,10 +469,10 @@ const updatePaymentTicketStatus = async (req, res) => {
       message: "Cập nhật trạng thái thành công",
     });
   } catch (error) {
-    console.error("Error updating payment ticket status:", error);
+    console.error("Error updating payment/receipt ticket status:", error);
     return res.status(500).json({
       success: false,
-      message: "Không thể cập nhật trạng thái phiếu chi",
+      message: "Không thể cập nhật trạng thái phiếu",
     });
   }
 };
@@ -305,4 +482,7 @@ module.exports = {
   updatePaymentTicketStatus,
   getNextPaymentVoucherCode,
   createManualPaymentTicket,
+  getReceiptTickets,
+  getNextReceiptVoucherCode,
+  createManualReceiptTicket,
 };
