@@ -33,5 +33,23 @@ class InvoiceController {
       res.status(404).json({ success: false, message: error.message });
     }
   }
+
+  // Lấy hóa đơn theo TenantId (có phân trang)
+  async getInvoicesByTenant(req, res) {
+    try {
+      const { tenantId } = req.params;
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit) || 10;
+
+      const result = await invoiceService.getInvoicesByTenantId(tenantId, page, limit);
+      res.status(200).json({
+        success: true,
+        data: result.invoices,
+        pagination: result.pagination,
+      });
+    } catch (error) {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  }
 }
 module.exports = new InvoiceController();

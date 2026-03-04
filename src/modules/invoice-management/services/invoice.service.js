@@ -1,10 +1,10 @@
 const Invoice = require("../models/invoice.model");
 const Room = require("../../room-floor-management/models/room.model");
-const MeterReading = require('../models/meterreading.model'); 
-const BookService = require('../../service-management/models/bookservice.model'); 
-const Service = require("../../service-management/models/service.model"); 
+const MeterReading = require('../models/meterreading.model');
+const BookService = require('../../service-management/models/bookservice.model');
+const Service = require("../../service-management/models/service.model");
 // [MỚI] Import model Contract
-const Contract = require('../../contract-management/models/contract.model'); 
+const Contract = require('../../contract-management/models/contract.model');
 
 class InvoiceService {
   async getInvoices(query = {}) {
@@ -14,12 +14,12 @@ class InvoiceService {
   // 1. CHỨC NĂNG: TẠO HÓA ĐƠN NHÁP HÀNG LOẠT (Tự động lấy tiền phòng + điện nước + dịch vụ)
   async generateDraftInvoices() {
     const now = new Date();
-    const month = now.getMonth() + 1; 
+    const month = now.getMonth() + 1;
     const year = now.getFullYear();
     const dueDate = new Date(year, month, 5);
 
-    const activeRooms = await Room.find({ status: "Occupied" }).populate("roomTypeId"); 
-    
+    const activeRooms = await Room.find({ status: "Occupied" }).populate("roomTypeId");
+
     if (activeRooms.length === 0) {
       throw new Error("Không có phòng nào đang thuê để tạo hóa đơn.");
     }
@@ -45,7 +45,7 @@ class InvoiceService {
 
     const recentReadings = await MeterReading.find({
       createdAt: { $gte: startOfMonth, $lte: endOfMonth }
-    }).populate('utilityId'); 
+    }).populate('utilityId');
 
     // ==========================================
     // BƯỚC 4.2: KIỂM TRA BẮT BUỘC ĐÃ CHỐT ĐIỆN NƯỚC CHƯA
@@ -54,7 +54,7 @@ class InvoiceService {
     const waterService = await Service.findOne({ name: "Nước" });
     const missingRooms = [];
 
-    roomsToCreate.forEach(room => { 
+    roomsToCreate.forEach(room => {
       const roomReadings = recentReadings.filter(r => r.roomId.toString() === room._id.toString());
       let hasElec = true;
       let hasWater = true;
@@ -94,19 +94,19 @@ class InvoiceService {
     // 2. Tìm tất cả Dịch vụ (BookService) thuộc về các Hợp đồng trên
     const activeServices = await BookService.find({
       contractId: { $in: activeContractIds }, // <== Đổi roomId thành contractId
-      startDate: { $lte: endOfMonth }, 
+      startDate: { $lte: endOfMonth },
       $or: [
-        { endDate: null }, 
+        { endDate: null },
         { endDate: { $exists: false } },
-        { endDate: { $gte: startOfMonth } } 
+        { endDate: { $gte: startOfMonth } }
       ]
     }).populate('serviceId');
 
     // Bước 5: Khởi tạo dữ liệu Hóa đơn Nháp
     const invoicesToCreate = roomsToCreate.map(room => {
       const roomPrice = room.roomTypeId ? (room.roomTypeId.currentPrice || 0) : 0;
-      const parsedPrice = typeof roomPrice === 'object' && roomPrice.$numberDecimal 
-        ? parseFloat(roomPrice.$numberDecimal) 
+      const parsedPrice = typeof roomPrice === 'object' && roomPrice.$numberDecimal
+        ? parseFloat(roomPrice.$numberDecimal)
         : Number(roomPrice) || 0;
 
       let totalAmount = parsedPrice;
@@ -115,9 +115,9 @@ class InvoiceService {
           itemName: "Tiền thuê phòng",
           oldIndex: 0,
           newIndex: 0,
-          usage: 1, 
+          usage: 1,
           unitPrice: parsedPrice,
-          amount: parsedPrice 
+          amount: parsedPrice
         }
       ];
 
@@ -130,7 +130,7 @@ class InvoiceService {
       roomReadings.forEach(reading => {
         const uId = reading.utilityId._id.toString();
         const usage = reading.newIndex - reading.oldIndex;
-        
+
         if (usage >= 0 && reading.utilityId) {
           if (!groupedReadings[uId]) {
             groupedReadings[uId] = {
@@ -149,15 +149,15 @@ class InvoiceService {
 
       Object.values(groupedReadings).forEach(group => {
         let servicePrice = group.utilityId.price || group.utilityId.currentPrice || 0;
-        servicePrice = typeof servicePrice === 'object' && servicePrice.$numberDecimal 
-          ? parseFloat(servicePrice.$numberDecimal) 
+        servicePrice = typeof servicePrice === 'object' && servicePrice.$numberDecimal
+          ? parseFloat(servicePrice.$numberDecimal)
           : Number(servicePrice);
 
         const amount = group.totalUsage * servicePrice;
-        totalAmount += amount; 
+        totalAmount += amount;
 
         const serviceName = group.utilityId.name || group.utilityId.serviceName || "Dịch vụ";
-        
+
         if (group.totalUsage > 0) {
           invoiceItems.push({
             itemName: `Tiền ${serviceName.toLowerCase()} (Cũ: ${group.oldIndex} - Mới: ${group.newIndex})`,
@@ -175,16 +175,16 @@ class InvoiceService {
       // ==========================================
       // Lấy hợp đồng của phòng này
       const roomContract = activeContracts.find(c => c.roomId.toString() === room._id.toString());
-      
+
       if (roomContract) {
         // Nếu phòng có Hợp đồng, tìm các dịch vụ thuộc về Hợp đồng đó
         const contractServices = activeServices.filter(rs => rs.contractId.toString() === roomContract._id.toString());
-        
+
         contractServices.forEach(rs => {
           if (rs.serviceId) {
             let srvPrice = rs.serviceId.currentPrice || rs.serviceId.price || 0;
-            srvPrice = typeof srvPrice === 'object' && srvPrice.$numberDecimal 
-              ? parseFloat(srvPrice.$numberDecimal) 
+            srvPrice = typeof srvPrice === 'object' && srvPrice.$numberDecimal
+              ? parseFloat(srvPrice.$numberDecimal)
               : Number(srvPrice);
 
             const qty = rs.quantity || 1;
@@ -199,8 +199,8 @@ class InvoiceService {
               oldIndex: 0,
               newIndex: 0,
               usage: qty,
-              unitPrice: srvPrice, 
-              amount: amount 
+              unitPrice: srvPrice,
+              amount: amount
             });
           }
         });
@@ -213,9 +213,9 @@ class InvoiceService {
         title: `Hóa đơn tiền thuê & dịch vụ tháng ${month}/${year}`,
         type: "Periodic",
         items: invoiceItems,
-        totalAmount: totalAmount, 
+        totalAmount: totalAmount,
         dueDate: dueDate,
-        status: "Draft" 
+        status: "Draft"
       };
     });
 
@@ -238,6 +238,50 @@ class InvoiceService {
       throw new Error("Không tìm thấy hóa đơn này.");
     }
     return invoice;
+  }
+
+  // Lấy hóa đơn theo TenantId (có phân trang)
+  async getInvoicesByTenantId(tenantId, page = 1, limit = 10) {
+    // Tính toán phân trang
+    const skip = (page - 1) * limit;
+
+    // Bước 1: Tìm tất cả contracts của tenant
+    const contracts = await Contract.find({ tenantId, status: "active" }).select("roomId");
+
+    if (contracts.length === 0) {
+      return {
+        invoices: [],
+        pagination: {
+          total: 0,
+          page,
+          limit,
+          totalPages: 0,
+        },
+      };
+    }
+
+    // Bước 2: Lấy danh sách roomId từ contracts
+    const roomIds = contracts.map(contract => contract.roomId);
+
+    // Bước 3: Đếm tổng số hóa đơn
+    const total = await Invoice.countDocuments({ roomId: { $in: roomIds } });
+
+    // Bước 4: Lấy hóa đơn với phân trang
+    const invoices = await Invoice.find({ roomId: { $in: roomIds } })
+      .populate("roomId", "name floorId")
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    return {
+      invoices,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
   }
 }
 
