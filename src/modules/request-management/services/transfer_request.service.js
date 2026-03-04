@@ -462,11 +462,152 @@ const cancelTransferRequest = async (tenantId, requestId) => {
   return request;
 };
 
+/**
+ * [TENANT] Cập nhật yêu cầu chuyển phòng (chỉ khi Pending)
+ * @param {string} requestId
+ * @param {string} tenantId
+ * @param {Object} body - { targetRoomId?, transferDate?, reason? }
+ */
+const updateTransferRequest = async (requestId, tenantId, body) => {
+  const request = await TransferRequest.findById(requestId);
+  if (!request) {
+    throw { status: 404, message: "Yêu cầu chuyển phòng không tồn tại." };
+  }
+  if (request.tenantId.toString() !== tenantId.toString()) {
+    throw { status: 403, message: "Bạn không có quyền chỉnh sửa yêu cầu này." };
+  }
+  if (request.status !== "Pending") {
+    throw { status: 400, message: "Chỉ có thể chỉnh sửa yêu cầu đang ở trạng thái Pending." };
+  }
+
+  const { targetRoomId, transferDate, reason } = body;
+
+  if (!targetRoomId && !transferDate && !reason) {
+    throw { status: 400, message: "Vui lòng cung cấp ít nhất một trường cần cập nhật." };
+  }
+
+  // Nếu đổi phòng hoặc đổi ngày → cần tính lại proration
+  const newTargetRoomId = targetRoomId || request.targetRoomId.toString();
+  const newTransferDate = transferDate ? new Date(transferDate) : request.transferDate;
+
+  // Validate ngày
+  if (transferDate) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (newTransferDate < today) {
+      throw { status: 400, message: "Ngày chuyển phòng không được là ngày trong quá khứ." };
+    }
+  }
+
+  let newProration = request.proration;
+
+  if (targetRoomId || transferDate) {
+    // Lấy hợp đồng để biết giá phòng cũ
+    const contract = await Contract.findById(request.contractId).populate({
+      path: "roomId",
+      populate: { path: "roomTypeId", select: "currentPrice" },
+    });
+
+    if (targetRoomId) {
+      // Validate phòng mới
+      if (targetRoomId === request.currentRoomId.toString()) {
+        throw { status: 400, message: "Không thể chuyển vào chính phòng bạn đang ở." };
+      }
+      const targetRoom = await Room.findById(targetRoomId).populate(
+        "roomTypeId",
+        "currentPrice typeName personMax",
+      );
+      if (!targetRoom) {
+        throw { status: 404, message: "Phòng muốn chuyển đến không tồn tại." };
+      }
+      if (targetRoom.status !== "Available") {
+        throw { status: 400, message: "Phòng muốn chuyển đến không ở trạng thái Trống (Available)." };
+      }
+      if (!targetRoom.isActive) {
+        throw { status: 400, message: "Phòng muốn chuyển đến đang bị tạm ngưng." };
+      }
+
+      const personMax = targetRoom.roomTypeId?.personMax || 1;
+      const totalPeople = (contract.coResidents ? contract.coResidents.length : 0) + 1;
+      if (totalPeople > personMax) {
+        throw {
+          status: 400,
+          message: `Số người hiện tại (${totalPeople}) vượt quá giới hạn phòng mới (tối đa ${personMax} người).`,
+        };
+      }
+
+      const oldPrice = parseFloat(contract.roomId.roomTypeId?.currentPrice?.toString() || "0");
+      const newPrice = parseFloat(targetRoom.roomTypeId?.currentPrice?.toString() || "0");
+      newProration = calculateProration(oldPrice, newPrice, newTransferDate);
+      request.targetRoomId = targetRoomId;
+    } else {
+      // Chỉ đổi ngày → tính lại proration với phòng hiện tại
+      const currentTargetRoom = await Room.findById(request.targetRoomId).populate(
+        "roomTypeId",
+        "currentPrice",
+      );
+      const oldPrice = parseFloat(contract.roomId.roomTypeId?.currentPrice?.toString() || "0");
+      const newPrice = parseFloat(currentTargetRoom.roomTypeId?.currentPrice?.toString() || "0");
+      newProration = calculateProration(oldPrice, newPrice, newTransferDate);
+    }
+  }
+
+  if (transferDate) request.transferDate = newTransferDate;
+  if (reason) request.reason = reason;
+  request.proration = newProration;
+
+  await request.save();
+
+  // Populate để trả về thông tin đầy đủ
+  const populated = await TransferRequest.findById(request._id)
+    .populate({ path: "currentRoomId", select: "name roomCode", populate: { path: "floorId", select: "name" } })
+    .populate({
+      path: "targetRoomId",
+      select: "name roomCode",
+      populate: [
+        { path: "floorId", select: "name" },
+        { path: "roomTypeId", select: "typeName currentPrice" },
+      ],
+    })
+    .lean();
+
+  if (populated.targetRoomId?.roomTypeId?.currentPrice) {
+    populated.targetRoomId.roomTypeId.currentPrice = parseFloat(
+      populated.targetRoomId.roomTypeId.currentPrice.toString(),
+    );
+  }
+
+  return populated;
+};
+
+/**
+ * [TENANT] Xóa yêu cầu chuyển phòng (chỉ khi Pending)
+ * @param {string} requestId
+ * @param {string} tenantId
+ */
+const deleteTransferRequest = async (requestId, tenantId) => {
+  const request = await TransferRequest.findById(requestId);
+  if (!request) {
+    throw { status: 404, message: "Yêu cầu chuyển phòng không tồn tại." };
+  }
+  if (request.tenantId.toString() !== tenantId.toString()) {
+    throw { status: 403, message: "Bạn không có quyền xóa yêu cầu này." };
+  }
+  if (request.status !== "Pending") {
+    throw { status: 400, message: "Chỉ có thể xóa yêu cầu đang ở trạng thái Pending." };
+  }
+
+  await TransferRequest.findByIdAndDelete(requestId);
+  return { message: "Xóa yêu cầu chuyển phòng thành công." };
+};
+
 module.exports = {
   getAvailableRoomsForTransfer,
   createTransferRequest,
   getMyTransferRequests,
   cancelTransferRequest,
+  updateTransferRequest,
+  deleteTransferRequest,
   getAllTransferRequestsForManager,
   getTransferRequestById,
   approveTransferRequest,
