@@ -115,6 +115,52 @@ exports.cancelTransferRequest = async (req, res) => {
 };
 
 /**
+ * [TENANT] Cập nhật yêu cầu chuyển phòng (chỉ khi Pending)
+ * PUT /api/requests/transfer/:id
+ * Body: { targetRoomId?, transferDate?, reason? }
+ */
+exports.updateTransferRequest = async (req, res) => {
+  try {
+    const tenantId = req.user?.userId;
+    if (!tenantId) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+    const result = await transferService.updateTransferRequest(req.params.id, tenantId, req.body);
+    res.status(200).json({
+      success: true,
+      message: "Cập nhật yêu cầu chuyển phòng thành công",
+      data: result,
+    });
+  } catch (error) {
+    console.error("Update transfer request error:", error);
+    const status = error.status || 500;
+    res.status(status).json({ success: false, message: error.message || "Server error" });
+  }
+};
+
+/**
+ * [TENANT] Xóa yêu cầu chuyển phòng (chỉ khi Pending)
+ * DELETE /api/requests/transfer/:id
+ */
+exports.deleteTransferRequest = async (req, res) => {
+  try {
+    const tenantId = req.user?.userId;
+    if (!tenantId) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+    const result = await transferService.deleteTransferRequest(req.params.id, tenantId);
+    res.status(200).json({
+      success: true,
+      message: result.message,
+    });
+  } catch (error) {
+    console.error("Delete transfer request error:", error);
+    const status = error.status || 500;
+    res.status(status).json({ success: false, message: error.message || "Server error" });
+  }
+};
+
+/**
  * [MANAGER] Lấy danh sách tất cả yêu cầu chuyển phòng
  * GET /api/requests/transfer
  * Query: ?status=Pending&search=abc&page=1&limit=10
