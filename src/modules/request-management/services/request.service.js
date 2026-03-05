@@ -552,17 +552,18 @@ const updateRepairRequestStatus = async (
   }
 
   // Luồng đặc biệt: khi manager hoàn thành "sửa chữa có phí" (status=Done + paymentType=REVENUE)
-  // thì chuyển trạng thái request sang "Unpair" (chờ thanh toán) và KHÔNG dùng paymentStatus.
+  // thì chuyển trạng thái request sang "Unpaid" (chờ thanh toán) và KHÔNG dùng paymentStatus.
   const nextStatus =
-    status === "Done" && paymentType === "REVENUE" ? "Unpair" : status;
+    status === "Done" && paymentType === "REVENUE" ? "Unpaid" : status;
 
   // Không cho phép chuyển trạng thái lùi về bước trước
-  // Thứ tự: Pending (0) -> Processing (1) -> Done (2) -> Unpair (3)
+  // Thứ tự: Pending (0) -> Processing (1) -> Done (2) -> Unpaid (3) -> Paid (4)
   const statusRank = {
     Pending: 0,
     Processing: 1,
     Done: 2,
-    Unpair: 3,
+    Unpaid: 3,
+    Paid: 4,
   };
 
   const currentRank = statusRank[request.status] ?? 0;
