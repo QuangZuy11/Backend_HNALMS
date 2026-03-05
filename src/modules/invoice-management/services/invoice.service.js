@@ -85,7 +85,7 @@ class InvoiceService {
     }
 
     const activeContractIds = activeContracts.map(c => c._id.toString());
-    
+
     const activeBookServices = await BookService.find({
       contractId: { $in: activeContractIds }
     }).populate('services.serviceId');
@@ -145,7 +145,7 @@ class InvoiceService {
           usage: roomRentUsage,
           unitPrice: roomRentUnitPrice,
           amount: roomRentAmount,
-          isIndex: false 
+          isIndex: false
         });
       }
 
@@ -191,7 +191,7 @@ class InvoiceService {
             usage: group.totalUsage,
             unitPrice: servicePrice,
             amount: amount,
-            isIndex: true 
+            isIndex: true
           });
         }
       });
@@ -201,9 +201,9 @@ class InvoiceService {
 
         if (contractBookService && contractBookService.services && contractBookService.services.length > 0) {
           contractBookService.services.forEach(srvItem => {
-            
+
             if (srvItem.endDate && new Date(srvItem.endDate) < startOfMonth) {
-              return; 
+              return;
             }
 
             if (srvItem.serviceId) {
@@ -217,7 +217,7 @@ class InvoiceService {
 
               const nameCheck = srvItemName.toLowerCase().trim();
               if (nameCheck === 'điện' || nameCheck === 'dien' || nameCheck === 'nước' || nameCheck === 'nuoc') {
-                return; 
+                return;
               }
 
               const amount = finalQty * srvPrice;
@@ -230,7 +230,7 @@ class InvoiceService {
                 usage: finalQty,
                 unitPrice: srvPrice,
                 amount: amount,
-                isIndex: false 
+                isIndex: false
               });
             }
           });
@@ -274,13 +274,13 @@ class InvoiceService {
     if (!invoice) {
       throw new Error("Không tìm thấy hóa đơn này.");
     }
-    
+
     if (invoice.status !== "Unpaid") {
       throw new Error("Chỉ có thể xác nhận thanh toán cho hóa đơn đang ở trạng thái 'Chưa thu' (Unpaid).");
     }
 
     invoice.status = "Paid";
-    
+
     await invoice.save();
     return invoice;
   }
@@ -326,7 +326,8 @@ class InvoiceService {
   async getInvoicesByTenantId(tenantId, page = 1, limit = 10) {
     const skip = (page - 1) * limit;
 
-    const contracts = await Contract.find({ tenantId, status: "active" }).select("_id roomId");
+    // Tìm TẤT CẢ hợp đồng của tenant (bao gồm cả expired/terminated)
+    const contracts = await Contract.find({ tenantId }).select("_id roomId");
 
     if (contracts.length === 0) {
       return {
@@ -335,10 +336,20 @@ class InvoiceService {
       };
     }
 
-    // [MỚI] Tìm hóa đơn dựa trên mảng contractIds thay vì roomIds
+    // Tìm hóa đơn theo cả contractId (Periodic) VÀ roomId (Incurred có thể không có contractId)
     const contractIds = contracts.map(contract => contract._id);
-    const total = await Invoice.countDocuments({ contractId: { $in: contractIds } });
-    const invoices = await Invoice.find({ contractId: { $in: contractIds } })
+    const roomIds = [...new Set(contracts.map(contract => contract.roomId))];
+
+    const query = {
+      $or: [
+        { contractId: { $in: contractIds } },
+        { roomId: { $in: roomIds }, type: "Incurred" },
+      ],
+      status: { $ne: "Draft" }, // Không hiển thị hóa đơn nháp cho tenant
+    };
+
+    const total = await Invoice.countDocuments(query);
+    const invoices = await Invoice.find(query)
       .populate("roomId", "name floorId")
       .sort({ createdAt: -1 })
       .skip(skip)
@@ -351,12 +362,14 @@ class InvoiceService {
   }
 
   async getMyInvoiceById(tenantId, invoiceId) {
-    const contracts = await Contract.find({ tenantId, status: "active" }).select("_id roomId contractCode startDate endDate");
+    // Tìm TẤT CẢ hợp đồng của tenant
+    const contracts = await Contract.find({ tenantId }).select("_id roomId contractCode startDate endDate");
     if (contracts.length === 0) {
-      throw new Error("Bạn không có hợp đồng thuê nào đang hoạt động.");
+      throw new Error("Bạn không có hợp đồng thuê nào.");
     }
 
     const contractIds = contracts.map(c => c._id.toString());
+    const roomIds = contracts.map(c => c.roomId.toString());
 
     const invoice = await Invoice.findById(invoiceId)
       .populate({
@@ -373,8 +386,11 @@ class InvoiceService {
       throw new Error("Không tìm thấy hóa đơn.");
     }
 
-    // [MỚI] Kiểm tra quyền xem hóa đơn dựa vào contractId
-    if (!invoice.contractId || !contractIds.includes(invoice.contractId.toString())) {
+    // Kiểm tra quyền: theo contractId (Periodic) HOẶC roomId (Incurred)
+    const hasContractAccess = invoice.contractId && contractIds.includes(invoice.contractId.toString());
+    const hasRoomAccess = invoice.type === "Incurred" && invoice.roomId && roomIds.includes((invoice.roomId._id || invoice.roomId).toString());
+
+    if (!hasContractAccess && !hasRoomAccess) {
       throw new Error("Bạn không có quyền xem hóa đơn này.");
     }
 
@@ -384,7 +400,9 @@ class InvoiceService {
       );
     }
 
-    const contract = contracts.find(c => c._id.toString() === invoice.contractId.toString());
+    const contract = invoice.contractId
+      ? contracts.find(c => c._id.toString() === invoice.contractId.toString())
+      : contracts.find(c => c.roomId.toString() === (invoice.roomId._id || invoice.roomId).toString());
 
     return {
       ...invoice,

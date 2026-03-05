@@ -36,9 +36,6 @@ exports.initiateInvoicePayment = async (req, res) => {
         if (!invoice) {
             return res.status(404).json({ success: false, message: "Không tìm thấy hóa đơn." });
         }
-        if (invoice.type !== "Incurred") {
-            return res.status(400).json({ success: false, message: "Hóa đơn này không phải loại phát sinh (Incurred)." });
-        }
         if (invoice.status !== "Unpaid") {
             return res.status(400).json({
                 success: false,

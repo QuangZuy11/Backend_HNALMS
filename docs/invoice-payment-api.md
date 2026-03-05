@@ -1,12 +1,19 @@
-# Invoice Payment API — Thanh Toán Hóa Đơn Phát Sinh
+# Invoice API — Hóa Đơn & Thanh Toán
 
 ## Tổng Quan
 
-API này xử lý việc **thanh toán hóa đơn phát sinh (Incurred)** thông qua cổng thanh toán Sepay với mã QR chuyển khoản ngân hàng (VietQR).
+API quản lý hóa đơn cho Tenant: xem danh sách, chi tiết, và thanh toán hóa đơn phát sinh qua Sepay QR.
 
-> **Lưu ý loại hóa đơn:**
-> - `Periodic` — Hóa đơn định kỳ hàng tháng (tiền phòng + dịch vụ) → **Luồng thanh toán khác, không dùng API này**
-> - `Incurred` — Hóa đơn phát sinh từ yêu cầu sửa chữa/thiết bị hỏng → **Dùng API này**
+> **Loại hóa đơn:**
+> - `Periodic` — Hóa đơn định kỳ hàng tháng (tiền phòng + dịch vụ)
+> - `Incurred` — Hóa đơn phát sinh từ yêu cầu sửa chữa/thiết bị hỏng
+>
+> **Trạng thái hóa đơn:**
+> - `Draft` — Nháp (Quản lý chưa phát hành) → **Tenant KHÔNG thấy**
+> - `Unpaid` — Chưa thanh toán → Hiển thị cho Tenant
+> - `Paid` — Đã thanh toán
+> - `Overdue` — Quá hạn
+> - `Cancelled` — Đã hủy
 
 ---
 
@@ -21,22 +28,217 @@ Production:  https://your-domain.com/api
 
 ## Danh Sách Endpoints
 
+### Hóa đơn
+
 | # | Method | Endpoint | Mô tả |
 |---|--------|----------|-------|
-| 1 | POST | `/invoices/:id/payment/initiate` | Khởi tạo thanh toán → nhận QR |
-| 2 | GET | `/invoices/payment/status/:transactionCode` | Polling kiểm tra trạng thái |
-| 3 | POST | `/invoices/payment/cancel/:transactionCode` | Hủy giao dịch đang Pending |
-| 4 | POST | `/invoices/webhook/sepay` | ⚠️ Nội bộ — Sepay gọi tự động |
+| 1 | GET | `/invoices/tenant/:tenantId` | Danh sách hóa đơn của Tenant (phân trang) |
+| 2 | GET | `/invoices/my/:id` | Chi tiết hóa đơn (Tenant tự xem, cần đăng nhập) |
+| 3 | GET | `/invoices/:id/incurred` | Chi tiết hóa đơn phát sinh (gồm RepairRequest + Device) |
+
+### Thanh toán QR (Tất cả hóa đơn)
+
+| # | Method | Endpoint | Mô tả |
+|---|--------|----------|-------|
+| 4 | POST | `/invoices/:id/payment/initiate` | Khởi tạo thanh toán → nhận QR |
+| 5 | GET | `/invoices/payment/status/:transactionCode` | Polling kiểm tra trạng thái |
+| 6 | POST | `/invoices/payment/cancel/:transactionCode` | Hủy giao dịch đang Pending |
+| 7 | POST | `/webhook/sepay` | ⚠️ Nội bộ — Sepay gọi tự động (webhook chung) |
 
 ---
 
-## Endpoints Chi Tiết
+## Endpoints Chi Tiết — Hóa Đơn
 
 ---
 
-### 1. Khởi Tạo Thanh Toán Hóa Đơn
+### 1. Danh Sách Hóa Đơn Của Tenant
+
+Lấy tất cả hóa đơn của tenant (bao gồm cả Periodic và Incurred). **Hóa đơn trạng thái `Draft` sẽ KHÔNG được trả về.**
+
+```
+GET /invoices/tenant/:tenantId
+```
+
+#### Path Parameters
+| Parameter | Type | Mô tả |
+|-----------|------|-------|
+| tenantId | string | ObjectId của User (role Tenant) |
+
+#### Query Parameters
+| Parameter | Type | Default | Mô tả |
+|-----------|------|---------|-------|
+| page | number | 1 | Trang hiện tại |
+| limit | number | 10 | Số hóa đơn mỗi trang |
+
+#### Request Example
+```
+GET /invoices/tenant/69a9953b1a42128b79652850?page=1&limit=10
+```
+
+#### Response Success (200)
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "_id": "69a99ce48cdd1267f6e514b2",
+      "invoiceCode": "INV-Phòng 310-32026-2223",
+      "contractId": "69a9953b1a42128b79652850",
+      "roomId": {
+        "_id": "69a680b62327a1f0e037f3ac",
+        "name": "Phòng 310"
+      },
+      "title": "Hóa đơn tiền thuê & dịch vụ tháng 3/2026",
+      "type": "Periodic",
+      "totalAmount": 2906612.90,
+      "status": "Unpaid",
+      "dueDate": "2026-04-04T17:00:00.000Z",
+      "createdAt": "2026-03-05T15:10:28.279Z"
+    },
+    {
+      "_id": "69a99cddd832c0de61cf2113",
+      "invoiceCode": "INV-RP-0001",
+      "roomId": {
+        "_id": "69a680b62327a1f0e037f3ac",
+        "name": "Phòng 310"
+      },
+      "repairRequestId": "69a99d146b1cddc0e772361e",
+      "title": "Sửa chữa điều hoà",
+      "type": "Incurred",
+      "totalAmount": 100000,
+      "status": "Unpaid",
+      "dueDate": "2026-03-12T00:00:00.000Z",
+      "createdAt": "2026-03-05T15:10:21.862Z"
+    }
+  ],
+  "pagination": {
+    "total": 2,
+    "page": 1,
+    "limit": 10,
+    "totalPages": 1
+  }
+}
+```
+
+> **Lưu ý:** Hóa đơn `Draft` không xuất hiện trong kết quả. Chỉ hiển thị hóa đơn đã được phát hành (`Unpaid`, `Paid`, `Overdue`, `Cancelled`).
+
+#### Response Errors
+| Status | Trường hợp |
+|--------|------------|
+| 500 | Lỗi server |
+
+---
+
+### 2. Chi Tiết Hóa Đơn (Tenant Tự Xem)
+
+Tenant xem chi tiết 1 hóa đơn của mình. Hệ thống tự kiểm tra quyền sở hữu qua JWT token.
+
+```
+GET /invoices/my/:id
+```
+
+#### Headers
+| Header | Giá trị |
+|--------|--------|
+| Authorization | `Bearer {accessToken}` |
+
+#### Path Parameters
+| Parameter | Type | Mô tả |
+|-----------|------|-------|
+| id | string | ObjectId của hóa đơn (`Invoice._id`) |
+
+#### Response Success (200)
+```json
+{
+  "success": true,
+  "data": {
+    "_id": "69a99ce48cdd1267f6e514b2",
+    "invoiceCode": "INV-Phòng 310-32026-2223",
+    "roomId": {
+      "_id": "69a680b62327a1f0e037f3ac",
+      "name": "Phòng 310",
+      "roomCode": "P310",
+      "floorId": { "_id": "...", "name": "Tầng 3" },
+      "roomTypeId": { "_id": "...", "typeName": "Phòng đơn", "currentPrice": 2500000 }
+    },
+    "title": "Hóa đơn tiền thuê & dịch vụ tháng 3/2026",
+    "type": "Periodic",
+    "items": [
+      {
+        "itemName": "Tiền thuê phòng",
+        "usage": 1,
+        "unitPrice": 2500000,
+        "amount": 2500000
+      }
+    ],
+    "totalAmount": 2906612.90,
+    "status": "Unpaid",
+    "dueDate": "2026-04-04T17:00:00.000Z",
+    "contractCode": "HD-001",
+    "contractStartDate": "2026-03-01T00:00:00.000Z",
+    "contractEndDate": "2026-09-01T00:00:00.000Z"
+  }
+}
+```
+
+#### Response Errors
+| Status | Trường hợp |
+|--------|------------|
+| 401 | Chưa đăng nhập |
+| 403 | Không có quyền xem hóa đơn này |
+| 404 | Không tìm thấy hóa đơn |
+| 500 | Lỗi server |
+
+---
+
+### 3. Chi Tiết Hóa Đơn Phát Sinh (Incurred)
+
+Trả về thông tin tối ưu cho hóa đơn phát sinh, bao gồm RepairRequest và Device.
+
+```
+GET /invoices/:id/incurred
+```
+
+#### Path Parameters
+| Parameter | Type | Mô tả |
+|-----------|------|-------|
+| id | string | ObjectId của hóa đơn (`Invoice._id`) |
+
+#### Response Success (200)
+```json
+{
+  "success": true,
+  "data": {
+    "invoiceCode": "INV-RP-0001",
+    "roomName": "Phòng 310",
+    "title": "Sửa chữa điều hoà",
+    "type": "Incurred",
+    "totalAmount": 100000,
+    "status": "Unpaid",
+    "dueDate": "2026-03-12T00:00:00.000Z",
+    "createdAt": "2026-03-05T15:10:21.862Z",
+    "deviceName": "Điều hoà Daikin",
+    "description": "Hỏng cụm nén, cần thay thế"
+  }
+}
+```
+
+#### Response Errors
+| Status | Trường hợp |
+|--------|------------|
+| 400 | Hóa đơn không phải loại `Incurred` |
+| 404 | Không tìm thấy hóa đơn |
+
+---
+
+## Endpoints Chi Tiết — Thanh Toán QR
+
+---
+
+### 4. Khởi Tạo Thanh Toán Hóa Đơn
 
 Tạo giao dịch thanh toán và nhận QR code chuyển khoản. QR có hiệu lực **5 phút**.
+Áp dụng cho **cả 2 loại** hóa đơn: `Periodic` (định kỳ) và `Incurred` (phát sinh).
 
 ```
 POST /invoices/:id/payment/initiate
@@ -48,8 +250,8 @@ POST /invoices/:id/payment/initiate
 | id | string | ObjectId của hóa đơn (`Invoice._id`) |
 
 #### Điều kiện hóa đơn hợp lệ
-- `type` phải là `"Incurred"` (hóa đơn phát sinh)
 - `status` phải là `"Unpaid"` (chưa thanh toán)
+- Hóa đơn `Draft` / `Paid` / `Cancelled` sẽ bị từ chối
 
 #### Response Success (201)
 ```json
@@ -81,14 +283,14 @@ POST /invoices/:id/payment/initiate
 #### Response Errors
 | Status | Trường hợp |
 |--------|-----------|
-| 400 | Hóa đơn không phải loại `Incurred` |
+
 | 400 | Hóa đơn không ở trạng thái `Unpaid` (ví dụ đã `Paid` hoặc `Draft`) |
 | 404 | Không tìm thấy hóa đơn |
 | 500 | Lỗi server |
 
 ---
 
-### 2. Kiểm Tra Trạng Thái Giao Dịch (Polling)
+### 5. Kiểm Tra Trạng Thái Giao Dịch (Polling)
 
 Frontend gọi định kỳ (3–5 giây) để biết giao dịch đã được xác nhận chưa.
 
@@ -176,7 +378,7 @@ GET /invoices/payment/status/:transactionCode
 
 ---
 
-### 3. Hủy Giao Dịch
+### 6. Hủy Giao Dịch
 
 Frontend gọi khi user **tự đóng modal QR** trước khi thanh toán.
 
@@ -216,13 +418,19 @@ POST /invoices/payment/cancel/:transactionCode
 
 ---
 
-### 4. Webhook Sepay — Xác Nhận Thanh Toán *(Nội Bộ)*
+### 7. Webhook Sepay — Xác Nhận Thanh Toán *(Nội Bộ)*
 
 > ⚠️ **Endpoint này chỉ dành cho Sepay gọi tự động. Frontend KHÔNG gọi endpoint này.**
+>
+> Đã chuyển sang **webhook chung** cho tất cả loại thanh toán (cọc + hóa đơn):
 
 ```
-POST /invoices/webhook/sepay
+POST /webhook/sepay
 ```
+
+Hệ thống tự phân biệt loại giao dịch qua nội dung chuyển khoản:
+- `Coc ...` → Đặt cọc phòng
+- `HD ...` → Thanh toán hóa đơn phát sinh
 
 Khi Sepay phát hiện biến động số dư ngân hàng khớp với mã giao dịch hóa đơn, endpoint này sẽ:
 1. Cập nhật `Payment.status` → `"Success"`
@@ -304,217 +512,6 @@ Khi Sepay phát hiện biến động số dư ngân hàng khớp với mã giao
                               công ✅"               "Hết hạn ⏰"
                               Cập nhật UI           Cho phép
                               Invoice → Paid        thử lại
-```
-
----
-
-## Code Mẫu — React/Next.js
-
-```jsx
-import { useState, useEffect, useRef } from 'react';
-
-const InvoicePaymentModal = ({ invoiceId, invoiceAmount, invoiceCode, onClose, onSuccess }) => {
-  const [paymentData, setPaymentData] = useState(null);
-  const [status, setStatus] = useState('loading'); // loading | pending | success | expired | cancelled
-  const intervalRef = useRef(null);
-  const timeoutRef = useRef(null);
-
-  // Khởi tạo thanh toán
-  useEffect(() => {
-    const initiate = async () => {
-      try {
-        const res = await fetch(`/api/invoices/${invoiceId}/payment/initiate`, {
-          method: 'POST',
-        });
-        const data = await res.json();
-
-        if (data.success) {
-          setPaymentData(data.data);
-          setStatus('pending');
-        } else {
-          alert(data.message || 'Không thể khởi tạo thanh toán');
-          onClose();
-        }
-      } catch (err) {
-        console.error(err);
-        alert('Lỗi kết nối, vui lòng thử lại');
-        onClose();
-      }
-    };
-
-    initiate();
-  }, [invoiceId]);
-
-  // Polling trạng thái thanh toán
-  useEffect(() => {
-    if (status !== 'pending' || !paymentData) return;
-
-    const encodedCode = encodeURIComponent(paymentData.transactionCode);
-
-    intervalRef.current = setInterval(async () => {
-      try {
-        const res = await fetch(`/api/invoices/payment/status/${encodedCode}`);
-        const data = await res.json();
-        const txStatus = data.data?.status;
-
-        if (txStatus === 'Success') {
-          clearInterval(intervalRef.current);
-          clearTimeout(timeoutRef.current);
-          setStatus('success');
-          onSuccess?.();
-        } else if (txStatus === 'Expired') {
-          clearInterval(intervalRef.current);
-          clearTimeout(timeoutRef.current);
-          setStatus('expired');
-        }
-      } catch (err) {
-        console.error('Polling error:', err);
-      }
-    }, 3000);
-
-    // Tự động dừng sau 5 phút (failsafe)
-    timeoutRef.current = setTimeout(() => {
-      clearInterval(intervalRef.current);
-      setStatus('expired');
-    }, 5 * 60 * 1000);
-
-    return () => {
-      clearInterval(intervalRef.current);
-      clearTimeout(timeoutRef.current);
-    };
-  }, [status, paymentData]);
-
-  // Hủy giao dịch khi đóng modal
-  const handleCancel = async () => {
-    clearInterval(intervalRef.current);
-    clearTimeout(timeoutRef.current);
-
-    if (paymentData?.transactionCode && status === 'pending') {
-      try {
-        const encodedCode = encodeURIComponent(paymentData.transactionCode);
-        await fetch(`/api/invoices/payment/cancel/${encodedCode}`, { method: 'POST' });
-      } catch (err) {
-        console.error('Cancel error:', err);
-      }
-    }
-
-    setStatus('cancelled');
-    onClose();
-  };
-
-  // --- Loading ---
-  if (status === 'loading') {
-    return (
-      <div className="modal-overlay">
-        <div className="modal">
-          <p>Đang tạo mã QR thanh toán...</p>
-        </div>
-      </div>
-    );
-  }
-
-  // --- Thành công ---
-  if (status === 'success') {
-    return (
-      <div className="modal-overlay">
-        <div className="modal">
-          <h2>✅ Thanh toán thành công!</h2>
-          <p>Hóa đơn <strong>{invoiceCode}</strong> đã được thanh toán.</p>
-          <p>Số tiền: <strong>{invoiceAmount?.toLocaleString('vi-VN')} đ</strong></p>
-          <button onClick={onClose}>Đóng</button>
-        </div>
-      </div>
-    );
-  }
-
-  // --- Hết hạn ---
-  if (status === 'expired') {
-    return (
-      <div className="modal-overlay">
-        <div className="modal">
-          <h2>⏰ Giao dịch hết hạn</h2>
-          <p>Phiên thanh toán đã hết 5 phút. Vui lòng thử lại.</p>
-          <button onClick={onClose}>Đóng</button>
-        </div>
-      </div>
-    );
-  }
-
-  // --- QR Modal (Pending) ---
-  if (status === 'pending' && paymentData) {
-    return (
-      <div className="modal-overlay">
-        <div className="modal">
-          <button className="close-btn" onClick={handleCancel}>✕</button>
-
-          <h2>Thanh toán hóa đơn phát sinh</h2>
-          <p>Hóa đơn: <strong>{paymentData.invoiceCode}</strong></p>
-          <p>Phòng: <strong>{paymentData.roomName}</strong></p>
-
-          {/* QR Code */}
-          <img
-            src={paymentData.qrUrl}
-            alt="QR Thanh toán"
-            style={{ width: 200, height: 200 }}
-          />
-
-          {/* Thông tin chuyển khoản */}
-          <div className="bank-info">
-            <p>🏦 <strong>Ngân hàng:</strong> BIDV</p>
-            <p>💳 <strong>Số TK:</strong> {paymentData.bankInfo.bankAccount}</p>
-            <p>👤 <strong>Chủ TK:</strong> {paymentData.bankInfo.bankAccountName}</p>
-            <p>💰 <strong>Số tiền:</strong> {paymentData.invoiceAmount?.toLocaleString('vi-VN')} đ</p>
-            <p>📝 <strong>Nội dung CK:</strong>
-              <code style={{ background: '#f0f0f0', padding: '2px 6px', borderRadius: 4 }}>
-                {paymentData.transactionCode}
-              </code>
-              <button onClick={() => navigator.clipboard.writeText(paymentData.transactionCode)}>
-                📋 Copy
-              </button>
-            </p>
-          </div>
-
-          {/* Đồng hồ đếm ngược */}
-          <CountdownTimer seconds={paymentData.expireInSeconds} />
-
-          <p className="hint">⏳ Đang chờ xác nhận thanh toán...</p>
-          <button className="btn-cancel" onClick={handleCancel}>Hủy thanh toán</button>
-        </div>
-      </div>
-    );
-  }
-
-  return null;
-};
-
-export default InvoicePaymentModal;
-```
-
-### Hàm đếm ngược thời gian
-
-```jsx
-import { useState, useEffect } from 'react';
-
-const CountdownTimer = ({ seconds: initialSeconds }) => {
-  const [seconds, setSeconds] = useState(initialSeconds);
-
-  useEffect(() => {
-    if (seconds <= 0) return;
-    const timer = setInterval(() => setSeconds(s => s - 1), 1000);
-    return () => clearInterval(timer);
-  }, []);
-
-  const minutes = Math.floor(seconds / 60);
-  const secs = seconds % 60;
-  const isWarning = seconds <= 60;
-
-  return (
-    <p style={{ color: isWarning ? 'red' : 'inherit', fontWeight: 'bold' }}>
-      ⏱ Hết hạn sau: {minutes}:{String(secs).padStart(2, '0')}
-      {isWarning && ' — Sắp hết hạn!'}
-    </p>
-  );
-};
 ```
 
 ---
@@ -615,7 +612,7 @@ Unpaid → Paid  (sau khi thanh toán invoice Incurred)
 
 | Lỗi | Nguyên nhân | Giải pháp |
 |-----|------------|-----------|
-| `400` — Hóa đơn không phải loại Incurred | Dùng API này cho hóa đơn Periodic | Dùng flow khác cho Periodic |
+
 | `400` — Hóa đơn không ở trạng thái Unpaid | Hóa đơn đã `Paid` hoặc còn ở `Draft` | Kiểm tra trạng thái trước khi nút thanh toán hiển thị |
 | `404` khi polling | Giao dịch đã `Expired` và bị xóa | Hiển thị thông báo hết hạn, cho phép tạo lại |
 | QR không quét được | Bank app không hỗ trợ VietQR | Hướng dẫn nhập tay thông tin ngân hàng |
