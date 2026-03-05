@@ -272,6 +272,25 @@ class InvoiceService {
     return await invoice.save();
   }
 
+  async markAsPaid(id) {
+    const invoice = await Invoice.findById(id);
+    if (!invoice) {
+      throw new Error("Không tìm thấy hóa đơn này.");
+    }
+    
+    // Chỉ cho phép thanh toán khi hóa đơn đang ở trạng thái Chưa thu (Unpaid)
+    if (invoice.status !== "Unpaid") {
+      throw new Error("Chỉ có thể xác nhận thanh toán cho hóa đơn đang ở trạng thái 'Chưa thu' (Unpaid).");
+    }
+
+    // Chuyển trạng thái sang Đã thu
+    invoice.status = "Paid";
+    
+    // Lưu lại
+    await invoice.save();
+    return invoice;
+  }
+
   async getInvoiceById(id) {
     const invoice = await Invoice.findById(id)
       .populate({

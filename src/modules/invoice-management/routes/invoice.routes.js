@@ -9,5 +9,6 @@ router.put("/:id/release", invoiceController.release); // Phát hành
 router.get("/tenant/:tenantId", invoiceController.getInvoicesByTenant); // Lấy hóa đơn theo tenant (admin)
 router.get("/my/:id", authenticate, invoiceController.getMyInvoiceById); // Tenant xem chi tiết hóa đơn của mình
 router.get("/:id", invoiceController.getInvoiceById);
+router.put("/:id/pay", invoiceController.markAsPaid);
 
 module.exports = router;

@@ -67,5 +67,24 @@ class InvoiceController {
       res.status(statusCode).json({ success: false, message: error.message });
     }
   }
+
+  async markAsPaid(req, res) {
+    try {
+      const { id } = req.params;
+      
+      const updatedInvoice = await invoiceService.markAsPaid(id);
+      
+      return res.status(200).json({
+        success: true,
+        message: "Xác nhận thanh toán hóa đơn thành công!",
+        data: updatedInvoice
+      });
+    } catch (error) {
+      return res.status(400).json({
+        success: false,
+        message: error.message || "Lỗi khi xác nhận thanh toán."
+      });
+    }
+  }
 }
 module.exports = new InvoiceController();
