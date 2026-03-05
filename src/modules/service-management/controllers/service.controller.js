@@ -113,7 +113,11 @@ class ServiceController {
       if (!serviceId) {
         return res.status(400).json({ success: false, message: "serviceId là bắt buộc" });
       }
-      const data = await ServiceService.bookServiceForTenant(tenantId, serviceId, quantity);
+      const parsedQuantity = quantity !== undefined ? parseInt(quantity, 10) : 1;
+      if (isNaN(parsedQuantity) || parsedQuantity < 1) {
+        return res.status(400).json({ success: false, message: "Số lượng người (quantity) phải là số nguyên >= 1" });
+      }
+      const data = await ServiceService.bookServiceForTenant(tenantId, serviceId, parsedQuantity);
       res.status(201).json({ success: true, message: "Đăng ký dịch vụ thành công", data });
     } catch (error) {
       handleError(res, error);
