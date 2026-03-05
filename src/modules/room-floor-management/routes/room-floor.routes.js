@@ -2,11 +2,12 @@ const express = require("express");
 const router = express.Router();
 const uploadImg = require("../middlewares/uploadimg");
 const uploadExcel = require("../middlewares/uploadexcel");
-const { authenticate } = require("../../authentication/middlewares/index");
+const { authenticate, authorize } = require("../../authentication/middlewares/index");
 // Import Controllers
 const roomController = require("../controllers/room.controller");
 const floorController = require("../controllers/floor.controller");
 const roomTypeController = require("../controllers/roomtype.controller");
+const roomDeviceController = require("../controllers/roomdevice.controller");
 
 // ==================================================================
 // 1. CÁC ROUTE ĐẶC BIỆT CỦA ROOM (BẮT BUỘC PHẢI ĐỂ TRÊN CÙNG)
@@ -74,5 +75,23 @@ router.put(
   roomTypeController.updateRoomType,
 );
 router.delete("/roomtypes/:id", roomTypeController.deleteRoomType);
+
+// ==================================================================
+// 4. ROOM DEVICE ROUTES (Thiết bị theo loại phòng) - Owner only
+// ==================================================================
+// Lấy danh sách thiết bị theo loại phòng: GET /roomdevices?roomTypeId=xxx
+router.get("/roomdevices", authenticate, authorize("owner"), roomDeviceController.getByRoomType);
+
+// Dropdown chọn loại phòng khi thêm thiết bị: GET /roomdevices/roomtypes-select
+// [QUAN TRỌNG] Phải đặt TRƯỚC /roomdevices/:id
+router.get("/roomdevices/roomtypes-select", authenticate, authorize("owner"), roomDeviceController.getRoomTypesForSelect);
+
+// Thêm thiết bị vào loại phòng: POST /roomdevices
+router.post("/roomdevices", authenticate, authorize("owner"), roomDeviceController.create);
+
+// Chi tiết + Sửa + Xóa theo id (phải đặt sau /roomdevices)
+router.get("/roomdevices/:id", authenticate, authorize("owner"), roomDeviceController.getById);
+router.put("/roomdevices/:id", authenticate, authorize("owner"), roomDeviceController.update);
+router.delete("/roomdevices/:id", authenticate, authorize("owner"), roomDeviceController.remove);
 
 module.exports = router;
