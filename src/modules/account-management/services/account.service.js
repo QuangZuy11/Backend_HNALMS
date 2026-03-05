@@ -114,11 +114,41 @@ const getAccountsByRole = async (targetRole) => {
       }
     },
     {
-      $addFields: {
-        fullname: { $ifNull: [{ $arrayElemAt: ['$_userInfo.fullname', 0] }, null] }
+      $lookup: {
+        from: 'contracts',
+        let: { tenantId: '$_id' },
+        pipeline: [
+          {
+            $match: {
+              $expr: { $eq: ['$tenantId', '$tenantId'] }
+            }
+          },
+          { $sort: { createdAt: -1 } },
+          { $limit: 1 }
+        ],
+        as: '_latestContract'
       }
     },
-    { $project: { _userInfo: 0 } }
+    {
+      $lookup: {
+        from: 'rooms',
+        localField: '_latestContract.roomId',
+        foreignField: '_id',
+        as: '_roomInfo'
+      }
+    },
+    {
+      $addFields: {
+        fullname: { $ifNull: [{ $arrayElemAt: ['$_userInfo.fullname', 0] }, null] },
+        roomName: {
+          $ifNull: [
+            { $arrayElemAt: ['$_roomInfo.name', 0] },
+            { $arrayElemAt: ['$_roomInfo.roomCode', 0] }
+          ]
+        }
+      }
+    },
+    { $project: { _userInfo: 0, _latestContract: 0, _roomInfo: 0 } }
   ]);
   return users;
 };
