@@ -68,9 +68,9 @@ exports.createContract = async (req, res) => {
         if (contractStartDate > maxStartDate) {
           throw new Error(
             `Ngày bắt đầu thuê không được quá 7 ngày từ khi đặt cọc. ` +
-              `Ngày cọc: ${depositCreatedDate.toLocaleDateString("vi-VN")}, ` +
-              `Hạn cuối: ${maxStartDate.toLocaleDateString("vi-VN")}, ` +
-              `Ngày bắt đầu: ${contractStartDate.toLocaleDateString("vi-VN")}`,
+            `Ngày cọc: ${depositCreatedDate.toLocaleDateString("vi-VN")}, ` +
+            `Hạn cuối: ${maxStartDate.toLocaleDateString("vi-VN")}, ` +
+            `Ngày bắt đầu: ${contractStartDate.toLocaleDateString("vi-VN")}`,
           );
         }
       }
@@ -274,7 +274,8 @@ exports.getContractById = async (req, res) => {
           { path: "floorId", select: "name" },
         ],
       })
-      .populate("tenantId", "username email phoneNumber");
+      .populate("tenantId", "username email phoneNumber")
+      .populate("depositId", "name phone email amount status createdAt");
 
     if (!contract) {
       return res
@@ -320,14 +321,14 @@ exports.getContractById = async (req, res) => {
     // Map bookServices with populated data
     const bookServices = bookServiceRecord
       ? bookServiceRecord.services.map((s) => ({
-          serviceId: s.serviceId?._id,
-          name: s.serviceId?.name || "—",
-          currentPrice: s.serviceId?.currentPrice
-            ? parseFloat(s.serviceId.currentPrice.toString())
-            : 0,
-          type: s.serviceId?.type || "",
-          quantity: s.quantity || null,
-        }))
+        serviceId: s.serviceId?._id,
+        name: s.serviceId?.name || "—",
+        currentPrice: s.serviceId?.currentPrice
+          ? parseFloat(s.serviceId.currentPrice.toString())
+          : 0,
+        type: s.serviceId?.type || "",
+        quantity: s.quantity || null,
+      }))
       : [];
 
     // Map room assets
