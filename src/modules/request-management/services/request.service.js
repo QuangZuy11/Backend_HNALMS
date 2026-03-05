@@ -523,9 +523,9 @@ const getNextMaintenancePaymentVoucherCode = async () => {
  * Cập nhật trạng thái yêu cầu sửa chữa
  * @param {string} requestId - ID của yêu cầu
  * @param {"Pending"|"Processing"|"Done"|"Unpaid"|"Paid"} status - Trạng thái mới
- *   - Done   : đã xử lý, sửa chữa miễn phí (chủ nhà chịu chi phí → tạo phiếu chi nếu có)
- *   - Unpaid : đã xử lý, cư dân chưa thanh toán (→ tạo hóa đơn nếu có)
- *   - Paid   : cư dân đã thanh toán
+ * - Done   : đã xử lý, sửa chữa miễn phí (chủ nhà chịu chi phí → tạo phiếu chi nếu có)
+ * - Unpaid : đã xử lý, cư dân chưa thanh toán (→ tạo hóa đơn nếu có)
+ * - Paid   : cư dân đã thanh toán
  * @param {number} cost - Không sử dụng nữa, giữ cho tương thích
  * @param {string} notes - Ghi chú (khi status = Done hoặc Unpaid)
  * @param {Object|null} invoiceData - Thông tin hóa đơn (khi status = Unpaid)
@@ -613,6 +613,7 @@ const updateRepairRequestStatus = async (
       }
 
       const roomId = activeContract.roomId._id || activeContract.roomId;
+      const contractId = activeContract._id; // [MỚI] Lấy ID của hợp đồng
 
       // Chuẩn bị chi tiết hóa đơn (items) - 1 dòng cho lần sửa chữa này
       const items = [
@@ -623,11 +624,13 @@ const updateRepairRequestStatus = async (
           usage: 1,
           unitPrice: totalAmount,
           amount: totalAmount,
+          isIndex: false // Đánh dấu không phải là dịch vụ có chỉ số
         },
       ];
 
       const newInvoice = new Invoice({
         invoiceCode,
+        contractId, // [MỚI] Gán ID hợp đồng vào hóa đơn
         roomId,
         repairRequestId: request._id, // liên kết hóa đơn với yêu cầu sửa chữa
         title,

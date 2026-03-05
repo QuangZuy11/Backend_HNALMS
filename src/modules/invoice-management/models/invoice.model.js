@@ -3,12 +3,27 @@ const mongoose = require("mongoose");
 const invoiceSchema = new mongoose.Schema(
   {
     invoiceCode: { type: String, required: true, unique: true },
-    roomId: { type: mongoose.Schema.Types.ObjectId, ref: "Room", required: true },
+    
+    // [MỚI] Tham chiếu đến Hợp đồng: Để xác định chính xác người phải trả tiền & tránh lộ lọt dữ liệu
+    contractId: { 
+      type: mongoose.Schema.Types.ObjectId, 
+      ref: "Contracts", 
+      required: true 
+    },
+
+    // [GIỮ NGUYÊN] Vẫn giữ roomId để phục vụ cho việc thống kê, báo cáo doanh thu của Quản lý
+    roomId: { 
+      type: mongoose.Schema.Types.ObjectId, 
+      ref: "Room", 
+      required: true 
+    },
+    
     // Tham chiếu đến yêu cầu sửa chữa tương ứng (nếu là hóa đơn phát sinh sửa chữa)
     repairRequestId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "RepairRequest",
     },
+    
     title: { type: String, required: true, trim: true },
     type: { type: String, enum: ["Periodic", "Incurred"], default: "Periodic" },
     
@@ -21,7 +36,7 @@ const invoiceSchema = new mongoose.Schema(
         usage: { type: Number, default: 1 },        // Lượng sử dụng (Mặc định là 1 cho phòng/dịch vụ cố định)
         unitPrice: { type: Number, required: true },// Đơn giá tại thời điểm tạo hóa đơn
         amount: { type: Number, required: true },   // Thành tiền (usage * unitPrice)
-        isIndex: { type: Boolean, default: false }  // [MỚI] Đánh dấu true nếu là dịch vụ có chốt số (Điện, Nước)
+        isIndex: { type: Boolean, default: false }  // Đánh dấu true nếu là dịch vụ có chốt số (Điện, Nước)
       }
     ],
 

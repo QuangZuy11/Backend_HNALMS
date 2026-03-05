@@ -84,7 +84,6 @@ class InvoiceService {
 
     const activeContractIds = activeContracts.map(c => c._id.toString());
     
-    // [ĐÃ SỬA THEO MODEL MỚI] Populate serviceId nằm bên trong mảng services
     const activeBookServices = await BookService.find({
       contractId: { $in: activeContractIds }
     }).populate('services.serviceId');
@@ -144,7 +143,7 @@ class InvoiceService {
           usage: roomRentUsage,
           unitPrice: roomRentUnitPrice,
           amount: roomRentAmount,
-          isIndex: false // [MỚI]
+          isIndex: false 
         });
       }
 
@@ -184,28 +183,23 @@ class InvoiceService {
 
         if (group.totalUsage > 0) {
           invoiceItems.push({
-            itemName: `Tiền ${serviceName.toLowerCase()} (Cũ: ${group.oldIndex} - Mới: ${group.newIndex})`,
+            itemName: `Tiền ${serviceName.toLowerCase()}`,
             oldIndex: group.oldIndex,
             newIndex: group.newIndex,
             usage: group.totalUsage,
             unitPrice: servicePrice,
             amount: amount,
-            isIndex: true // [MỚI]
+            isIndex: true 
           });
         }
       });
 
-      // ==========================================
-      // [ĐÃ SỬA THEO MODEL MỚI] ĐỌC DỊCH VỤ TỪ MẢNG services
-      // ==========================================
       if (roomContract) {
-        // Tìm document BookService gắn với Hợp đồng này
         const contractBookService = activeBookServices.find(bs => bs.contractId.toString() === roomContract._id.toString());
 
         if (contractBookService && contractBookService.services && contractBookService.services.length > 0) {
           contractBookService.services.forEach(srvItem => {
             
-            // Bỏ qua nếu dịch vụ đã bị set endDate trước thời điểm hiện tại của tháng
             if (srvItem.endDate && new Date(srvItem.endDate) < startOfMonth) {
               return; 
             }
@@ -234,7 +228,7 @@ class InvoiceService {
                 usage: finalQty,
                 unitPrice: srvPrice,
                 amount: amount,
-                isIndex: false // [MỚI]
+                isIndex: false 
               });
             }
           });
@@ -243,7 +237,8 @@ class InvoiceService {
 
       return {
         invoiceCode: `INV-${room.name}-${month}${year}-${Math.floor(1000 + Math.random() * 9000)}`,
-        roomId: room._id,
+        contractId: roomContract ? roomContract._id : null, // [ĐÃ BỔ SUNG] Tham chiếu vào Hợp đồng
+        roomId: room._id, // [GIỮ NGUYÊN] Phục vụ thống kê phòng
         title: `Hóa đơn tiền thuê & dịch vụ tháng ${month}/${year}`,
         type: "Periodic",
         items: invoiceItems,
@@ -278,15 +273,12 @@ class InvoiceService {
       throw new Error("Không tìm thấy hóa đơn này.");
     }
     
-    // Chỉ cho phép thanh toán khi hóa đơn đang ở trạng thái Chưa thu (Unpaid)
     if (invoice.status !== "Unpaid") {
       throw new Error("Chỉ có thể xác nhận thanh toán cho hóa đơn đang ở trạng thái 'Chưa thu' (Unpaid).");
     }
 
-    // Chuyển trạng thái sang Đã thu
     invoice.status = "Paid";
     
-    // Lưu lại
     await invoice.save();
     return invoice;
   }
@@ -301,6 +293,7 @@ class InvoiceService {
           { path: "roomTypeId", select: "typeName currentPrice" },
         ],
       })
+      .populate("contractId", "contractCode startDate endDate") // [MỚI] Populate thêm thông tin hợp đồng nếu cần
       .lean();
 
     if (!invoice) {
@@ -313,8 +306,9 @@ class InvoiceService {
       );
     }
 
+    // Nếu lấy theo contractId mới thì có thể không cần tìm lại bằng roomId nữa, nhưng tôi vẫn giữ logic cũ cho an toàn
     const contract = await Contract.findOne({
-      roomId: invoice.roomId?._id,
+      _id: invoice.contractId || invoice.roomId?._id, // Ưu tiên tìm bằng contractId nếu có
       status: "active",
     })
       .select("tenantId contractCode startDate endDate")
@@ -323,14 +317,14 @@ class InvoiceService {
     return {
       ...invoice,
       tenant: contract?.tenantId || null,
-      contractCode: contract?.contractCode || null,
+      contractCode: invoice.contractId?.contractCode || contract?.contractCode || null,
     };
   }
 
   async getInvoicesByTenantId(tenantId, page = 1, limit = 10) {
     const skip = (page - 1) * limit;
 
-    const contracts = await Contract.find({ tenantId, status: "active" }).select("roomId");
+    const contracts = await Contract.find({ tenantId, status: "active" }).select("_id roomId");
 
     if (contracts.length === 0) {
       return {
@@ -339,9 +333,10 @@ class InvoiceService {
       };
     }
 
-    const roomIds = contracts.map(contract => contract.roomId);
-    const total = await Invoice.countDocuments({ roomId: { $in: roomIds } });
-    const invoices = await Invoice.find({ roomId: { $in: roomIds } })
+    // [MỚI] Tìm hóa đơn dựa trên mảng contractIds thay vì roomIds
+    const contractIds = contracts.map(contract => contract._id);
+    const total = await Invoice.countDocuments({ contractId: { $in: contractIds } });
+    const invoices = await Invoice.find({ contractId: { $in: contractIds } })
       .populate("roomId", "name floorId")
       .sort({ createdAt: -1 })
       .skip(skip)
@@ -354,12 +349,12 @@ class InvoiceService {
   }
 
   async getMyInvoiceById(tenantId, invoiceId) {
-    const contracts = await Contract.find({ tenantId, status: "active" }).select("roomId contractCode startDate endDate");
+    const contracts = await Contract.find({ tenantId, status: "active" }).select("_id roomId contractCode startDate endDate");
     if (contracts.length === 0) {
       throw new Error("Bạn không có hợp đồng thuê nào đang hoạt động.");
     }
 
-    const roomIds = contracts.map(c => c.roomId.toString());
+    const contractIds = contracts.map(c => c._id.toString());
 
     const invoice = await Invoice.findById(invoiceId)
       .populate({
@@ -376,7 +371,8 @@ class InvoiceService {
       throw new Error("Không tìm thấy hóa đơn.");
     }
 
-    if (!roomIds.includes(invoice.roomId._id.toString())) {
+    // [MỚI] Kiểm tra quyền xem hóa đơn dựa vào contractId
+    if (!invoice.contractId || !contractIds.includes(invoice.contractId.toString())) {
       throw new Error("Bạn không có quyền xem hóa đơn này.");
     }
 
@@ -386,7 +382,7 @@ class InvoiceService {
       );
     }
 
-    const contract = contracts.find(c => c.roomId.toString() === invoice.roomId._id.toString());
+    const contract = contracts.find(c => c._id.toString() === invoice.contractId.toString());
 
     return {
       ...invoice,
