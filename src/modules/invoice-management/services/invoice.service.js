@@ -3,7 +3,6 @@ const Room = require("../../room-floor-management/models/room.model");
 const MeterReading = require('../models/meterreading.model');
 const BookService = require('../../contract-management/models/bookservice.model');
 const Service = require("../../service-management/models/service.model");
-// [MỚI] Import model Contract
 const Contract = require('../../contract-management/models/contract.model');
 
 class InvoiceService {
@@ -21,10 +20,6 @@ class InvoiceService {
     const startOfMonth = new Date(year, month - 1, 1);
     const endOfMonth = new Date(year, month, 0, 23, 59, 59);
 
-    // ==========================================
-    // [FIX QUAN TRỌNG NHẤT]: TÌM PHÒNG DỰA TRÊN HỢP ĐỒNG, KHÔNG DỰA VÀO TRẠNG THÁI PHÒNG
-    // (Bao được case phòng đã trả / chuyển đi giữa tháng thành trạng thái "Available")
-    // ==========================================
     const activeContracts = await Contract.find({
       startDate: { $lte: endOfMonth },
       $or: [
@@ -38,10 +33,7 @@ class InvoiceService {
       throw new Error("Không có hợp đồng nào hoạt động trong tháng này để tạo hóa đơn.");
     }
 
-    // Lấy ra danh sách các phòng CÓ HỢP ĐỒNG trong tháng này (Dùng Set để tránh trùng lặp)
     const roomIdsFromContracts = [...new Set(activeContracts.map(c => c.roomId.toString()))];
-
-    // Tìm thông tin của các phòng đó
     const activeRooms = await Room.find({ _id: { $in: roomIdsFromContracts } }).populate("roomTypeId");
 
     const titlePattern = `tháng ${month}/${year}`;
@@ -52,7 +44,6 @@ class InvoiceService {
 
     const roomIdsWithInvoice = existingInvoices.map(inv => inv.roomId.toString());
 
-    // Lọc ra những phòng chưa tạo hóa đơn
     const roomsToCreate = activeRooms.filter(
       room => !roomIdsWithInvoice.includes(room._id.toString())
     );
@@ -69,7 +60,6 @@ class InvoiceService {
     const waterService = await Service.findOne({ name: "Nước" });
     const missingRooms = [];
 
-    // Bắt buộc tất cả các phòng (kể cả phòng khách đã chuyển đi giữa tháng) phải được chốt điện/nước
     roomsToCreate.forEach(room => {
       const roomReadings = recentReadings.filter(r => r.roomId.toString() === room._id.toString());
       let hasElec = true;
@@ -93,15 +83,11 @@ class InvoiceService {
     }
 
     const activeContractIds = activeContracts.map(c => c._id.toString());
-    const activeServices = await BookService.find({
-      contractId: { $in: activeContractIds },
-      startDate: { $lte: endOfMonth },
-      $or: [
-        { endDate: null },
-        { endDate: { $exists: false } },
-        { endDate: { $gte: startOfMonth } }
-      ]
-    }).populate('serviceId');
+    
+    // [ĐÃ SỬA THEO MODEL MỚI] Populate serviceId nằm bên trong mảng services
+    const activeBookServices = await BookService.find({
+      contractId: { $in: activeContractIds }
+    }).populate('services.serviceId');
 
     const invoicesToCreate = roomsToCreate.map(room => {
       let parsedPrice = room.roomTypeId ? (room.roomTypeId.currentPrice || 0) : 0;
@@ -114,7 +100,6 @@ class InvoiceService {
       let roomRentUnitPrice = parsedPrice;
       let roomRentItemName = "Tiền thuê phòng";
 
-      // Tìm hợp đồng của phòng này (Lấy hợp đồng mới nhất nếu phòng có 2 hợp đồng trong tháng)
       const roomContract = activeContracts.slice().reverse().find(c => c.roomId.toString() === room._id.toString());
 
       if (roomContract) {
@@ -158,7 +143,8 @@ class InvoiceService {
           newIndex: 0,
           usage: roomRentUsage,
           unitPrice: roomRentUnitPrice,
-          amount: roomRentAmount
+          amount: roomRentAmount,
+          isIndex: false // [MỚI]
         });
       }
 
@@ -203,39 +189,56 @@ class InvoiceService {
             newIndex: group.newIndex,
             usage: group.totalUsage,
             unitPrice: servicePrice,
-            amount: amount
+            amount: amount,
+            isIndex: true // [MỚI]
           });
         }
       });
 
+      // ==========================================
+      // [ĐÃ SỬA THEO MODEL MỚI] ĐỌC DỊCH VỤ TỪ MẢNG services
+      // ==========================================
       if (roomContract) {
-        const contractServices = activeServices.filter(rs => rs.contractId.toString() === roomContract._id.toString());
+        // Tìm document BookService gắn với Hợp đồng này
+        const contractBookService = activeBookServices.find(bs => bs.contractId.toString() === roomContract._id.toString());
 
-        contractServices.forEach(rs => {
-          if (rs.serviceId) {
-            let srvPrice = rs.serviceId.currentPrice || rs.serviceId.price || 0;
-            srvPrice = typeof srvPrice === 'object' && srvPrice.$numberDecimal
-              ? parseFloat(srvPrice.$numberDecimal)
-              : Number(srvPrice);
+        if (contractBookService && contractBookService.services && contractBookService.services.length > 0) {
+          contractBookService.services.forEach(srvItem => {
+            
+            // Bỏ qua nếu dịch vụ đã bị set endDate trước thời điểm hiện tại của tháng
+            if (srvItem.endDate && new Date(srvItem.endDate) < startOfMonth) {
+              return; 
+            }
 
-            let finalQty = rs.quantity || 1;
-            let srvItemName = rs.serviceId.name || rs.serviceId.serviceName || "Dịch vụ";
+            if (srvItem.serviceId) {
+              let srvPrice = srvItem.serviceId.currentPrice || srvItem.serviceId.price || 0;
+              srvPrice = typeof srvPrice === 'object' && srvPrice.$numberDecimal
+                ? parseFloat(srvPrice.$numberDecimal)
+                : Number(srvPrice);
 
-            const amount = finalQty * srvPrice;
-            totalAmount += amount;
+              let finalQty = srvItem.quantity || 1;
+              let srvItemName = srvItem.serviceId.name || srvItem.serviceId.serviceName || "Dịch vụ";
 
-            const displayItemName = rs.note ? `Dịch vụ ${srvItemName} (${rs.note})` : `Dịch vụ ${srvItemName}`;
+              const nameCheck = srvItemName.toLowerCase().trim();
+              if (nameCheck === 'điện' || nameCheck === 'dien' || nameCheck === 'nước' || nameCheck === 'nuoc') {
+                return; 
+              }
 
-            invoiceItems.push({
-              itemName: displayItemName,
-              oldIndex: 0,
-              newIndex: 0,
-              usage: finalQty,
-              unitPrice: srvPrice,
-              amount: amount
-            });
-          }
-        });
+              const amount = finalQty * srvPrice;
+              totalAmount += amount;
+
+              invoiceItems.push({
+                itemName: `Dịch vụ ${srvItemName}`,
+                oldIndex: 0,
+                newIndex: 0,
+                usage: finalQty,
+                unitPrice: srvPrice,
+                amount: amount,
+                isIndex: false // [MỚI]
+              });
+            }
+          });
+        }
       }
 
       return {
@@ -285,14 +288,12 @@ class InvoiceService {
       throw new Error("Không tìm thấy hóa đơn này.");
     }
 
-    // Fix Decimal128 → Number cho currentPrice
     if (invoice.roomId?.roomTypeId?.currentPrice) {
       invoice.roomId.roomTypeId.currentPrice = parseFloat(
         invoice.roomId.roomTypeId.currentPrice.toString()
       );
     }
 
-    // Lấy thông tin tenant qua contract đang active của phòng
     const contract = await Contract.findOne({
       roomId: invoice.roomId?._id,
       status: "active",
@@ -307,33 +308,20 @@ class InvoiceService {
     };
   }
 
-  // Lấy hóa đơn theo TenantId (có phân trang)
   async getInvoicesByTenantId(tenantId, page = 1, limit = 10) {
-    // Tính toán phân trang
     const skip = (page - 1) * limit;
 
-    // Bước 1: Tìm tất cả contracts của tenant
     const contracts = await Contract.find({ tenantId, status: "active" }).select("roomId");
 
     if (contracts.length === 0) {
       return {
         invoices: [],
-        pagination: {
-          total: 0,
-          page,
-          limit,
-          totalPages: 0,
-        },
+        pagination: { total: 0, page, limit, totalPages: 0 },
       };
     }
 
-    // Bước 2: Lấy danh sách roomId từ contracts
     const roomIds = contracts.map(contract => contract.roomId);
-
-    // Bước 3: Đếm tổng số hóa đơn
     const total = await Invoice.countDocuments({ roomId: { $in: roomIds } });
-
-    // Bước 4: Lấy hóa đơn với phân trang
     const invoices = await Invoice.find({ roomId: { $in: roomIds } })
       .populate("roomId", "name floorId")
       .sort({ createdAt: -1 })
@@ -342,18 +330,11 @@ class InvoiceService {
 
     return {
       invoices,
-      pagination: {
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit),
-      },
+      pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
   }
 
-  // Tenant xem chi tiết 1 hóa đơn của chính mình (có kiểm tra quyền sở hữu)
   async getMyInvoiceById(tenantId, invoiceId) {
-    // Bước 1: Tìm contract active của tenant để lấy roomId
     const contracts = await Contract.find({ tenantId, status: "active" }).select("roomId contractCode startDate endDate");
     if (contracts.length === 0) {
       throw new Error("Bạn không có hợp đồng thuê nào đang hoạt động.");
@@ -361,7 +342,6 @@ class InvoiceService {
 
     const roomIds = contracts.map(c => c.roomId.toString());
 
-    // Bước 2: Tìm hóa đơn và kiểm tra hóa đơn này có thuộc phòng của tenant không
     const invoice = await Invoice.findById(invoiceId)
       .populate({
         path: "roomId",
@@ -377,19 +357,16 @@ class InvoiceService {
       throw new Error("Không tìm thấy hóa đơn.");
     }
 
-    // Bước 3: Kiểm tra hóa đơn có thuộc phòng của tenant không
     if (!roomIds.includes(invoice.roomId._id.toString())) {
       throw new Error("Bạn không có quyền xem hóa đơn này.");
     }
 
-    // Fix Decimal128 → Number
     if (invoice.roomId?.roomTypeId?.currentPrice) {
       invoice.roomId.roomTypeId.currentPrice = parseFloat(
         invoice.roomId.roomTypeId.currentPrice.toString()
       );
     }
 
-    // Bước 4: Lấy contract tương ứng với phòng của hóa đơn
     const contract = contracts.find(c => c.roomId.toString() === invoice.roomId._id.toString());
 
     return {

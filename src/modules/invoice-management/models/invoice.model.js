@@ -21,6 +21,7 @@ const invoiceSchema = new mongoose.Schema(
         usage: { type: Number, default: 1 },        // Lượng sử dụng (Mặc định là 1 cho phòng/dịch vụ cố định)
         unitPrice: { type: Number, required: true },// Đơn giá tại thời điểm tạo hóa đơn
         amount: { type: Number, required: true },   // Thành tiền (usage * unitPrice)
+        isIndex: { type: Boolean, default: false }  // [MỚI] Đánh dấu true nếu là dịch vụ có chốt số (Điện, Nước)
       }
     ],
 
