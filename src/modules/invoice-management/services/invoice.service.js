@@ -5,6 +5,7 @@ const BookService = require('../../contract-management/models/bookservice.model'
 const Service = require("../../service-management/models/service.model");
 // [MỚI] Import model Contract
 const Contract = require('../../contract-management/models/contract.model');
+const RepairRequest = require('../../request-management/models/repair_requests.model');
 
 class InvoiceService {
   async getInvoices(query = {}) {
@@ -397,6 +398,39 @@ class InvoiceService {
       contractCode: contract?.contractCode || null,
       contractStartDate: contract?.startDate || null,
       contractEndDate: contract?.endDate || null,
+    };
+  }
+
+  // Xem chi tiết hóa đơn phát sinh (type = "Incurred") — bổ sung thông tin RepairRequest & Device
+  async getIncurredInvoiceDetail(invoiceId) {
+    const invoice = await Invoice.findById(invoiceId)
+      .select("invoiceCode title type totalAmount status dueDate createdAt repairRequestId roomId")
+      .populate({ path: "roomId", select: "name" })
+      .lean();
+
+    if (!invoice) throw new Error("Không tìm thấy hóa đơn.");
+    if (invoice.type !== "Incurred") throw new Error("Hóa đơn này không phải loại phát sinh (Incurred).");
+    if (!invoice.repairRequestId) throw new Error("Hóa đơn không liên kết với yêu cầu sửa chữa nào.");
+
+    // Lấy RepairRequest và populate Device chỉ lấy tên thiết bị
+    const repairRequest = await RepairRequest.findById(invoice.repairRequestId)
+      .select("description devicesId")
+      .populate({ path: "devicesId", select: "name" })
+      .lean();
+
+    if (!repairRequest) throw new Error("Không tìm thấy yêu cầu sửa chữa liên quan.");
+
+    return {
+      invoiceCode: invoice.invoiceCode,
+      roomName: invoice.roomId?.name || null,
+      title: invoice.title,
+      type: invoice.type,
+      totalAmount: invoice.totalAmount,
+      status: invoice.status,
+      dueDate: invoice.dueDate,
+      createdAt: invoice.createdAt,
+      deviceName: repairRequest.devicesId?.name || null,
+      description: repairRequest.description,
     };
   }
 }

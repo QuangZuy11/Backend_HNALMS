@@ -8,6 +8,7 @@ router.post("/generate-drafts", invoiceController.generateDrafts); // Tạo hàn
 router.put("/:id/release", invoiceController.release); // Phát hành
 router.get("/tenant/:tenantId", invoiceController.getInvoicesByTenant); // Lấy hóa đơn theo tenant (admin)
 router.get("/my/:id", authenticate, invoiceController.getMyInvoiceById); // Tenant xem chi tiết hóa đơn của mình
+router.get("/:id/incurred", invoiceController.getIncurredInvoiceDetail); // Chi tiết hóa đơn phát sinh (Incurred)
 router.get("/:id", invoiceController.getInvoiceById);
 
 module.exports = router;
