@@ -255,25 +255,39 @@ exports.bookServiceForTenant = async (tenantId, serviceId, quantity = 1) => {
   const contract = await Contract.findOne({ tenantId, status: "active" }).lean();
   if (!contract) throw { status: 400, message: "Bạn không có hợp đồng hiệu lực." };
 
-  let bookService = await BookService.findOne({ contractId: contract._id });
-  if (!bookService) {
-    bookService = new BookService({ contractId: contract._id, services: [] });
-  }
+  const serviceObjectId = new mongoose.Types.ObjectId(serviceId);
 
-  // Kiểm tra đang có entry active (endDate = null) cho dịch vụ này chưa
-  const alreadyBooked = bookService.services.some(
-    (item) => item.serviceId.toString() === serviceId.toString() && (item.endDate === null || item.endDate === undefined)
+  // Kiểm tra đang có entry active (endDate = null) chưa
+  const activeCheck = await BookService.findOne({
+    contractId: contract._id,
+    services: { $elemMatch: { serviceId: serviceObjectId, endDate: null } },
+  }).lean();
+  if (activeCheck) throw { status: 400, message: "Bạn đã đăng ký dịch vụ này rồi." };
+
+  // Thử update entry đã có (làn đăng ký lại sau khi huỷ)
+  const updateResult = await BookService.updateOne(
+    { contractId: contract._id, "services.serviceId": serviceObjectId },
+    {
+      $set: {
+        "services.$.startDate": new Date(),
+        "services.$.endDate": null,
+        "services.$.quantity": quantity,
+      },
+    }
   );
-  if (alreadyBooked) throw { status: 400, message: "Bạn đã đăng ký dịch vụ này rồi." };
 
-  // Thêm entry mới với startDate = hôm nay, endDate = null
-  bookService.services.push({
-    serviceId,
-    quantity,
-    startDate: new Date(),
-    endDate: null,
-  });
-  await bookService.save();
+  if (updateResult.matchedCount === 0) {
+    // Chưa có doc hoặc chưa có entry → upsert doc và push entry mới
+    await BookService.updateOne(
+      { contractId: contract._id },
+      {
+        $push: {
+          services: { serviceId: serviceObjectId, quantity, startDate: new Date(), endDate: null },
+        },
+      },
+      { upsert: true }
+    );
+  }
 
   return {
     serviceId: service._id,
@@ -300,18 +314,18 @@ exports.cancelBookedServiceForTenant = async (tenantId, serviceId) => {
   const contract = await Contract.findOne({ tenantId, status: "active" }).lean();
   if (!contract) throw { status: 400, message: "Bạn không có hợp đồng hiệu lực." };
 
-  const bookService = await BookService.findOne({ contractId: contract._id });
-  if (!bookService) throw { status: 404, message: "Bạn chưa đăng ký dịch vụ nào." };
+  const serviceObjectId = new mongoose.Types.ObjectId(serviceId);
 
-  // Tìm entry đang active (endDate = null) của dịch vụ này
-  const existingIndex = bookService.services.findIndex(
-    (item) => item.serviceId.toString() === serviceId.toString() && (item.endDate === null || item.endDate === undefined)
+  // Update trực tiếp entry đang active ($elemMatch đảm bảo match đúng 1 phần tử)
+  const result = await BookService.updateOne(
+    {
+      contractId: contract._id,
+      services: { $elemMatch: { serviceId: serviceObjectId, endDate: null } },
+    },
+    { $set: { "services.$.endDate": new Date() } }
   );
-  if (existingIndex === -1) throw { status: 404, message: "Bạn chưa đăng ký dịch vụ này." };
 
-  // Đặt endDate = hôm nay (để lại lịch sử, không xóa)
-  bookService.services[existingIndex].endDate = new Date();
-  await bookService.save();
+  if (result.matchedCount === 0) throw { status: 404, message: "Bạn chưa đăng ký dịch vụ này." };
 
   return { message: "Huỷ đăng ký dịch vụ thành công." };
 };
