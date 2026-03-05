@@ -11,8 +11,7 @@ router.get("/tenant/:tenantId", invoiceController.getInvoicesByTenant); // Lấy
 router.get("/my/:id", authenticate, invoiceController.getMyInvoiceById); // Tenant xem chi tiết hóa đơn của mình
 
 // ─── Sepay QR Payment (Incurred Invoice) ─────────────────────────────────────
-// Webhook Sepay gọi khi có biến động số dư (không cần auth, xác thực bằng ApiKey header)
-router.post("/webhook/sepay", invoicePaymentController.sepayWebhookForInvoice);
+// ⚠️ Webhook Sepay đã chuyển sang endpoint chung: POST /api/webhook/sepay
 // Kiểm tra trạng thái giao dịch (polling FE)
 router.get("/payment/status/:transactionCode", invoicePaymentController.getInvoicePaymentStatus);
 // Hủy giao dịch đang Pending

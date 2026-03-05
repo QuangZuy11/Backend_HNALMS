@@ -14,10 +14,7 @@ router.get("/status/:transactionCode", depositRoomController.getDepositStatus);
 // FE gọi khi user đóng modal thanh toán (hủy giao dịch)
 router.post("/cancel/:transactionCode", depositRoomController.cancelDeposit);
 
-// POST /api/deposits/webhook/sepay
-// Sepay gọi vào đây khi phát hiện biến động số dư
-// Route này KHÔNG cần authenticate (Sepay gọi từ bên ngoài)
-// Bảo mật bằng SEPAY_WEBHOOK_TOKEN trong header Authorization
-router.post("/webhook/sepay", depositRoomController.sepayWebhook);
+// ⚠️ Webhook Sepay đã chuyển sang endpoint chung: POST /api/webhook/sepay
+// Xem: src/shared/routes/sepay-webhook.routes.js
 
 module.exports = router;

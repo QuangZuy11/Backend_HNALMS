@@ -207,23 +207,10 @@ exports.getInvoicePaymentStatus = async (req, res) => {
 // =============================================
 exports.sepayWebhookForInvoice = async (req, res) => {
     try {
-        // --- 1. Xác thực webhook API Key ---
-        const authHeader = req.headers["authorization"];
-        const expectedKey = `Apikey ${process.env.SEPAY_WEBHOOK_TOKEN}`;
+        // Auth đã được xử lý bởi middleware verifySepayToken (src/shared/routes/sepay-webhook.routes.js)
 
-        if (!authHeader || authHeader !== expectedKey) {
-            console.warn("[INVOICE WEBHOOK] ❌ Unauthorized. Received:", authHeader);
-            return res.status(401).json({ success: false, message: "Unauthorized" });
-        }
-
-        // --- 2. Parse dữ liệu từ Sepay ---
+        // --- Parse dữ liệu từ Sepay ---
         const { transferAmount, content, transferType } = req.body;
-        console.log("[INVOICE WEBHOOK] 📥 Received:", JSON.stringify(req.body, null, 2));
-
-        // Chỉ xử lý giao dịch tiền VÀO
-        if (transferType !== "in") {
-            return res.status(200).json({ success: true, message: "Ignored outgoing transaction" });
-        }
 
         // --- 3. Tìm mã giao dịch hóa đơn trong nội dung CK ---
         // Format: "HD [code] DDMMYYYY"

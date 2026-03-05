@@ -173,30 +173,15 @@ exports.getDepositStatus = async (req, res) => {
 // =============================================
 exports.sepayWebhook = async (req, res) => {
     try {
-        // --- 1. Xác thực webhook API Key ---
-        // Sepay gửi header: Authorization: Apikey <API_KEY>
-        const authHeader = req.headers["authorization"];
-        const expectedKey = `Apikey ${process.env.SEPAY_WEBHOOK_TOKEN}`;
+        // Auth đã được xử lý bởi middleware verifySepayToken (src/shared/routes/sepay-webhook.routes.js)
 
-        if (!authHeader || authHeader !== expectedKey) {
-            console.warn("[SEPAY WEBHOOK] ❌ Unauthorized webhook call. Received:", authHeader);
-            return res.status(401).json({ success: false, message: "Unauthorized" });
-        }
-
-        // --- 2. Parse dữ liệu từ Sepay ---
+        // --- Parse dữ liệu từ Sepay ---
         const {
             id,             // ID giao dịch trên Sepay
             transferAmount, // Số tiền chuyển khoản
             content,        // Nội dung chuyển khoản (chứa transactionCode)
             transferType,   // "in" = tiền vào, "out" = tiền ra
         } = req.body;
-
-        console.log("[SEPAY WEBHOOK] 📥 Received:", JSON.stringify(req.body, null, 2));
-
-        // Chỉ xử lý giao dịch tiền VÀO
-        if (transferType !== "in") {
-            return res.status(200).json({ success: true, message: "Ignored outgoing transaction" });
-        }
 
         // --- 3. Tìm Deposit bằng transactionCode trong nội dung CK ---
         // Format: "Coc P310 02032026"

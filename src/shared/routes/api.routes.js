@@ -62,6 +62,10 @@ ApiRouter.use("/accounts", accountRoutes);
 ApiRouter.use("/devices", deviceRoutes);
 ApiRouter.use("/invoices", invoiceRoutes);
 ApiRouter.use("/meter-readings", meterreadingRoutes);
+
+// Webhook chung cho Sepay (1 URL duy nhất cho tất cả loại thanh toán)
+const sepayWebhookRoutes = require("./sepay-webhook.routes");
+ApiRouter.use("/webhook", sepayWebhookRoutes);
 ApiRouter.use("/financial-tickets", financialTicketRoutes);
 
 const roomDepositRoutes = require("../../modules/room-floor-management/routes/deposit-room.routes");
