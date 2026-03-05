@@ -16,9 +16,9 @@ router.get("/list", authenticate, authorize("Tenant"), serviceController.getAllS
 // POST /api/services/book
 router.post("/book", authenticate, authorize("Tenant"), serviceController.bookService);
 
-// Huỷ đăng ký dịch vụ Extension
-// DELETE /api/services/book/:serviceId
-router.delete("/book/:serviceId", authenticate, authorize("Tenant"), serviceController.cancelBookedService);
+// Huỷ đăng ký dịch vụ Extension (cập nhật endDate = now, không xoá)
+// PATCH /api/services/book/:serviceId/cancel
+router.patch("/book/:serviceId/cancel", authenticate, authorize("Tenant"), serviceController.cancelBookedService);
 
 // Lấy danh sách dịch vụ đã đăng ký của một tenant cụ thể (dành cho manager)
 // GET /api/services/tenant/:tenantId
