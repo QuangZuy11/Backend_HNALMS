@@ -331,7 +331,7 @@ exports.importRoomsFromFile = async (file) => {
       throw {
         status: 400,
         message:
-          "Lỗi DB: Một số Mã phòng hoặc Tên phòng trong file đã tồn tại trên hệ thống.",
+          "Lỗi: Một số Mã phòng hoặc Tên phòng trong file đã tồn tại trên hệ thống.",
       };
     }
     throw dbError;

@@ -31,7 +31,7 @@ class MeterReadingService {
     const serviceName = serviceInfo.name || serviceInfo.serviceName || "Dịch vụ";
     
     // Tạo chuỗi định dạng hiển thị cho Hóa đơn 
-    const formattedItemName = `Tiền ${serviceName.toLowerCase()} (Cũ: ${data.oldIndex} - Mới: ${data.newIndex})`;
+    const formattedItemName = `Tiền ${serviceName.toLowerCase()}`;
     const searchKeyword = `tiền ${serviceName.toLowerCase()}`; 
 
     // Tạo chuỗi tìm kiếm Hóa đơn nháp đúng của tháng/năm hiện tại

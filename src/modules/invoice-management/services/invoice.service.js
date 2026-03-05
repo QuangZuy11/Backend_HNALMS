@@ -149,30 +149,34 @@ class InvoiceService {
         });
       }
 
-      const roomReadings = recentReadings.filter(r => r.roomId.toString() === room._id.toString());
-      const groupedReadings = {};
+      // ==============================================================
+      // [ĐÃ FIX BUG] Sắp xếp giảm dần theo thời gian tạo (Mới nhất lên đầu)
+      // ==============================================================
+      const roomReadings = recentReadings
+        .filter(r => r.roomId.toString() === room._id.toString())
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+      const latestReadings = {};
 
       roomReadings.forEach(reading => {
         const uId = reading.utilityId._id.toString();
-        const usage = reading.newIndex - reading.oldIndex;
 
-        if (usage >= 0 && reading.utilityId) {
-          if (!groupedReadings[uId]) {
-            groupedReadings[uId] = {
+        // Vì đã sắp xếp mới nhất lên đầu, nên nếu uId chưa tồn tại trong object -> nó chính là bản ghi MỚI NHẤT
+        // Các bản ghi cũ hơn (nếu có do nhập sai rồi sửa lại) sẽ bị bỏ qua hoàn toàn.
+        if (!latestReadings[uId]) {
+          const usage = reading.newIndex - reading.oldIndex;
+          if (usage >= 0 && reading.utilityId) {
+            latestReadings[uId] = {
               utilityId: reading.utilityId,
               oldIndex: reading.oldIndex,
               newIndex: reading.newIndex,
-              totalUsage: usage
+              totalUsage: usage // Không cộng dồn (+=) nữa, gán cứng giá trị mới nhất
             };
-          } else {
-            groupedReadings[uId].oldIndex = Math.min(groupedReadings[uId].oldIndex, reading.oldIndex);
-            groupedReadings[uId].newIndex = Math.max(groupedReadings[uId].newIndex, reading.newIndex);
-            groupedReadings[uId].totalUsage += usage;
           }
         }
       });
 
-      Object.values(groupedReadings).forEach(group => {
+      Object.values(latestReadings).forEach(group => {
         let servicePrice = group.utilityId.price || group.utilityId.currentPrice || 0;
         servicePrice = typeof servicePrice === 'object' && servicePrice.$numberDecimal
           ? parseFloat(servicePrice.$numberDecimal)
@@ -239,8 +243,8 @@ class InvoiceService {
 
       return {
         invoiceCode: `INV-${room.name}-${month}${year}-${Math.floor(1000 + Math.random() * 9000)}`,
-        contractId: roomContract ? roomContract._id : null, // [ĐÃ BỔ SUNG] Tham chiếu vào Hợp đồng
-        roomId: room._id, // [GIỮ NGUYÊN] Phục vụ thống kê phòng
+        contractId: roomContract ? roomContract._id : null,
+        roomId: room._id,
         title: `Hóa đơn tiền thuê & dịch vụ tháng ${month}/${year}`,
         type: "Periodic",
         items: invoiceItems,
@@ -295,7 +299,7 @@ class InvoiceService {
           { path: "roomTypeId", select: "typeName currentPrice" },
         ],
       })
-      .populate("contractId", "contractCode startDate endDate") // [MỚI] Populate thêm thông tin hợp đồng nếu cần
+      .populate("contractId", "contractCode startDate endDate")
       .lean();
 
     if (!invoice) {
@@ -308,9 +312,8 @@ class InvoiceService {
       );
     }
 
-    // Nếu lấy theo contractId mới thì có thể không cần tìm lại bằng roomId nữa, nhưng tôi vẫn giữ logic cũ cho an toàn
     const contract = await Contract.findOne({
-      _id: invoice.contractId || invoice.roomId?._id, // Ưu tiên tìm bằng contractId nếu có
+      _id: invoice.contractId || invoice.roomId?._id,
       status: "active",
     })
       .select("tenantId contractCode startDate endDate")
@@ -412,7 +415,6 @@ class InvoiceService {
     };
   }
 
-  // Xem chi tiết hóa đơn phát sinh (type = "Incurred") — bổ sung thông tin RepairRequest & Device
   async getIncurredInvoiceDetail(invoiceId) {
     const invoice = await Invoice.findById(invoiceId)
       .select("invoiceCode title type totalAmount status dueDate createdAt repairRequestId roomId")
@@ -423,7 +425,6 @@ class InvoiceService {
     if (invoice.type !== "Incurred") throw new Error("Hóa đơn này không phải loại phát sinh (Incurred).");
     if (!invoice.repairRequestId) throw new Error("Hóa đơn không liên kết với yêu cầu sửa chữa nào.");
 
-    // Lấy RepairRequest và populate Device chỉ lấy tên thiết bị
     const repairRequest = await RepairRequest.findById(invoice.repairRequestId)
       .select("description devicesId")
       .populate({ path: "devicesId", select: "name" })
@@ -445,16 +446,13 @@ class InvoiceService {
     };
   }
 
-  // Thanh toán hóa đơn phát sinh (type = "Incurred")
   async payIncurredInvoice(invoiceId) {
-    // 1. Tìm hóa đơn
     const invoice = await Invoice.findById(invoiceId);
     if (!invoice) throw new Error("Không tìm thấy hóa đơn.");
     if (invoice.type !== "Incurred") throw new Error("Hóa đơn này không phải loại phát sinh (Incurred).");
     if (invoice.status !== "Unpaid") throw new Error(`Hóa đơn không ở trạng thái chờ thanh toán (trạng thái hiện tại: ${invoice.status}).`);
     if (!invoice.repairRequestId) throw new Error("Hóa đơn không liên kết với yêu cầu sửa chữa nào.");
 
-    // 2. Tạo Payment record
     const payment = new Payment({
       invoiceId: invoice._id,
       amount: invoice.totalAmount,
@@ -463,11 +461,9 @@ class InvoiceService {
     });
     await payment.save();
 
-    // 3. Cập nhật trạng thái Invoice → "Paid"
     invoice.status = "Paid";
     await invoice.save();
 
-    // 4. Cập nhật trạng thái RepairRequest → "Paid"
     await RepairRequest.findByIdAndUpdate(invoice.repairRequestId, { status: "Paid" });
 
     return {
