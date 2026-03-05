@@ -34,7 +34,7 @@ class MeterReadingService {
     const formattedItemName = `Tiền ${serviceName.toLowerCase()} (Cũ: ${data.oldIndex} - Mới: ${data.newIndex})`;
     const searchKeyword = `tiền ${serviceName.toLowerCase()}`; 
 
-    // [MỚI] Tạo chuỗi tìm kiếm Hóa đơn nháp đúng của tháng/năm hiện tại
+    // Tạo chuỗi tìm kiếm Hóa đơn nháp đúng của tháng/năm hiện tại
     const now = new Date();
     const month = now.getMonth() + 1; 
     const year = now.getFullYear();
@@ -61,6 +61,7 @@ class MeterReadingService {
         draftInvoice.items[existingItemIndex].usage = usageAmount;
         draftInvoice.items[existingItemIndex].unitPrice = unitPrice;
         draftInvoice.items[existingItemIndex].amount = incurredCost;
+        draftInvoice.items[existingItemIndex].isIndex = true; // [MỚI] Đảm bảo cờ isIndex vẫn là true khi update
       } else {
         // NẾU CHƯA CÓ => Thêm mới
         draftInvoice.items.push({
@@ -69,7 +70,8 @@ class MeterReadingService {
           newIndex: data.newIndex,
           usage: usageAmount,
           unitPrice: unitPrice,
-          amount: incurredCost
+          amount: incurredCost,
+          isIndex: true // [MỚI] Đánh dấu đây là dịch vụ Điện/Nước có chỉ số
         });
       }
 

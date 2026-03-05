@@ -24,5 +24,6 @@ router.post("/:id/payment/initiate", invoicePaymentController.initiateInvoicePay
 router.get("/:id/incurred", invoiceController.getIncurredInvoiceDetail); // Chi tiết hóa đơn phát sinh (Incurred)
 router.post("/:id/incurred/pay", invoiceController.payIncurredInvoice);  // Thanh toán hóa đơn phát sinh (không QR)
 router.get("/:id", invoiceController.getInvoiceById);
+router.put("/:id/pay", invoiceController.markAsPaid);
 
 module.exports = router;
