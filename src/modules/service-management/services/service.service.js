@@ -201,12 +201,13 @@ exports.deleteService = async (id) => {
 exports.getAllServicesForTenant = async (tenantId) => {
   const contract = await Contract.findOne({ tenantId, status: "active" }).lean();
 
-  let bookedServiceIds = new Set();
+  // Dùng Map để lưu cả serviceId -> quantity
+  let bookedServiceMap = new Map();
   if (contract) {
     const bookService = await BookService.findOne({ contractId: contract._id }).lean();
     if (bookService?.services?.length) {
       bookService.services.forEach((item) => {
-        bookedServiceIds.add(item.serviceId.toString());
+        bookedServiceMap.set(item.serviceId.toString(), item.quantity ?? 1);
       });
     }
   }
@@ -214,11 +215,13 @@ exports.getAllServicesForTenant = async (tenantId) => {
   const services = await Service.find({ isActive: true }).sort({ type: 1, name: 1 }).lean();
 
   return services.map((svc) => {
-    const isBooked = bookedServiceIds.has(svc._id.toString());
+    const svcIdStr = svc._id.toString();
+    const isBooked = bookedServiceMap.has(svcIdStr);
     const isFixed = svc.type === "Fixed";
     return {
       ...svc,
       isBooked,
+      bookedQuantity: isBooked ? bookedServiceMap.get(svcIdStr) : null,
       canBook: !isFixed && !isBooked && !!contract,
       canCancel: !isFixed && isBooked,
     };
@@ -232,6 +235,11 @@ exports.getAllServicesForTenant = async (tenantId) => {
  * @param {number} quantity
  */
 exports.bookServiceForTenant = async (tenantId, serviceId, quantity = 1) => {
+  // Validate quantity: phải là số nguyên dương
+  if (!Number.isInteger(quantity) || quantity < 1) {
+    throw { status: 400, message: "Số lượng người phải là số nguyên dương (>= 1)." };
+  }
+
   const service = await Service.findById(serviceId);
   if (!service) throw { status: 404, message: "Dịch vụ không tồn tại." };
   if (!service.isActive) throw { status: 400, message: "Dịch vụ này hiện không khả dụng." };
@@ -252,7 +260,12 @@ exports.bookServiceForTenant = async (tenantId, serviceId, quantity = 1) => {
   );
   if (alreadyBooked) throw { status: 400, message: "Bạn đã đăng ký dịch vụ này rồi." };
 
-  bookService.services.push({ serviceId, quantity });
+  bookService.services.push({
+    serviceId,
+    quantity,
+    startDate: new Date(),
+    endDate: null,
+  });
   await bookService.save();
 
   return {
