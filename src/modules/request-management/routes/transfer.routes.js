@@ -2,7 +2,9 @@ const express = require("express");
 const router = express.Router();
 const transferController = require("../controllers/transfer_request.controller");
 const transferValidator = require("../validators/transfer_request.validator");
-const { authenticate } = require("../../authentication/middlewares/authenticate");
+const {
+  authenticate,
+} = require("../../authentication/middlewares/authenticate");
 const { authorize } = require("../../authentication/middlewares/authorize");
 
 /**
@@ -13,7 +15,7 @@ router.get(
   "/available-rooms",
   authenticate,
   authorize("Tenant"),
-  transferController.getAvailableRoomsForTransfer
+  transferController.getAvailableRoomsForTransfer,
 );
 
 /**
@@ -24,7 +26,18 @@ router.get(
   "/my-requests",
   authenticate,
   authorize("Tenant"),
-  transferController.getMyTransferRequests
+  transferController.getMyTransferRequests,
+);
+
+/**
+ * [MANAGER] Lấy tất cả yêu cầu chuyển phòng
+ * GET /api/requests/transfer
+ */
+router.get(
+  "/",
+  authenticate,
+  authorize("manager"),
+  transferController.getAllTransferRequests,
 );
 
 /**
@@ -37,7 +50,7 @@ router.post(
   authenticate,
   authorize("Tenant"),
   transferValidator.validateCreateTransferRequestMiddleware,
-  transferController.createTransferRequest
+  transferController.createTransferRequest,
 );
 
 /**
@@ -114,7 +127,7 @@ router.patch(
   "/:id/cancel",
   authenticate,
   authorize("Tenant"),
-  transferController.cancelTransferRequest
+  transferController.cancelTransferRequest,
 );
 
 module.exports = router;
