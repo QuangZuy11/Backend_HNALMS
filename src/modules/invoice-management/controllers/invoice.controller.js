@@ -78,5 +78,20 @@ class InvoiceController {
       res.status(statusCode).json({ success: false, message: error.message });
     }
   }
+
+  // Thanh toán hóa đơn phát sinh (type = "Incurred")
+  async payIncurredInvoice(req, res) {
+    try {
+      const result = await invoiceService.payIncurredInvoice(req.params.id);
+      res.status(200).json({
+        success: true,
+        message: "Thanh toán hóa đơn phát sinh thành công.",
+        data: result,
+      });
+    } catch (error) {
+      const statusCode = error.message.includes("Không tìm thấy") ? 404 : 400;
+      res.status(statusCode).json({ success: false, message: error.message });
+    }
+  }
 }
 module.exports = new InvoiceController();

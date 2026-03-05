@@ -3,9 +3,9 @@ const Room = require("../../room-floor-management/models/room.model");
 const MeterReading = require('../models/meterreading.model');
 const BookService = require('../../contract-management/models/bookservice.model');
 const Service = require("../../service-management/models/service.model");
-// [MỚI] Import model Contract
 const Contract = require('../../contract-management/models/contract.model');
 const RepairRequest = require('../../request-management/models/repair_requests.model');
+const Payment = require('../models/payment.model');
 
 class InvoiceService {
   async getInvoices(query = {}) {
@@ -431,6 +431,41 @@ class InvoiceService {
       createdAt: invoice.createdAt,
       deviceName: repairRequest.devicesId?.name || null,
       description: repairRequest.description,
+    };
+  }
+
+  // Thanh toán hóa đơn phát sinh (type = "Incurred")
+  async payIncurredInvoice(invoiceId) {
+    // 1. Tìm hóa đơn
+    const invoice = await Invoice.findById(invoiceId);
+    if (!invoice) throw new Error("Không tìm thấy hóa đơn.");
+    if (invoice.type !== "Incurred") throw new Error("Hóa đơn này không phải loại phát sinh (Incurred).");
+    if (invoice.status !== "Unpaid") throw new Error(`Hóa đơn không ở trạng thái chờ thanh toán (trạng thái hiện tại: ${invoice.status}).`);
+    if (!invoice.repairRequestId) throw new Error("Hóa đơn không liên kết với yêu cầu sửa chữa nào.");
+
+    // 2. Tạo Payment record
+    const payment = new Payment({
+      invoiceId: invoice._id,
+      amount: invoice.totalAmount,
+      status: "Success",
+      paymentDate: new Date(),
+    });
+    await payment.save();
+
+    // 3. Cập nhật trạng thái Invoice → "Paid"
+    invoice.status = "Paid";
+    await invoice.save();
+
+    // 4. Cập nhật trạng thái RepairRequest → "Paid"
+    await RepairRequest.findByIdAndUpdate(invoice.repairRequestId, { status: "Paid" });
+
+    return {
+      invoiceId: invoice._id,
+      invoiceCode: invoice.invoiceCode,
+      paymentId: payment._id,
+      amount: payment.amount,
+      paymentDate: payment.paymentDate,
+      invoiceStatus: invoice.status,
     };
   }
 }
