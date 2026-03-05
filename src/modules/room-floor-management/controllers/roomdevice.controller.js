@@ -67,6 +67,17 @@ class RoomDeviceController {
       handleError(res, error);
     }
   }
+
+  // [GET] /api/roomdevices/my-room  - Tenant xem thiết bị phòng đang thuê
+  async getMyRoomDevices(req, res) {
+    try {
+      const tenantId = req.user?.userId || req.user?.id || req.user?._id;
+      const data = await roomDeviceService.getMyRoomDevices(tenantId);
+      res.status(200).json({ success: true, data });
+    } catch (error) {
+      handleError(res, error);
+    }
+  }
 }
 
 module.exports = new RoomDeviceController();

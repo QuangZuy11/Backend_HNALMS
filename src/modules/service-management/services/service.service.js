@@ -154,13 +154,16 @@ exports.getBookedServicesByTenant = async (tenantId) => {
     return [];
   }
 
-  // Flatten: trả về mảng dịch vụ kèm thông tin hợp đồng
-  return bookService.services.map((item) => ({
-    serviceId: item.serviceId,
-    quantity: item.quantity ?? 1,
-    contractId: contract._id,
-    contractCode: contract.contractCode ?? null,
-  }));
+  // Chỉ trả về dịch vụ đang hoạt động (endDate = null)
+  return bookService.services
+    .filter((item) => item.endDate === null || item.endDate === undefined)
+    .map((item) => ({
+      serviceId: item.serviceId,
+      quantity: item.quantity ?? 1,
+      startDate: item.startDate,
+      contractId: contract._id,
+      contractCode: contract.contractCode ?? null,
+    }));
 };
 
 /**
@@ -201,13 +204,15 @@ exports.deleteService = async (id) => {
 exports.getAllServicesForTenant = async (tenantId) => {
   const contract = await Contract.findOne({ tenantId, status: "active" }).lean();
 
-  // Dùng Map để lưu cả serviceId -> quantity
+  // Dùng Map để lưu cả serviceId -> quantity (chỉ entry đang active: endDate = null)
   let bookedServiceMap = new Map();
   if (contract) {
     const bookService = await BookService.findOne({ contractId: contract._id }).lean();
     if (bookService?.services?.length) {
       bookService.services.forEach((item) => {
-        bookedServiceMap.set(item.serviceId.toString(), item.quantity ?? 1);
+        if (item.endDate === null || item.endDate === undefined) {
+          bookedServiceMap.set(item.serviceId.toString(), item.quantity ?? 1);
+        }
       });
     }
   }
@@ -255,11 +260,13 @@ exports.bookServiceForTenant = async (tenantId, serviceId, quantity = 1) => {
     bookService = new BookService({ contractId: contract._id, services: [] });
   }
 
+  // Kiểm tra đang có entry active (endDate = null) cho dịch vụ này chưa
   const alreadyBooked = bookService.services.some(
-    (item) => item.serviceId.toString() === serviceId.toString()
+    (item) => item.serviceId.toString() === serviceId.toString() && (item.endDate === null || item.endDate === undefined)
   );
   if (alreadyBooked) throw { status: 400, message: "Bạn đã đăng ký dịch vụ này rồi." };
 
+  // Thêm entry mới với startDate = hôm nay, endDate = null
   bookService.services.push({
     serviceId,
     quantity,
@@ -296,12 +303,14 @@ exports.cancelBookedServiceForTenant = async (tenantId, serviceId) => {
   const bookService = await BookService.findOne({ contractId: contract._id });
   if (!bookService) throw { status: 404, message: "Bạn chưa đăng ký dịch vụ nào." };
 
+  // Tìm entry đang active (endDate = null) của dịch vụ này
   const existingIndex = bookService.services.findIndex(
-    (item) => item.serviceId.toString() === serviceId.toString()
+    (item) => item.serviceId.toString() === serviceId.toString() && (item.endDate === null || item.endDate === undefined)
   );
   if (existingIndex === -1) throw { status: 404, message: "Bạn chưa đăng ký dịch vụ này." };
 
-  bookService.services.splice(existingIndex, 1);
+  // Đặt endDate = hôm nay (để lại lịch sử, không xóa)
+  bookService.services[existingIndex].endDate = new Date();
   await bookService.save();
 
   return { message: "Huỷ đăng ký dịch vụ thành công." };

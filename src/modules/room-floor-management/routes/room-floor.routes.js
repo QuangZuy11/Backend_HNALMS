@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 const uploadImg = require("../middlewares/uploadimg");
 const uploadExcel = require("../middlewares/uploadexcel");
-const { authenticate, authorize } = require("../../authentication/middlewares/index");
+const { authenticate, authorize, isTenant } = require("../../authentication/middlewares/index");
 // Import Controllers
 const roomController = require("../controllers/room.controller");
 const floorController = require("../controllers/floor.controller");
@@ -79,6 +79,10 @@ router.delete("/roomtypes/:id", roomTypeController.deleteRoomType);
 // ==================================================================
 // 4. ROOM DEVICE ROUTES (Thiết bị theo loại phòng) - Owner only
 // ==================================================================
+// Tenant xem thiết bị phòng đang thuê: GET /roomdevices/my-room
+// [QUAN TRỌNG] Phải đặt TRƯỚC /roomdevices/:id
+router.get("/roomdevices/my-room", authenticate, isTenant, roomDeviceController.getMyRoomDevices);
+
 // Lấy danh sách thiết bị theo loại phòng: GET /roomdevices?roomTypeId=xxx
 router.get("/roomdevices", authenticate, authorize("owner"), roomDeviceController.getByRoomType);
 

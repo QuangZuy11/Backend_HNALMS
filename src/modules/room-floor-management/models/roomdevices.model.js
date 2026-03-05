@@ -19,11 +19,6 @@ const roomDeviceSchema = new mongoose.Schema(
     quantity: {
       type: Number,
       default: 1, // VD: 1 phòng có 2 cái đèn
-    },
-    // Tình trạng tiêu chuẩn (Option)
-    condition: {
-        type: String,
-        default: "Good"
     }
   },
   {
