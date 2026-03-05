@@ -8,6 +8,18 @@ const { authorize } = require("../../authentication/middlewares/");
 // GET /api/services/my-services
 router.get("/my-services", authenticate, authorize("Tenant"), serviceController.getMyBookedServices);
 
+// Lấy toàn bộ dịch vụ với trạng thái book cho Service List Screen
+// GET /api/services/list
+router.get("/list", authenticate, authorize("Tenant"), serviceController.getAllServicesForTenant);
+
+// Đăng ký dịch vụ Extension
+// POST /api/services/book
+router.post("/book", authenticate, authorize("Tenant"), serviceController.bookService);
+
+// Huỷ đăng ký dịch vụ Extension
+// DELETE /api/services/book/:serviceId
+router.delete("/book/:serviceId", authenticate, authorize("Tenant"), serviceController.cancelBookedService);
+
 // Lấy danh sách dịch vụ đã đăng ký của một tenant cụ thể (dành cho manager)
 // GET /api/services/tenant/:tenantId
 router.get("/tenant/:tenantId", authenticate, authorize("manager"), serviceController.getBookedServicesByTenant);
