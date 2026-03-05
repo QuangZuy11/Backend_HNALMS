@@ -1,6 +1,8 @@
+const mongoose = require("mongoose");
 const RoomDevice = require("../models/roomdevices.model");
 const RoomType = require("../models/roomtype.model");
 const Device = require("../models/devices.model");
+const Contract = require("../../contract-management/models/contract.model");
 
 /**
  * Lấy danh sách thiết bị của một loại phòng
@@ -43,10 +45,10 @@ exports.getRoomDeviceById = async (id) => {
 /**
  * Thêm thiết bị vào loại phòng
  * POST /roomdevices
- * Body: { roomTypeId, deviceId, quantity, condition }
+ * Body: { roomTypeId, deviceId, quantity }
  */
 exports.addDeviceToRoomType = async (data) => {
-  const { roomTypeId, deviceId, quantity, condition } = data;
+  const { roomTypeId, deviceId, quantity } = data;
 
   if (!roomTypeId) throw { status: 400, message: "roomTypeId là bắt buộc." };
   if (!deviceId) throw { status: 400, message: "deviceId là bắt buộc." };
@@ -69,7 +71,6 @@ exports.addDeviceToRoomType = async (data) => {
     roomTypeId,
     deviceId,
     quantity: quantity ?? 1,
-    condition: condition ?? "Good",
   });
 
   await record.save();
@@ -80,12 +81,12 @@ exports.addDeviceToRoomType = async (data) => {
 };
 
 /**
- * Cập nhật số lượng / tình trạng thiết bị trong loại phòng
+ * Cập nhật số lượng thiết bị trong loại phòng
  * PUT /roomdevices/:id
- * Body: { quantity, condition }
+ * Body: { quantity }
  */
 exports.updateRoomDevice = async (id, data) => {
-  const { quantity, condition } = data;
+  const { quantity } = data;
 
   const record = await RoomDevice.findById(id);
   if (!record) throw { status: 404, message: "Không tìm thấy bản ghi." };
@@ -97,13 +98,60 @@ exports.updateRoomDevice = async (id, data) => {
     record.quantity = Number(quantity);
   }
 
-  if (condition !== undefined) record.condition = condition;
-
   await record.save();
 
   return await record
     .populate("roomTypeId", "typeName description personMax currentPrice")
     .then((r) => r.populate("deviceId", "name brand model category unit price"));
+};
+
+/**
+ * Lấy danh sách thiết bị của phòng đang thuê (dành cho Tenant)
+ * GET /roomdevices/my-room
+ */
+exports.getMyRoomDevices = async (tenantId) => {
+  if (!tenantId) throw { status: 400, message: "Tenant ID không hợp lệ." };
+
+  const tenantObjectId = mongoose.Types.ObjectId.isValid(tenantId)
+    ? new mongoose.Types.ObjectId(tenantId)
+    : tenantId;
+
+  // Tìm hợp đồng đang hoạt động của tenant
+  const contract = await Contract.findOne({
+    tenantId: tenantObjectId,
+    status: "active",
+  })
+    .populate({
+      path: "roomId",
+      select: "name roomCode roomTypeId",
+    })
+    .lean();
+
+  if (!contract) {
+    throw {
+      status: 404,
+      message: "Không tìm thấy hợp đồng hoạt động. Bạn không đang thuê phòng nào.",
+    };
+  }
+
+  const roomTypeId = contract.roomId?.roomTypeId;
+  if (!roomTypeId) {
+    throw { status: 404, message: "Phòng chưa được gán loại phòng." };
+  }
+
+  const devices = await RoomDevice.find({ roomTypeId })
+    .populate("deviceId", "name brand model category unit price")
+    .sort({ createdAt: -1 })
+    .lean();
+
+  return {
+    room: {
+      _id: contract.roomId._id,
+      name: contract.roomId.name,
+      roomCode: contract.roomId.roomCode,
+    },
+    devices,
+  };
 };
 
 /**
