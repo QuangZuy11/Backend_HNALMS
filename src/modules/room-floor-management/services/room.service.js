@@ -127,17 +127,48 @@ exports.getAllRooms = async (filters) => {
     .select("roomId endDate")
     .lean();
 
-  // Build map: roomId -> endDate
+  // Build map: roomId -> endDate (expiring soon)
   const expiryMap = {};
   expiringContracts.forEach((c) => {
     expiryMap[c.roomId.toString()] = c.endDate;
   });
 
-  // Attach contractEndDate to rooms that have expiring contracts
+  // Find ALL active contracts with endDate > 1 month (long-term occupied rooms)
+  const allActiveContracts = await Contract.find({
+    status: "active",
+    endDate: { $gt: oneMonthFromNow },
+    roomId: { $in: roomIds },
+  })
+    .select("roomId startDate endDate")
+    .lean();
+
+  // Build map: roomId -> { startDate, endDate } (long-term)
+  const activeContractMap = {};
+  allActiveContracts.forEach((c) => {
+    activeContractMap[c.roomId.toString()] = {
+      startDate: c.startDate,
+      endDate: c.endDate,
+    };
+  });
+
+  // Attach date info to rooms:
+  // - Expiring soon: contractEndDate only (shows "Trống từ DD/MM")
+  // - Long-term occupied: contractStartDate + contractEndDate
   const enrichedRooms = rooms.map((r) => {
     const obj = r.toObject();
-    const endDate = expiryMap[r._id.toString()];
-    if (endDate) obj.contractEndDate = endDate;
+    const roomKey = r._id.toString();
+    const endDate = expiryMap[roomKey];
+    if (endDate) {
+      // Expiring soon: only attach contractEndDate
+      obj.contractEndDate = endDate;
+    } else {
+      const active = activeContractMap[roomKey];
+      if (active) {
+        // Long-term: attach both dates
+        obj.contractStartDate = active.startDate;
+        obj.contractEndDate = active.endDate;
+      }
+    }
     return obj;
   });
 
