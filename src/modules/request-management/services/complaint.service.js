@@ -171,14 +171,15 @@ const updateComplaintRequest = async (id, data) => {
 /**
  * Cập nhật trạng thái khiếu nại (chỉ manager/admin)
  * @param {string} id - Complaint ID
- * @param {string} status - "Pending", "Processing", "Done"
+ * @param {string} status - "Pending", "Processing", "Done", "Rejected"
  * @param {string} response - Response message
  * @param {string} responderId - User ID who responds
+ * @param {string} managerNote - Manager note when rejecting/handling
  * @returns {Object} Updated complaint
  */
-const updateComplaintStatus = async (id, status, response, responderId) => {
+const updateComplaintStatus = async (id, status, response, responderId, managerNote) => {
   try {
-    const statusRank = { Pending: 0, Processing: 1, Done: 2 };
+    const statusRank = { Pending: 0, Processing: 1, Done: 2, Rejected: 2 };
     const current = await ComplaintRequest.findById(id).select("status").lean();
     if (!current) {
       throw new Error("Khiếu nại không tồn tại");
@@ -195,9 +196,9 @@ const updateComplaintStatus = async (id, status, response, responderId) => {
     const updateData = {
       status,
       ...(response && { response }),
-      ...(response && { responseBy: responderId }),
-      ...(response && { responseDate: new Date() }),
-      ...(response && { managerNote: response })
+      ...((response || managerNote) && { responseBy: responderId }),
+      ...((response || managerNote) && { responseDate: new Date() }),
+      ...(managerNote && { managerNote })
     };
 
     const complaint = await ComplaintRequest.findByIdAndUpdate(

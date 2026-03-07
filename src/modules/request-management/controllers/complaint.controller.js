@@ -214,7 +214,7 @@ exports.updateComplaint = async (req, res) => {
 exports.updateComplaintStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, response } = req.body;
+    const { status, response, managerNote } = req.body;
     const userId = req.user?.userId;
     const userRole = req.user?.role;
 
@@ -227,7 +227,7 @@ exports.updateComplaintStatus = async (req, res) => {
       );
     }
 
-    if (!status || !["Pending", "Processing", "Done"].includes(status)) {
+    if (!status || !["Pending", "Processing", "Done", "Rejected"].includes(status)) {
       return errorResponse(
         res,
         "Trạng thái không hợp lệ",
@@ -239,7 +239,8 @@ exports.updateComplaintStatus = async (req, res) => {
       id,
       status,
       response,
-      userId
+      userId,
+      managerNote
     );
 
     return successResponse(
