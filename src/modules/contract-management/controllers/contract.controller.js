@@ -68,9 +68,9 @@ exports.createContract = async (req, res) => {
         if (contractStartDate > maxStartDate) {
           throw new Error(
             `Ngày bắt đầu thuê không được quá 7 ngày từ khi đặt cọc. ` +
-            `Ngày cọc: ${depositCreatedDate.toLocaleDateString("vi-VN")}, ` +
-            `Hạn cuối: ${maxStartDate.toLocaleDateString("vi-VN")}, ` +
-            `Ngày bắt đầu: ${contractStartDate.toLocaleDateString("vi-VN")}`,
+              `Ngày cọc: ${depositCreatedDate.toLocaleDateString("vi-VN")}, ` +
+              `Hạn cuối: ${maxStartDate.toLocaleDateString("vi-VN")}, ` +
+              `Ngày bắt đầu: ${contractStartDate.toLocaleDateString("vi-VN")}`,
           );
         }
       }
@@ -97,7 +97,12 @@ exports.createContract = async (req, res) => {
 
     // Generate Username: email prefix + room name (sanitized)
     const emailPrefix = tenantInfo.email.split("@")[0];
-    const roomNameSanitized = room.name.replace(/[^a-zA-Z0-9]/g, "");
+    const roomNameSanitized = room.name
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/đ/g, "d")
+      .replace(/Đ/g, "D")
+      .replace(/[^a-zA-Z0-9]/g, "");
     let finalUsername = `${emailPrefix}${roomNameSanitized}`;
 
     // Ensure username is unique
@@ -321,14 +326,14 @@ exports.getContractById = async (req, res) => {
     // Map bookServices with populated data
     const bookServices = bookServiceRecord
       ? bookServiceRecord.services.map((s) => ({
-        serviceId: s.serviceId?._id,
-        name: s.serviceId?.name || "—",
-        currentPrice: s.serviceId?.currentPrice
-          ? parseFloat(s.serviceId.currentPrice.toString())
-          : 0,
-        type: s.serviceId?.type || "",
-        quantity: s.quantity || null,
-      }))
+          serviceId: s.serviceId?._id,
+          name: s.serviceId?.name || "—",
+          currentPrice: s.serviceId?.currentPrice
+            ? parseFloat(s.serviceId.currentPrice.toString())
+            : 0,
+          type: s.serviceId?.type || "",
+          quantity: s.quantity || null,
+        }))
       : [];
 
     // Map room assets
