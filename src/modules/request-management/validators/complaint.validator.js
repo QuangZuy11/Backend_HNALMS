@@ -101,7 +101,7 @@ const validateUpdateComplaint = (data) => {
 
 /**
  * Validate complaint status update
- * @param {Object} data - {status, response}
+ * @param {Object} data - {status, response, managerNote}
  * @returns {Object} {valid: boolean, errors: Array}
  */
 const validateUpdateStatus = (data) => {
@@ -110,7 +110,7 @@ const validateUpdateStatus = (data) => {
   if (!data.status) {
     errors.push("Status là bắt buộc");
   } else {
-    const validStatuses = ["Pending", "Processing", "Done"];
+    const validStatuses = ["Pending", "Processing", "Done", "Rejected"];
     if (!validStatuses.includes(data.status)) {
       errors.push(`Status phải là một trong: ${validStatuses.join(", ")}`);
     }
@@ -128,6 +128,18 @@ const validateUpdateStatus = (data) => {
       errors.push("Response phải có ít nhất 5 ký tự");
     } else if (data.response.length > 2000) {
       errors.push("Response không được vượt quá 2000 ký tự");
+    }
+  } else if (data.status === "Rejected") {
+    if (!data.managerNote) {
+      errors.push("managerNote (ghi chú từ chối) là bắt buộc khi chuyển sang trạng thái Từ chối");
+    } else if (typeof data.managerNote !== "string") {
+      errors.push("managerNote phải là chuỗi ký tự");
+    } else if (data.managerNote.trim().length === 0) {
+      errors.push("managerNote không được trống");
+    } else if (data.managerNote.length < 5) {
+      errors.push("managerNote phải có ít nhất 5 ký tự");
+    } else if (data.managerNote.length > 2000) {
+      errors.push("managerNote không được vượt quá 2000 ký tự");
     }
   } else if (data.response) {
     // Các trạng thái khác: response là tùy chọn; nếu có thì vẫn validate format
