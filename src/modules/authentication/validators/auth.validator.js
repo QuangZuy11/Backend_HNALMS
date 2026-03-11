@@ -17,7 +17,7 @@ const validatePassword = (password) => {
   if (!password || password.length < 6) {
     return {
       valid: false,
-      message: "Password must be at least 6 characters long"
+      message: "Mật khẩu phải có ít nhất 6 ký tự"
     };
   }
 
@@ -34,14 +34,14 @@ const validateUsername = (username) => {
   if (!username || username.length < 3) {
     return {
       valid: false,
-      message: "Username must be at least 3 characters long"
+      message: "Tên đăng nhập phải có ít nhất 3 ký tự"
     };
   }
 
   if (username.length > 30) {
     return {
       valid: false,
-      message: "Username must not exceed 30 characters"
+      message: "Tên đăng nhập không được vượt quá 30 ký tự"
     };
   }
 
@@ -49,7 +49,15 @@ const validateUsername = (username) => {
   if (!/^[a-zA-Z0-9_]+$/.test(username)) {
     return {
       valid: false,
-      message: "Username can only contain letters, numbers, and underscores"
+      message: "Tên đăng nhập chỉ được chứa chữ cái, số và dấu gạch dưới"
+    };
+  }
+
+  // Require both letters and numbers
+  if (!/(?=.*[a-zA-Z])(?=.*\d)/.test(username)) {
+    return {
+      valid: false,
+      message: "Tên đăng nhập phải bao gồm cả chữ và số"
     };
   }
 
@@ -291,7 +299,7 @@ const validateCreateAccount = (req, res, next) => {
   if (!username || !phoneNumber || !email || !password || !role) {
     return res.status(400).json({
       success: false,
-      message: "Username, phone number, email, password and role are required"
+      message: "Vui lòng nhập tên đăng nhập, số điện thoại, email, mật khẩu và vai trò"
     });
   }
 
@@ -310,6 +318,13 @@ const validateCreateAccount = (req, res, next) => {
     });
   }
 
+  if (!/^0\d+$/.test(phoneNumber)) {
+    return res.status(400).json({
+      success: false,
+      message: "Số điện thoại phải bắt đầu bằng số 0"
+    });
+  }
+
   const passwordValidation = validatePassword(password);
   if (!passwordValidation.valid) {
     return res.status(400).json({
@@ -318,11 +333,11 @@ const validateCreateAccount = (req, res, next) => {
     });
   }
 
-  const allowedRoles = ["owner", "manager", "accountant"];
+  const allowedRoles = ["manager", "accountant"];
   if (!allowedRoles.includes(role)) {
     return res.status(400).json({
       success: false,
-      message: `Invalid role. Must be one of: ${allowedRoles.join(", ")}`
+      message: "Vai trò không hợp lệ. Owner chỉ được tạo tài khoản cho manager hoặc accountant"
     });
   }
 
