@@ -2,6 +2,8 @@ const Service = require("../models/service.model");
 const BookService = require("../../contract-management/models/bookservice.model");
 const Contract = require("../../contract-management/models/contract.model");
 const PriceHistory = require("../../room-floor-management/models/pricehistory.model");
+const Room = require("../../room-floor-management/models/room.model");
+const RoomType = require("../../room-floor-management/models/roomtype.model");
 const mongoose = require("mongoose");
 
 // --- HÀM PHỤ TRỢ: GHI LỊCH SỬ GIÁ ---
@@ -254,6 +256,19 @@ exports.bookServiceForTenant = async (tenantId, serviceId, quantity = 1) => {
 
   const contract = await Contract.findOne({ tenantId, status: "active" }).lean();
   if (!contract) throw { status: 400, message: "Bạn không có hợp đồng hiệu lực." };
+
+  // Validate quantity không vượt quá số người tối đa của loại phòng
+  const room = await Room.findById(contract.roomId).lean();
+  if (!room) throw { status: 400, message: "Không tìm thấy thông tin phòng." };
+  const roomType = await RoomType.findById(room.roomTypeId).lean();
+  if (!roomType) throw { status: 400, message: "Không tìm thấy loại phòng." };
+  const personMax = roomType.personMax || 1;
+  if (quantity > personMax) {
+    throw {
+      status: 400,
+      message: `Số lượng xe đăng ký (${quantity}) không được vượt quá số người tối đa của phòng (${personMax} xe).`,
+    };
+  }
 
   const serviceObjectId = new mongoose.Types.ObjectId(serviceId);
 
