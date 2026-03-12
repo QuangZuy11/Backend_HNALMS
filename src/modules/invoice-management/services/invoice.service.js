@@ -242,7 +242,7 @@ class InvoiceService {
       }
 
       return {
-        invoiceCode: `INV-${room.name}-${month}${year}-${Math.floor(1000 + Math.random() * 9000)}`,
+        invoiceCode: `INV-${room.roomCode}-${month}${year}`,
         contractId: roomContract ? roomContract._id : null,
         roomId: room._id,
         title: `Hóa đơn tiền thuê & dịch vụ tháng ${month}/${year}`,

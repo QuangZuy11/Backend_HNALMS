@@ -1,4 +1,5 @@
 const roomTypeService = require("../services/roomtype.service");
+const RoomType = require("../models/roomtype.model"); // Cần import model để check trùng tên
 
 class RoomTypeController {
   
@@ -29,26 +30,39 @@ class RoomTypeController {
     }
   }
 
-  // CREATE (SỬA ĐỔI: Xử lý file upload)
+  // CREATE (SỬA ĐỔI: Thêm Validation số người)
   async createRoomType(req, res) {
     try {
-      // req.body chứa text data, req.files chứa file ảnh đã upload lên Cloudinary
       const { typeName, currentPrice, description, personMax } = req.body;
 
-      // 1. Lấy danh sách link ảnh từ Cloudinary trả về
-      // Nếu có upload file thì map lấy path, nếu không thì mảng rỗng
-      const images = req.files ? req.files.map(file => file.path) : [];
-
-      if (!typeName || !currentPrice) {
-        return res.status(400).json({ success: false, message: "Tên loại phòng và giá là bắt buộc" });
+      // 1. Bắt lỗi giá trị đầu vào
+      if (!typeName) {
+        return res.status(400).json({ success: false, message: "Tên loại phòng là bắt buộc" });
+      }
+      if (currentPrice === undefined || currentPrice === null || Number(currentPrice) <= 0) {
+        return res.status(400).json({ success: false, message: "Giá phòng bắt buộc phải lớn hơn 0" });
+      }
+      
+      // [MỚI] Bắt lỗi số người tối đa
+      if (personMax !== undefined && personMax !== null && Number(personMax) <= 0) {
+        return res.status(400).json({ success: false, message: "Số người tối đa phải lớn hơn 0" });
       }
 
+      // 2. Bắt lỗi trùng tên loại phòng (Check thủ công trước khi lưu)
+      const existingType = await RoomType.findOne({ typeName: typeName.trim() });
+      if (existingType) {
+        return res.status(400).json({ success: false, message: `Loại phòng mang tên "${typeName}" đã tồn tại!` });
+      }
+
+      // 3. Xử lý ảnh
+      const images = req.files ? req.files.map(file => file.path) : [];
+
       const newRT = await roomTypeService.createRoomType({
-        typeName,
-        currentPrice,
+        typeName: typeName.trim(),
+        currentPrice: Number(currentPrice),
         description,
-        personMax: personMax || 1,
-        images: images // Lưu mảng URL ảnh vào DB
+        personMax: personMax ? Number(personMax) : 1, // Nếu không nhập, mặc định là 1
+        images: images
       });
 
       res.status(201).json({
@@ -64,26 +78,46 @@ class RoomTypeController {
     }
   }
 
-  // UPDATE (SỬA ĐỔI: Xử lý giữ ảnh cũ + thêm ảnh mới)
+  // UPDATE (SỬA ĐỔI: Thêm Validation số người)
   async updateRoomType(req, res) {
     try {
-      // 1. Xử lý ảnh mới upload từ req.files (Multer xử lý trường 'images')
-      const newImages = req.files ? req.files.map(file => file.path) : [];
+      const { typeName, currentPrice, description, personMax, status } = req.body;
+      const typeId = req.params.id;
 
-      // 2. Xử lý ảnh cũ (Client giờ gửi lên qua trường 'oldImages' chứ không phải 'images' nữa)
-      let oldImages = req.body.oldImages;
-      
-      // Chuẩn hóa oldImages thành mảng (Array)
-      if (!oldImages) {
-        oldImages = []; // Không có ảnh cũ nào
-      } else if (!Array.isArray(oldImages)) {
-        oldImages = [oldImages]; // Nếu chỉ có 1 ảnh cũ, nó sẽ là string -> bọc vào mảng
+      // 1. Validation Giá phòng
+      if (currentPrice !== undefined && (currentPrice === null || Number(currentPrice) <= 0)) {
+        return res.status(400).json({ success: false, message: "Giá phòng bắt buộc phải lớn hơn 0" });
       }
 
-      // 3. Gộp ảnh cũ và ảnh mới
+      // [MỚI] Validation Số người tối đa
+      if (personMax !== undefined && (personMax === null || Number(personMax) <= 0)) {
+        return res.status(400).json({ success: false, message: "Số người tối đa phải lớn hơn 0" });
+      }
+
+      // 2. Bắt lỗi trùng tên (nếu client có gửi tên mới lên)
+      if (typeName) {
+        const existingType = await RoomType.findOne({ 
+          typeName: typeName.trim(), 
+          _id: { $ne: typeId } 
+        });
+        
+        if (existingType) {
+          return res.status(400).json({ success: false, message: `Tên loại phòng "${typeName}" đã bị trùng với một loại phòng khác!` });
+        }
+      }
+
+      // 3. Xử lý ảnh
+      const newImages = req.files ? req.files.map(file => file.path) : [];
+      let oldImages = req.body.oldImages;
+      
+      if (!oldImages) {
+        oldImages = []; 
+      } else if (!Array.isArray(oldImages)) {
+        oldImages = [oldImages]; 
+      }
+
       const finalImages = [...oldImages, ...newImages];
 
-      // [THÊM MỚI] Bắt lỗi ngay tại Controller nếu gom lại không đủ 7 ảnh
       if (finalImages.length > 0 && finalImages.length !== 7) {
         return res.status(400).json({ 
           success: false, 
@@ -92,18 +126,17 @@ class RoomTypeController {
       }
 
       const updateData = {
-        typeName: req.body.typeName,
-        currentPrice: req.body.currentPrice,
-        description: req.body.description,
-        personMax: req.body.personMax,
-        status: req.body.status,
-        images: finalImages.length > 0 ? finalImages : undefined // Chỉ update nếu có ảnh
+        typeName: typeName ? typeName.trim() : undefined,
+        currentPrice: currentPrice ? Number(currentPrice) : undefined,
+        description,
+        personMax: personMax ? Number(personMax) : undefined,
+        status,
+        images: finalImages.length > 0 ? finalImages : undefined 
       };
 
-      // Xóa các trường undefined để không ghi đè mất dữ liệu cũ trong DB
       Object.keys(updateData).forEach(key => updateData[key] === undefined && delete updateData[key]);
 
-      const updatedRT = await roomTypeService.updateRoomType(req.params.id, updateData);
+      const updatedRT = await roomTypeService.updateRoomType(typeId, updateData);
       
       if (!updatedRT) {
          return res.status(404).json({ success: false, message: "Không tìm thấy loại phòng để sửa" });

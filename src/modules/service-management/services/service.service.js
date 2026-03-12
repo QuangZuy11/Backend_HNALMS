@@ -25,6 +25,11 @@ exports.createService = async (data) => {
   session.startTransaction();
 
   try {
+    // [ĐÃ SỬA] Bắt lỗi giá dịch vụ phải > 0
+    if (data.currentPrice === undefined || data.currentPrice === null || Number(data.currentPrice) <= 0) {
+      throw { status: 400, message: "Giá dịch vụ bắt buộc phải lớn hơn 0!" };
+    }
+
     // 1. Check trùng tên
     const existingService = await Service.findOne({ name: data.name }).session(session);
     if (existingService) {
@@ -88,6 +93,11 @@ exports.updateService = async (id, data) => {
   session.startTransaction();
 
   try {
+    // [ĐÃ SỬA] Bắt lỗi giá dịch vụ phải > 0 (nếu frontend có gửi giá lên)
+    if (data.currentPrice !== undefined && (data.currentPrice === null || Number(data.currentPrice) <= 0)) {
+      throw { status: 400, message: "Giá dịch vụ bắt buộc phải lớn hơn 0!" };
+    }
+
     const service = await Service.findById(id).session(session);
     if (!service) throw { status: 404, message: "Không tìm thấy dịch vụ" };
 

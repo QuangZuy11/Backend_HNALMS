@@ -4,6 +4,11 @@ const xlsx = require("xlsx");
 class DeviceService {
   
   async createDevice(data) {
+
+    if (data.price === undefined || data.price === null || Number(data.price) <= 0) {
+      throw new Error("Giá thiết bị phải lớn hơn 0");
+    }
+
     const device = new Device(data);
     return await device.save();
   }
@@ -13,6 +18,11 @@ class DeviceService {
   }
 
   async updateDevice(id, data) {
+
+    if (data.price !== undefined && (data.price === null || Number(data.price) <= 0)) {
+      throw new Error("Giá thiết bị phải lớn hơn 0");
+    }
+
     const device = await Device.findByIdAndUpdate(id, data, { new: true });
     if (!device) throw new Error("Không tìm thấy thiết bị");
     return device;
