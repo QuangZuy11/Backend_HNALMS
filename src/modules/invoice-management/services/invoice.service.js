@@ -1,15 +1,19 @@
 const Invoice = require("../models/invoice.model");
+const InvoiceIncurred = require("../models/invoice_incurred.model");
 const Room = require("../../room-floor-management/models/room.model");
-const MeterReading = require('../models/meterreading.model');
-const BookService = require('../../contract-management/models/bookservice.model');
+const MeterReading = require("../models/meterreading.model");
+const BookService = require("../../contract-management/models/bookservice.model");
 const Service = require("../../service-management/models/service.model");
-const Contract = require('../../contract-management/models/contract.model');
-const RepairRequest = require('../../request-management/models/repair_requests.model');
-const Payment = require('../models/payment.model');
+const Contract = require("../../contract-management/models/contract.model");
+const RepairRequest = require("../../request-management/models/repair_requests.model");
+const Payment = require("../models/payment.model");
 
 class InvoiceService {
   async getInvoices(query = {}) {
-    return await Invoice.find(query).populate("roomId", "name floorId").sort({ createdAt: -1 });
+    return await Invoice.find(query)
+      .populate("roomId", "name floorId")
+      .sort({ createdAt: -1 })
+      .lean();
   }
 
   async generateDraftInvoices() {
@@ -27,51 +31,49 @@ class InvoiceService {
       $or: [
         { endDate: null },
         { endDate: { $exists: false } },
-        { endDate: { $gte: startOfMonth } }
-      ]
+        { endDate: { $gte: startOfMonth } },
+      ],
     });
 
     if (activeContracts.length === 0) {
       throw new Error("Không có hợp đồng nào hoạt động trong tháng này để tạo hóa đơn.");
     }
 
-    const roomIdsFromContracts = [...new Set(activeContracts.map(c => c.roomId.toString()))];
+    const roomIdsFromContracts = [...new Set(activeContracts.map((c) => c.roomId.toString()))];
     const activeRooms = await Room.find({ _id: { $in: roomIdsFromContracts } }).populate("roomTypeId");
 
     const titlePattern = `tháng ${month}/${year}`;
     const existingInvoices = await Invoice.find({
       type: "Periodic",
-      title: { $regex: titlePattern, $options: "i" }
+      title: { $regex: titlePattern, $options: "i" },
     });
 
-    const roomIdsWithInvoice = existingInvoices.map(inv => inv.roomId.toString());
+    const roomIdsWithInvoice = existingInvoices.map((inv) => inv.roomId.toString());
 
-    const roomsToCreate = activeRooms.filter(
-      room => !roomIdsWithInvoice.includes(room._id.toString())
-    );
+    const roomsToCreate = activeRooms.filter((room) => !roomIdsWithInvoice.includes(room._id.toString()));
 
     if (roomsToCreate.length === 0) {
       throw new Error(`Tất cả các phòng hợp lệ đều đã được tạo hóa đơn cho tháng ${month}/${year}.`);
     }
 
     const recentReadings = await MeterReading.find({
-      createdAt: { $gte: startOfMonth, $lte: endOfMonth }
-    }).populate('utilityId');
+      createdAt: { $gte: startOfMonth, $lte: endOfMonth },
+    }).populate("utilityId");
 
     const elecService = await Service.findOne({ name: "Điện" });
     const waterService = await Service.findOne({ name: "Nước" });
     const missingRooms = [];
 
-    roomsToCreate.forEach(room => {
-      const roomReadings = recentReadings.filter(r => r.roomId.toString() === room._id.toString());
+    roomsToCreate.forEach((room) => {
+      const roomReadings = recentReadings.filter((r) => r.roomId.toString() === room._id.toString());
       let hasElec = true;
       let hasWater = true;
 
       if (elecService) {
-        hasElec = roomReadings.some(r => r.utilityId && r.utilityId._id.toString() === elecService._id.toString());
+        hasElec = roomReadings.some((r) => r.utilityId && r.utilityId._id.toString() === elecService._id.toString());
       }
       if (waterService) {
-        hasWater = roomReadings.some(r => r.utilityId && r.utilityId._id.toString() === waterService._id.toString());
+        hasWater = roomReadings.some((r) => r.utilityId && r.utilityId._id.toString() === waterService._id.toString());
       }
 
       if (!hasElec || !hasWater) {
@@ -80,28 +82,32 @@ class InvoiceService {
     });
 
     if (missingRooms.length > 0) {
-      const displayRooms = missingRooms.length > 6 ? missingRooms.slice(0, 6).join(', ') + '...' : missingRooms.join(', ');
-      throw new Error(`Bạn CHƯA CHỐT số Điện/Nước cho các phòng: ${displayRooms}. (Ghi chú: Nếu khách đã trả/chuyển phòng giữa tháng, bạn vẫn phải ghi chỉ số chốt của phòng đó trước khi tạo hóa đơn!)`);
+      const displayRooms =
+        missingRooms.length > 6 ? `${missingRooms.slice(0, 6).join(", ")}...` : missingRooms.join(", ");
+      throw new Error(
+        `Bạn CHƯA CHỐT số Điện/Nước cho các phòng: ${displayRooms}. (Ghi chú: Nếu khách đã trả/chuyển phòng giữa tháng, bạn vẫn phải ghi chỉ số chốt của phòng đó trước khi tạo hóa đơn!)`
+      );
     }
 
-    const activeContractIds = activeContracts.map(c => c._id.toString());
+    const activeContractIds = activeContracts.map((c) => c._id.toString());
 
     const activeBookServices = await BookService.find({
-      contractId: { $in: activeContractIds }
-    }).populate('services.serviceId');
+      contractId: { $in: activeContractIds },
+    }).populate("services.serviceId");
 
-    const invoicesToCreate = roomsToCreate.map(room => {
-      let parsedPrice = room.roomTypeId ? (room.roomTypeId.currentPrice || 0) : 0;
-      parsedPrice = typeof parsedPrice === 'object' && parsedPrice.$numberDecimal
-        ? parseFloat(parsedPrice.$numberDecimal)
-        : Number(parsedPrice) || 0;
+    const invoicesToCreate = roomsToCreate.map((room) => {
+      let parsedPrice = room.roomTypeId ? room.roomTypeId.currentPrice || 0 : 0;
+      parsedPrice =
+        typeof parsedPrice === "object" && parsedPrice.$numberDecimal
+          ? parseFloat(parsedPrice.$numberDecimal)
+          : Number(parsedPrice) || 0;
 
       let roomRentAmount = 0;
       let roomRentUsage = 0;
       let roomRentUnitPrice = parsedPrice;
       let roomRentItemName = "Tiền thuê phòng";
 
-      const roomContract = activeContracts.slice().reverse().find(c => c.roomId.toString() === room._id.toString());
+      const roomContract = activeContracts.slice().reverse().find((c) => c.roomId.toString() === room._id.toString());
 
       if (roomContract) {
         const getStartOfDay = (dateInput) => {
@@ -145,24 +151,19 @@ class InvoiceService {
           usage: roomRentUsage,
           unitPrice: roomRentUnitPrice,
           amount: roomRentAmount,
-          isIndex: false
+          isIndex: false,
         });
       }
 
-      // ==============================================================
-      // [ĐÃ FIX BUG] Sắp xếp giảm dần theo thời gian tạo (Mới nhất lên đầu)
-      // ==============================================================
       const roomReadings = recentReadings
-        .filter(r => r.roomId.toString() === room._id.toString())
+        .filter((r) => r.roomId.toString() === room._id.toString())
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
       const latestReadings = {};
 
-      roomReadings.forEach(reading => {
+      roomReadings.forEach((reading) => {
         const uId = reading.utilityId._id.toString();
 
-        // Vì đã sắp xếp mới nhất lên đầu, nên nếu uId chưa tồn tại trong object -> nó chính là bản ghi MỚI NHẤT
-        // Các bản ghi cũ hơn (nếu có do nhập sai rồi sửa lại) sẽ bị bỏ qua hoàn toàn.
         if (!latestReadings[uId]) {
           const usage = reading.newIndex - reading.oldIndex;
           if (usage >= 0 && reading.utilityId) {
@@ -170,17 +171,18 @@ class InvoiceService {
               utilityId: reading.utilityId,
               oldIndex: reading.oldIndex,
               newIndex: reading.newIndex,
-              totalUsage: usage // Không cộng dồn (+=) nữa, gán cứng giá trị mới nhất
+              totalUsage: usage,
             };
           }
         }
       });
 
-      Object.values(latestReadings).forEach(group => {
+      Object.values(latestReadings).forEach((group) => {
         let servicePrice = group.utilityId.price || group.utilityId.currentPrice || 0;
-        servicePrice = typeof servicePrice === 'object' && servicePrice.$numberDecimal
-          ? parseFloat(servicePrice.$numberDecimal)
-          : Number(servicePrice);
+        servicePrice =
+          typeof servicePrice === "object" && servicePrice.$numberDecimal
+            ? parseFloat(servicePrice.$numberDecimal)
+            : Number(servicePrice);
 
         const amount = group.totalUsage * servicePrice;
         totalAmount += amount;
@@ -195,32 +197,34 @@ class InvoiceService {
             usage: group.totalUsage,
             unitPrice: servicePrice,
             amount: amount,
-            isIndex: true
+            isIndex: true,
           });
         }
       });
 
       if (roomContract) {
-        const contractBookService = activeBookServices.find(bs => bs.contractId.toString() === roomContract._id.toString());
+        const contractBookService = activeBookServices.find(
+          (bs) => bs.contractId.toString() === roomContract._id.toString()
+        );
 
         if (contractBookService && contractBookService.services && contractBookService.services.length > 0) {
-          contractBookService.services.forEach(srvItem => {
-
+          contractBookService.services.forEach((srvItem) => {
             if (srvItem.endDate && new Date(srvItem.endDate) < startOfMonth) {
               return;
             }
 
             if (srvItem.serviceId) {
               let srvPrice = srvItem.serviceId.currentPrice || srvItem.serviceId.price || 0;
-              srvPrice = typeof srvPrice === 'object' && srvPrice.$numberDecimal
-                ? parseFloat(srvPrice.$numberDecimal)
-                : Number(srvPrice);
+              srvPrice =
+                typeof srvPrice === "object" && srvPrice.$numberDecimal
+                  ? parseFloat(srvPrice.$numberDecimal)
+                  : Number(srvPrice);
 
-              let finalQty = srvItem.quantity || 1;
-              let srvItemName = srvItem.serviceId.name || srvItem.serviceId.serviceName || "Dịch vụ";
+              const finalQty = srvItem.quantity || 1;
+              const srvItemName = srvItem.serviceId.name || srvItem.serviceId.serviceName || "Dịch vụ";
 
               const nameCheck = srvItemName.toLowerCase().trim();
-              if (nameCheck === 'điện' || nameCheck === 'dien' || nameCheck === 'nước' || nameCheck === 'nuoc') {
+              if (nameCheck === "điện" || nameCheck === "dien" || nameCheck === "nước" || nameCheck === "nuoc") {
                 return;
               }
 
@@ -234,7 +238,7 @@ class InvoiceService {
                 usage: finalQty,
                 unitPrice: srvPrice,
                 amount: amount,
-                isIndex: false
+                isIndex: false,
               });
             }
           });
@@ -250,14 +254,18 @@ class InvoiceService {
         items: invoiceItems,
         totalAmount: totalAmount,
         dueDate: dueDate,
-        status: "Draft"
+        status: "Draft",
       };
     });
 
-    const validInvoicesToCreate = invoicesToCreate.filter(inv => inv.items.length > 0 && inv.totalAmount > 0);
+    const validInvoicesToCreate = invoicesToCreate.filter(
+      (inv) => inv.items.length > 0 && inv.totalAmount > 0
+    );
 
     if (validInvoicesToCreate.length === 0) {
-      throw new Error(`Không có hóa đơn hợp lệ nào được tạo (Các phòng có thể chưa có hợp đồng trong tháng này).`);
+      throw new Error(
+        "Không có hóa đơn hợp lệ nào được tạo (Các phòng có thể chưa có hợp đồng trong tháng này)."
+      );
     }
 
     const createdInvoices = await Invoice.insertMany(validInvoicesToCreate);
@@ -274,19 +282,34 @@ class InvoiceService {
   }
 
   async markAsPaid(id) {
-    const invoice = await Invoice.findById(id);
-    if (!invoice) {
+    const periodicInvoice = await Invoice.findById(id);
+    if (periodicInvoice) {
+      if (periodicInvoice.status !== "Unpaid") {
+        throw new Error("Chỉ có thể xác nhận thanh toán cho hóa đơn đang ở trạng thái 'Chưa thu' (Unpaid)." );
+      }
+
+      periodicInvoice.status = "Paid";
+      await periodicInvoice.save();
+      return periodicInvoice;
+    }
+
+    const incurredInvoice = await InvoiceIncurred.findById(id);
+    if (!incurredInvoice) {
       throw new Error("Không tìm thấy hóa đơn này.");
     }
 
-    if (invoice.status !== "Unpaid") {
-      throw new Error("Chỉ có thể xác nhận thanh toán cho hóa đơn đang ở trạng thái 'Chưa thu' (Unpaid).");
+    if (incurredInvoice.status !== "Unpaid") {
+      throw new Error("Chỉ có thể xác nhận thanh toán cho hóa đơn đang ở trạng thái 'Chưa thu' (Unpaid)." );
     }
 
-    invoice.status = "Paid";
+    incurredInvoice.status = "Paid";
+    await incurredInvoice.save();
 
-    await invoice.save();
-    return invoice;
+    if (incurredInvoice.repairRequestId) {
+      await RepairRequest.findByIdAndUpdate(incurredInvoice.repairRequestId, { status: "Paid" });
+    }
+
+    return incurredInvoice;
   }
 
   async getInvoiceById(id) {
@@ -302,34 +325,59 @@ class InvoiceService {
       .populate("contractId", "contractCode startDate endDate")
       .lean();
 
-    if (!invoice) {
+    if (invoice) {
+      if (invoice.roomId?.roomTypeId?.currentPrice) {
+        invoice.roomId.roomTypeId.currentPrice = parseFloat(
+          invoice.roomId.roomTypeId.currentPrice.toString()
+        );
+      }
+
+      const contract = await Contract.findOne({
+        _id: invoice.contractId || invoice.roomId?._id,
+        status: "active",
+      })
+        .select("tenantId contractCode startDate endDate")
+        .populate("tenantId", "username email phoneNumber");
+
+      return {
+        ...invoice,
+        tenant: contract?.tenantId || null,
+        contractCode: invoice.contractId?.contractCode || contract?.contractCode || null,
+      };
+    }
+
+    const incurredInvoice = await InvoiceIncurred.findById(id)
+      .populate({
+        path: "contractId",
+        select: "contractCode startDate endDate roomId",
+        populate: { path: "roomId", select: "name roomCode" },
+      })
+      .lean();
+
+    if (!incurredInvoice) {
       throw new Error("Không tìm thấy hóa đơn này.");
     }
 
-    if (invoice.roomId?.roomTypeId?.currentPrice) {
-      invoice.roomId.roomTypeId.currentPrice = parseFloat(
-        invoice.roomId.roomTypeId.currentPrice.toString()
-      );
-    }
+    const contract = incurredInvoice.contractId;
 
-    const contract = await Contract.findOne({
-      _id: invoice.contractId || invoice.roomId?._id,
-      status: "active",
-    })
-      .select("tenantId contractCode startDate endDate")
-      .populate("tenantId", "username email phoneNumber");
+    const tenantInfo = contract
+      ? await Contract.findById(contract._id)
+        .populate("tenantId", "username email phoneNumber")
+        .then((c) => c?.tenantId || null)
+      : null;
 
     return {
-      ...invoice,
-      tenant: contract?.tenantId || null,
-      contractCode: invoice.contractId?.contractCode || contract?.contractCode || null,
+      ...incurredInvoice,
+      type: "Incurred",
+      roomId: contract?.roomId || null,
+      tenant: tenantInfo,
+      contractCode: contract?.contractCode || null,
     };
   }
 
   async getInvoicesByTenantId(tenantId, page = 1, limit = 10) {
     const skip = (page - 1) * limit;
 
-    // Tìm TẤT CẢ hợp đồng của tenant (bao gồm cả expired/terminated)
     const contracts = await Contract.find({ tenantId }).select("_id roomId");
 
     if (contracts.length === 0) {
@@ -339,24 +387,52 @@ class InvoiceService {
       };
     }
 
-    // Tìm hóa đơn theo cả contractId (Periodic) VÀ roomId (Incurred có thể không có contractId)
-    const contractIds = contracts.map(contract => contract._id);
-    const roomIds = [...new Set(contracts.map(contract => contract.roomId))];
+    const contractIds = contracts.map((contract) => contract._id);
 
-    const query = {
-      $or: [
-        { contractId: { $in: contractIds } },
-        { roomId: { $in: roomIds }, type: "Incurred" },
-      ],
-      status: { $ne: "Draft" }, // Không hiển thị hóa đơn nháp cho tenant
+    const periodicQuery = {
+      contractId: { $in: contractIds },
+      status: { $ne: "Draft" },
     };
 
-    const total = await Invoice.countDocuments(query);
-    const invoices = await Invoice.find(query)
+    const incurredQuery = {
+      contractId: { $in: contractIds },
+      status: { $ne: "Draft" },
+    };
+
+    const [periodicTotal, incurredTotal] = await Promise.all([
+      Invoice.countDocuments(periodicQuery),
+      InvoiceIncurred.countDocuments(incurredQuery),
+    ]);
+
+    const total = periodicTotal + incurredTotal;
+
+    const periodicInvoices = await Invoice.find(periodicQuery)
       .populate("roomId", "name floorId")
       .sort({ createdAt: -1 })
       .skip(skip)
-      .limit(limit);
+      .limit(limit)
+      .lean();
+
+    const incurredInvoices = await InvoiceIncurred.find(incurredQuery)
+      .populate({
+        path: "contractId",
+        select: "roomId",
+        populate: { path: "roomId", select: "name floorId" },
+      })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    const normalizedIncurred = incurredInvoices.map((inv) => ({
+      ...inv,
+      type: "Incurred",
+      roomId: inv.contractId?.roomId || null,
+    }));
+
+    const invoices = [...periodicInvoices, ...normalizedIncurred].sort(
+      (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
+    );
 
     return {
       invoices,
@@ -365,14 +441,13 @@ class InvoiceService {
   }
 
   async getMyInvoiceById(tenantId, invoiceId) {
-    // Tìm TẤT CẢ hợp đồng của tenant
     const contracts = await Contract.find({ tenantId }).select("_id roomId contractCode startDate endDate");
     if (contracts.length === 0) {
       throw new Error("Bạn không có hợp đồng thuê nào.");
     }
 
-    const contractIds = contracts.map(c => c._id.toString());
-    const roomIds = contracts.map(c => c.roomId.toString());
+    const contractIds = contracts.map((c) => c._id.toString());
+    const roomIds = contracts.map((c) => c.roomId.toString());
 
     const invoice = await Invoice.findById(invoiceId)
       .populate({
@@ -385,44 +460,74 @@ class InvoiceService {
       })
       .lean();
 
-    if (!invoice) {
+    if (invoice) {
+      const hasContractAccess = invoice.contractId && contractIds.includes(invoice.contractId.toString());
+
+      if (!hasContractAccess) {
+        throw new Error("Bạn không có quyền xem hóa đơn này.");
+      }
+
+      if (invoice.roomId?.roomTypeId?.currentPrice) {
+        invoice.roomId.roomTypeId.currentPrice = parseFloat(
+          invoice.roomId.roomTypeId.currentPrice.toString()
+        );
+      }
+
+      const contract = invoice.contractId
+        ? contracts.find((c) => c._id.toString() === invoice.contractId.toString())
+        : null;
+
+      return {
+        ...invoice,
+        contractCode: contract?.contractCode || null,
+        contractStartDate: contract?.startDate || null,
+        contractEndDate: contract?.endDate || null,
+      };
+    }
+
+    const incurredInvoice = await InvoiceIncurred.findById(invoiceId)
+      .populate({
+        path: "contractId",
+        select: "roomId contractCode startDate endDate",
+        populate: { path: "roomId", select: "name roomCode floorId roomTypeId" },
+      })
+      .lean();
+
+    if (!incurredInvoice) {
       throw new Error("Không tìm thấy hóa đơn.");
     }
 
-    // Kiểm tra quyền: theo contractId (Periodic) HOẶC roomId (Incurred)
-    const hasContractAccess = invoice.contractId && contractIds.includes(invoice.contractId.toString());
-    const hasRoomAccess = invoice.type === "Incurred" && invoice.roomId && roomIds.includes((invoice.roomId._id || invoice.roomId).toString());
+    const hasContractAccess =
+      incurredInvoice.contractId && contractIds.includes(incurredInvoice.contractId._id.toString());
+    const hasRoomAccess =
+      incurredInvoice.contractId?.roomId &&
+      roomIds.includes((incurredInvoice.contractId.roomId._id || incurredInvoice.contractId.roomId).toString());
 
     if (!hasContractAccess && !hasRoomAccess) {
       throw new Error("Bạn không có quyền xem hóa đơn này.");
     }
 
-    if (invoice.roomId?.roomTypeId?.currentPrice) {
-      invoice.roomId.roomTypeId.currentPrice = parseFloat(
-        invoice.roomId.roomTypeId.currentPrice.toString()
-      );
-    }
-
-    const contract = invoice.contractId
-      ? contracts.find(c => c._id.toString() === invoice.contractId.toString())
-      : contracts.find(c => c.roomId.toString() === (invoice.roomId._id || invoice.roomId).toString());
-
     return {
-      ...invoice,
-      contractCode: contract?.contractCode || null,
-      contractStartDate: contract?.startDate || null,
-      contractEndDate: contract?.endDate || null,
+      ...incurredInvoice,
+      type: "Incurred",
+      roomId: incurredInvoice.contractId?.roomId || null,
+      contractCode: incurredInvoice.contractId?.contractCode || null,
+      contractStartDate: incurredInvoice.contractId?.startDate || null,
+      contractEndDate: incurredInvoice.contractId?.endDate || null,
     };
   }
 
   async getIncurredInvoiceDetail(invoiceId) {
-    const invoice = await Invoice.findById(invoiceId)
-      .select("invoiceCode title type totalAmount status dueDate createdAt repairRequestId roomId")
-      .populate({ path: "roomId", select: "name" })
+    const invoice = await InvoiceIncurred.findById(invoiceId)
+      .select("invoiceCode title totalAmount status dueDate createdAt repairRequestId contractId")
+      .populate({
+        path: "contractId",
+        select: "roomId",
+        populate: { path: "roomId", select: "name" },
+      })
       .lean();
 
     if (!invoice) throw new Error("Không tìm thấy hóa đơn.");
-    if (invoice.type !== "Incurred") throw new Error("Hóa đơn này không phải loại phát sinh (Incurred).");
     if (!invoice.repairRequestId) throw new Error("Hóa đơn không liên kết với yêu cầu sửa chữa nào.");
 
     const repairRequest = await RepairRequest.findById(invoice.repairRequestId)
@@ -434,9 +539,9 @@ class InvoiceService {
 
     return {
       invoiceCode: invoice.invoiceCode,
-      roomName: invoice.roomId?.name || null,
+      roomName: invoice.contractId?.roomId?.name || null,
       title: invoice.title,
-      type: invoice.type,
+      type: "Incurred",
       totalAmount: invoice.totalAmount,
       status: invoice.status,
       dueDate: invoice.dueDate,
@@ -447,14 +552,15 @@ class InvoiceService {
   }
 
   async payIncurredInvoice(invoiceId) {
-    const invoice = await Invoice.findById(invoiceId);
+    const invoice = await InvoiceIncurred.findById(invoiceId);
     if (!invoice) throw new Error("Không tìm thấy hóa đơn.");
-    if (invoice.type !== "Incurred") throw new Error("Hóa đơn này không phải loại phát sinh (Incurred).");
-    if (invoice.status !== "Unpaid") throw new Error(`Hóa đơn không ở trạng thái chờ thanh toán (trạng thái hiện tại: ${invoice.status}).`);
+    if (invoice.status !== "Unpaid") {
+      throw new Error(`Hóa đơn không ở trạng thái chờ thanh toán (trạng thái hiện tại: ${invoice.status}).`);
+    }
     if (!invoice.repairRequestId) throw new Error("Hóa đơn không liên kết với yêu cầu sửa chữa nào.");
 
     const payment = new Payment({
-      invoiceId: invoice._id,
+      incurredInvoiceId: invoice._id,
       amount: invoice.totalAmount,
       status: "Success",
       paymentDate: new Date(),
