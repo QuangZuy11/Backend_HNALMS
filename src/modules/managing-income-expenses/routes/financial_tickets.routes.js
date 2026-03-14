@@ -45,6 +45,14 @@ router.get(
   financialTicketsController.getPaymentTickets
 );
 
+// Danh sách phiếu chi (Payment) cho Owner
+router.get(
+  "/payments/owner",
+  authenticate,
+  authorize("owner"),
+  financialTicketsController.getPaymentTickets
+);
+
 // Danh sách phiếu thu (Receipt) - chỉ dành cho kế toán
 router.get(
   "/receipts",

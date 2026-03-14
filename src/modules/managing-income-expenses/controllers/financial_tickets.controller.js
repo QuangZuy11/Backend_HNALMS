@@ -80,7 +80,7 @@ const getNextPaymentVoucherCode = async (_req, res) => {
 /**
  * POST /api/financial-tickets/payments
  * Tạo phiếu chi thủ công cho manager nhập liệu
- * Body: { title, amount, status: "Unpaid" | "Paid" }
+ * Body: { title, amount, status: "Pending" | "Paid" | "Cancelled" }
  */
 const createManualPaymentTicket = async (req, res) => {
   try {
@@ -101,11 +101,12 @@ const createManualPaymentTicket = async (req, res) => {
       });
     }
 
-    const allowed = ["Paid", "Unpaid"];
+    const allowed = ["Pending", "Paid", "Cancelled"];
     if (!allowed.includes(status)) {
       return res.status(400).json({
         success: false,
-        message: 'Trạng thái không hợp lệ. Chỉ chấp nhận "Paid" hoặc "Unpaid".',
+        message:
+          'Trạng thái không hợp lệ. Chỉ chấp nhận "Pending", "Paid" hoặc "Cancelled".',
       });
     }
 
@@ -423,18 +424,33 @@ const createManualReceiptTicket = async (req, res) => {
 /**
  * PATCH /api/financial-tickets/:id/status
  * Cập nhật trạng thái thanh toán cho phiếu chi / phiếu thu (Payment / Receipt)
- * Body: { status: "Paid" | "Unpaid" }
+ * Body: { status: "Pending" | "Paid" | "Cancelled" | "Unpaid" }
  */
 const updatePaymentTicketStatus = async (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body || {};
 
-    const allowed = ["Paid", "Unpaid"];
+    const ticket = await FinancialTicket.findById(id).lean();
+    if (!ticket) {
+      return res.status(404).json({
+        success: false,
+        message: "Không tìm thấy phiếu",
+      });
+    }
+
+    const allowed =
+      ticket.type === "Payment"
+        ? ["Pending", "Paid", "Cancelled"]
+        : ["Paid", "Unpaid"];
+
     if (!allowed.includes(status)) {
       return res.status(400).json({
         success: false,
-        message: 'Trạng thái không hợp lệ. Chỉ chấp nhận "Paid" hoặc "Unpaid".',
+        message:
+          ticket.type === "Payment"
+            ? 'Trạng thái không hợp lệ. Chỉ chấp nhận "Pending", "Paid" hoặc "Cancelled".'
+            : 'Trạng thái không hợp lệ. Chỉ chấp nhận "Paid" hoặc "Unpaid".',
       });
     }
 
@@ -446,22 +462,15 @@ const updatePaymentTicketStatus = async (req, res) => {
 
     if (status === "Paid") {
       updateQuery.$set.accountantPaidAt = new Date();
-    } else {
+    } else if (ticket.type === "Payment") {
       updateQuery.$set.accountantPaidAt = null;
     }
 
-    const updated = await FinancialTicket.findOneAndUpdate(
-      { _id: id, type: { $in: ["Payment", "Receipt"] } },
+    const updated = await FinancialTicket.findByIdAndUpdate(
+      id,
       updateQuery,
       { new: true }
     ).lean();
-
-    if (!updated) {
-      return res.status(404).json({
-        success: false,
-        message: "Không tìm thấy phiếu",
-      });
-    }
 
     return res.status(200).json({
       success: true,
