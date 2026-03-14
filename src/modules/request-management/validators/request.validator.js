@@ -37,8 +37,8 @@ const validateCreateRepairRequest = (data) => {
     errors.push("Mô tả không được trống");
   } else if (data.description.length < 10) {
     errors.push("Mô tả phải có ít nhất 10 ký tự");
-  } else if (data.description.length > 2000) {
-    errors.push("Mô tả không được vượt quá 2000 ký tự");
+  } else if (data.description.length > 1000) {
+    errors.push("Mô tả không được vượt quá 1000 ký tự");
   }
 
   // Validate images (optional) - Image URLs from frontend
