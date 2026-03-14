@@ -1,6 +1,7 @@
 const MeterReading = require("../models/meterreading.model");
-const Invoice = require("../models/invoice.model");
+const InvoicePeriodic = require("../models/invoice_periodic.model"); // [ĐÃ SỬA] Dùng Model mới
 const Service = require("../../service-management/models/service.model"); 
+const Contract = require("../../contract-management/models/contract.model"); // [MỚI] Import Hợp đồng
 
 class MeterReadingService {
   // 1. NHẬP CHỈ SỐ MỚI VÀ CẬP NHẬT TRỰC TIẾP VÀO HÓA ĐƠN NHÁP
@@ -40,44 +41,51 @@ class MeterReadingService {
     const year = now.getFullYear();
     const titlePattern = `tháng ${month}/${year}`;
 
-    // 3. Tìm Hóa đơn Nháp của phòng này VÀ của tháng hiện tại
-    const draftInvoice = await Invoice.findOne({
-      roomId: data.roomId,
-      type: "Periodic",
-      status: "Draft",
-      title: { $regex: titlePattern, $options: "i" } // Đảm bảo không bắt nhầm hóa đơn nháp của tháng trước
+    // [MỚI] 3. Tìm Hợp đồng đang active của phòng này
+    const activeContract = await Contract.findOne({ 
+      roomId: data.roomId, 
+      status: "active" 
     });
 
-    if (draftInvoice) {
-      const existingItemIndex = draftInvoice.items.findIndex(
-        item => item.itemName.toLowerCase().includes(searchKeyword)
-      );
+    if (activeContract) {
+      // [MỚI] 4. Tìm Hóa đơn Nháp ĐỊNH KỲ dựa trên contractId
+      const draftInvoice = await InvoicePeriodic.findOne({
+        contractId: activeContract._id,
+        status: "Draft",
+        title: { $regex: titlePattern, $options: "i" }
+      });
 
-      if (existingItemIndex > -1) {
-        // NẾU ĐÃ CÓ => Cập nhật đè lên 
-        draftInvoice.items[existingItemIndex].itemName = formattedItemName;
-        draftInvoice.items[existingItemIndex].oldIndex = data.oldIndex;
-        draftInvoice.items[existingItemIndex].newIndex = data.newIndex;
-        draftInvoice.items[existingItemIndex].usage = usageAmount;
-        draftInvoice.items[existingItemIndex].unitPrice = unitPrice;
-        draftInvoice.items[existingItemIndex].amount = incurredCost;
-        draftInvoice.items[existingItemIndex].isIndex = true; // [MỚI] Đảm bảo cờ isIndex vẫn là true khi update
-      } else {
-        // NẾU CHƯA CÓ => Thêm mới
-        draftInvoice.items.push({
-          itemName: formattedItemName,
-          oldIndex: data.oldIndex,
-          newIndex: data.newIndex,
-          usage: usageAmount,
-          unitPrice: unitPrice,
-          amount: incurredCost,
-          isIndex: true // [MỚI] Đánh dấu đây là dịch vụ Điện/Nước có chỉ số
-        });
+      if (draftInvoice) {
+        const existingItemIndex = draftInvoice.items.findIndex(
+          item => item.itemName.toLowerCase().includes(searchKeyword)
+        );
+
+        if (existingItemIndex > -1) {
+          // NẾU ĐÃ CÓ => Cập nhật đè lên 
+          draftInvoice.items[existingItemIndex].itemName = formattedItemName;
+          draftInvoice.items[existingItemIndex].oldIndex = data.oldIndex;
+          draftInvoice.items[existingItemIndex].newIndex = data.newIndex;
+          draftInvoice.items[existingItemIndex].usage = usageAmount;
+          draftInvoice.items[existingItemIndex].unitPrice = unitPrice;
+          draftInvoice.items[existingItemIndex].amount = incurredCost;
+          draftInvoice.items[existingItemIndex].isIndex = true;
+        } else {
+          // NẾU CHƯA CÓ => Thêm mới
+          draftInvoice.items.push({
+            itemName: formattedItemName,
+            oldIndex: data.oldIndex,
+            newIndex: data.newIndex,
+            usage: usageAmount,
+            unitPrice: unitPrice,
+            amount: incurredCost,
+            isIndex: true 
+          });
+        }
+
+        // Tính lại Tổng tiền
+        draftInvoice.totalAmount = draftInvoice.items.reduce((sum, item) => sum + (item.amount || 0), 0);
+        await draftInvoice.save();
       }
-
-      // Tính lại Tổng tiền
-      draftInvoice.totalAmount = draftInvoice.items.reduce((sum, item) => sum + (item.amount || 0), 0);
-      await draftInvoice.save();
     }
 
     return newReading;
@@ -113,17 +121,36 @@ class MeterReadingService {
       const year = now.getFullYear();
       const titlePattern = `tháng ${month}/${year}`;
 
-      const draftInvoice = await Invoice.findOne({
-        roomId: reading.roomId,
-        type: "Periodic",
-        status: "Draft",
-        title: { $regex: titlePattern, $options: "i" }
-      });
+      // [MỚI] Lấy hợp đồng active
+      const activeContract = await Contract.findOne({ roomId: reading.roomId, status: "active" });
 
-      if (draftInvoice) {
-        draftInvoice.totalAmount += costDifference; 
-        if (draftInvoice.totalAmount < 0) draftInvoice.totalAmount = 0; 
-        await draftInvoice.save();
+      if (activeContract) {
+        const draftInvoice = await InvoicePeriodic.findOne({
+          contractId: activeContract._id,
+          status: "Draft",
+          title: { $regex: titlePattern, $options: "i" }
+        });
+
+        if (draftInvoice) {
+          // [ĐÃ FIX BUG] Cập nhật luôn chi tiết hiển thị trong mảng items thay vì chỉ sửa tổng tiền
+          const serviceName = serviceInfo ? (serviceInfo.name || serviceInfo.serviceName) : "";
+          if (serviceName) {
+             const searchKeyword = `tiền ${serviceName.toLowerCase()}`;
+             const itemIndex = draftInvoice.items.findIndex(item => item.itemName.toLowerCase().includes(searchKeyword));
+             
+             if (itemIndex > -1) {
+                draftInvoice.items[itemIndex].oldIndex = oldIndex;
+                draftInvoice.items[itemIndex].newIndex = newIndex;
+                draftInvoice.items[itemIndex].usage = newUsageAmount;
+                draftInvoice.items[itemIndex].amount += costDifference;
+             }
+          }
+
+          // Tính lại tổng tiền cho chắc ăn
+          draftInvoice.totalAmount = draftInvoice.items.reduce((sum, item) => sum + (item.amount || 0), 0);
+          if (draftInvoice.totalAmount < 0) draftInvoice.totalAmount = 0; 
+          await draftInvoice.save();
+        }
       }
     }
 
@@ -152,29 +179,33 @@ class MeterReadingService {
     const year = now.getFullYear();
     const titlePattern = `tháng ${month}/${year}`;
 
-    // Tìm hóa đơn nháp liên quan để trừ tiền
-    const draftInvoice = await Invoice.findOne({
-      roomId: reading.roomId,
-      type: "Periodic",
-      status: "Draft",
-      title: { $regex: titlePattern, $options: "i" }
-    });
+    // [MỚI] Tìm hợp đồng active
+    const activeContract = await Contract.findOne({ roomId: reading.roomId, status: "active" });
 
-    if (draftInvoice) {
-      const serviceInfo = await Service.findById(reading.utilityId);
-      const serviceName = serviceInfo ? (serviceInfo.name || serviceInfo.serviceName) : "";
+    if (activeContract) {
+      // Tìm hóa đơn nháp liên quan để trừ tiền
+      const draftInvoice = await InvoicePeriodic.findOne({
+        contractId: activeContract._id,
+        status: "Draft",
+        title: { $regex: titlePattern, $options: "i" }
+      });
 
-      if (serviceName) {
-        const searchKeyword = `tiền ${serviceName.toLowerCase()}`;
+      if (draftInvoice) {
+        const serviceInfo = await Service.findById(reading.utilityId);
+        const serviceName = serviceInfo ? (serviceInfo.name || serviceInfo.serviceName) : "";
 
-        // Lọc bỏ dịch vụ này ra khỏi mảng items
-        draftInvoice.items = draftInvoice.items.filter(
-          item => !item.itemName.toLowerCase().includes(searchKeyword)
-        );
-        
-        // Tính toán lại tổng tiền
-        draftInvoice.totalAmount = draftInvoice.items.reduce((sum, item) => sum + (item.amount || 0), 0);
-        await draftInvoice.save();
+        if (serviceName) {
+          const searchKeyword = `tiền ${serviceName.toLowerCase()}`;
+
+          // Lọc bỏ dịch vụ này ra khỏi mảng items
+          draftInvoice.items = draftInvoice.items.filter(
+            item => !item.itemName.toLowerCase().includes(searchKeyword)
+          );
+          
+          // Tính toán lại tổng tiền
+          draftInvoice.totalAmount = draftInvoice.items.reduce((sum, item) => sum + (item.amount || 0), 0);
+          await draftInvoice.save();
+        }
       }
     }
 
