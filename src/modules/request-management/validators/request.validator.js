@@ -145,9 +145,50 @@ const validateUpdateRepairRequestMiddleware = (req, res, next) => {
   next();
 };
 
+/**
+ * Validate repair status update (manager)
+ * @param {Object} data - Request body
+ * @returns {Object} {valid: boolean, errors: Array}
+ */
+const validateUpdateRepairStatus = (data) => {
+  const errors = [];
+  const allowedStatus = ["Pending", "Processing", "Done", "Unpaid", "Paid"];
+
+  if (!data.status) {
+    errors.push("Thiếu trạng thái cần cập nhật");
+  } else if (!allowedStatus.includes(data.status)) {
+    errors.push("Trạng thái không hợp lệ");
+  }
+
+  if (data.paymentType === "REVENUE") {
+    if (!data.invoiceTitle) errors.push("Tiêu đề hóa đơn là bắt buộc");
+    if (data.invoiceTotalAmount === undefined || data.invoiceTotalAmount === null || data.invoiceTotalAmount === "") {
+      errors.push("Tổng số tiền là bắt buộc");
+    } else if (Number.isNaN(Number(data.invoiceTotalAmount)) || Number(data.invoiceTotalAmount) < 0) {
+      errors.push("Tổng số tiền phải là số hợp lệ và lớn hơn hoặc bằng 0");
+    }
+  }
+
+  return { valid: errors.length === 0, errors };
+};
+
+const validateUpdateRepairStatusMiddleware = (req, res, next) => {
+  const validation = validateUpdateRepairStatus(req.body || {});
+  if (!validation.valid) {
+    return res.status(400).json({
+      success: false,
+      message: "Validation failed",
+      errors: validation.errors,
+    });
+  }
+  next();
+};
+
 module.exports = {
   validateCreateRepairRequest,
   validateCreateRepairRequestMiddleware,
   validateUpdateRepairRequest,
   validateUpdateRepairRequestMiddleware,
+  validateUpdateRepairStatus,
+  validateUpdateRepairStatusMiddleware,
 };

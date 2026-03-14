@@ -1,0 +1,29 @@
+const mongoose = require("mongoose");
+
+const invoiceIncurredSchema = new mongoose.Schema(
+  {
+    invoiceCode: { type: String, required: true, unique: true },
+    contractId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Contracts",
+      required: true,
+    },
+    repairRequestId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "RepairRequest",
+      default: null,
+    },
+    receiptTicketId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "FinancialTicket",
+      default: null,
+    },
+    title: { type: String, required: true, trim: true },
+    totalAmount: { type: Number, required: true, default: 0 },
+    status: { type: String, enum: ["Paid", "Unpaid", "Draft"], default: "Draft" },
+    dueDate: { type: Date, required: true },
+  },
+  { timestamps: true }
+);
+
+module.exports = mongoose.model("InvoiceIncurred", invoiceIncurredSchema, "invoices_incurred");
