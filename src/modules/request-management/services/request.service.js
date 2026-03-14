@@ -4,7 +4,7 @@ const User = require("../../authentication/models/user.model");
 const UserInfo = require("../../authentication/models/userInfor.model");
 const Device = require("../../room-floor-management/models/devices.model");
 const Contract = require("../../contract-management/models/contract.model");
-const Invoice = require("../../invoice-management/models/invoice.model");
+const InvoiceIncurred = require("../../invoice-management/models/invoice_incurred.model");
 const FinancialTicket = require("../../managing-income-expenses/models/financial_tickets");
 
 const REPAIR_INVOICE_PREFIX = "INV-RP-";
@@ -19,7 +19,7 @@ const normalizeVietnamese = (str = "") =>
     .toLowerCase();
 
 // Helper: tính chi phí hiển thị cho một danh sách yêu cầu sửa chữa
-// Dựa vào paymentType để query ngược lại từ Invoice hoặc FinancialTicket
+// Dựa vào paymentType để query ngược lại từ InvoiceIncurred hoặc FinancialTicket
 const attachComputedCost = async (requests) => {
   // Tách requests thành 2 nhóm: REVENUE và EXPENSE
   const revenueRequests = requests.filter((r) => r.paymentType === "REVENUE");
@@ -28,14 +28,14 @@ const attachComputedCost = async (requests) => {
   const invoiceMap = new Map();
   const ticketMap = new Map();
 
-  // Query song song Invoice và FinancialTicket dựa vào repairRequestId/referenceId
+  // Query song song InvoiceIncurred và FinancialTicket dựa vào repairRequestId/referenceId
   const queryPromises = [];
 
-  // Query Invoice cho các request có paymentType = REVENUE
+  // Query InvoiceIncurred cho các request có paymentType = REVENUE
   if (revenueRequests.length > 0) {
     const revenueRequestIds = revenueRequests.map((r) => r._id.toString());
     queryPromises.push(
-      Invoice.find({
+      InvoiceIncurred.find({
         repairRequestId: { $in: revenueRequestIds },
       })
         .select("repairRequestId totalAmount")
@@ -48,7 +48,7 @@ const attachComputedCost = async (requests) => {
           });
         })
         .catch((err) => {
-          console.error("Error fetching invoices:", err);
+          console.error("Error fetching incurred invoices:", err);
         })
     );
   }
@@ -86,7 +86,7 @@ const attachComputedCost = async (requests) => {
     const requestIdStr = request._id.toString();
 
     if (request.paymentType === "REVENUE") {
-      // Lấy cost từ Invoice
+      // Lấy cost từ InvoiceIncurred
       const invoiceAmount = invoiceMap.get(requestIdStr);
       if (invoiceAmount !== undefined && typeof invoiceAmount === "number") {
         cost = invoiceAmount;
@@ -398,7 +398,7 @@ const getRepairRequestsByTenant = async (tenantId) => {
  */
 const getNextRepairInvoiceCode = async () => {
   // Lấy hóa đơn mới nhất theo prefix (sort string works vì luôn 4 chữ số)
-  const latest = await Invoice.findOne({
+  const latest = await InvoiceIncurred.findOne({
     invoiceCode: { $regex: `^${REPAIR_INVOICE_PREFIX}\\d{4}$` },
   })
     .select("invoiceCode")
@@ -422,7 +422,7 @@ const getNextRepairInvoiceCode = async () => {
 
     const candidate = `${REPAIR_INVOICE_PREFIX}${String(nextNumber).padStart(4, "0")}`;
     // eslint-disable-next-line no-await-in-loop
-    const exists = await Invoice.exists({ invoiceCode: candidate });
+    const exists = await InvoiceIncurred.exists({ invoiceCode: candidate });
     if (!exists) return candidate;
 
     nextNumber += 1;
@@ -613,37 +613,20 @@ const updateRepairRequestStatus = async (
         throw new Error("Không tìm thấy phòng đang thuê của cư dân để tạo hóa đơn");
       }
 
-      const roomId = activeContract.roomId._id || activeContract.roomId;
-      const contractId = activeContract._id; // [MỚI] Lấy ID của hợp đồng
+      const contractId = activeContract._id;
 
-      // Chuẩn bị chi tiết hóa đơn (items) - 1 dòng cho lần sửa chữa này
-      const items = [
-        {
-          itemName: title || "Chi phí sửa chữa",
-          oldIndex: 0,
-          newIndex: 0,
-          usage: 1,
-          unitPrice: totalAmount,
-          amount: totalAmount,
-          isIndex: false // Đánh dấu không phải là dịch vụ có chỉ số
-        },
-      ];
-
-      const newInvoice = new Invoice({
+      const newInvoice = new InvoiceIncurred({
         invoiceCode,
-        contractId, // [MỚI] Gán ID hợp đồng vào hóa đơn
-        roomId,
-        repairRequestId: request._id, // liên kết hóa đơn với yêu cầu sửa chữa
+        contractId,
+        repairRequestId: request._id,
         title,
-        type: "Incurred",
-        items,
         totalAmount,
         status: "Unpaid",
         dueDate,
       });
 
       await newInvoice.save();
-      // Không cần lưu invoiceId vào RepairRequest nữa, đã có repairRequestId trong Invoice
+      // Không cần lưu invoiceId vào RepairRequest nữa, đã có repairRequestId trong InvoiceIncurred
     }
 
     // 2. Tạo phiếu chi nội bộ nếu frontend gửi kèm dữ liệu financialTicket (sửa chữa miễn phí)

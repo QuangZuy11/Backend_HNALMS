@@ -18,6 +18,12 @@ const validateCreateOwner = (req, res, next) => {
   if (!isValidEmail(email)) {
     return res.status(400).json({ success: false, message: "Email không đúng định dạng" });
   }
+  if (!/^0\d+$/.test(phoneNumber)) {
+    return res.status(400).json({
+      success: false,
+      message: "Số điện thoại phải bắt đầu bằng số 0",
+    });
+  }
   const passwordValidation = validatePassword(password);
   if (!passwordValidation.valid) {
     return res.status(400).json({ success: false, message: passwordValidation.message });
@@ -42,6 +48,12 @@ const validateCreateManager = (req, res, next) => {
   }
   if (!isValidEmail(email)) {
     return res.status(400).json({ success: false, message: "Email không đúng định dạng" });
+  }
+  if (!/^0\d+$/.test(phoneNumber)) {
+    return res.status(400).json({
+      success: false,
+      message: "Số điện thoại phải bắt đầu bằng số 0",
+    });
   }
   const passwordValidation = validatePassword(password);
   if (!passwordValidation.valid) {

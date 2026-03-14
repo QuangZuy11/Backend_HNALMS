@@ -136,6 +136,7 @@ router.put(
   "/repair/:requestId/status",
   authenticate,
   authorize("manager"),
+  requestValidator.validateUpdateRepairStatusMiddleware,
   requestController.updateRepairStatus
 );
 
