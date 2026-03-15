@@ -41,6 +41,10 @@ const contractSchema = new Schema(
       type: Date,
       required: true,
     },
+    rentPaidUntil: {
+      type: Date,
+      default: null,
+    },
     // Duration in months
     duration: {
       type: Number,
