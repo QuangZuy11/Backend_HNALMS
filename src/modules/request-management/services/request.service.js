@@ -1,4 +1,3 @@
-const mongoose = require("mongoose");
 const RepairRequest = require("../models/repair_requests.model");
 const User = require("../../authentication/models/user.model");
 const UserInfo = require("../../authentication/models/userInfor.model");
@@ -626,6 +625,19 @@ const updateRepairRequestStatus = async (
       });
 
       await newInvoice.save();
+
+      // Tạo thêm phiếu thu cho hóa đơn sửa chữa có phí
+      const newReceiptTicket = new FinancialTicket({
+        type: "Receipt",
+        amount: totalAmount,
+        title: title || `Phiếu thu sửa chữa - ${invoiceCode}`,
+        referenceId: request._id,
+        status: "Unpaid",
+        transactionDate: new Date(),
+        paymentVoucher: invoiceCode,
+      });
+
+      await newReceiptTicket.save();
       // Không cần lưu invoiceId vào RepairRequest nữa, đã có repairRequestId trong InvoiceIncurred
     }
 
@@ -646,7 +658,7 @@ const updateRepairRequestStatus = async (
         amount,
         title,
         referenceId: request._id,
-        status: "Created",
+        status: "Pending",
         transactionDate: new Date(),
         paymentVoucher: voucherCode,
       });
