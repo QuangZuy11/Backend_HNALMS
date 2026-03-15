@@ -41,8 +41,9 @@ exports.createContract = async (req, res) => {
       depositId, // Optional
       tenantInfo, // { fullName, dob, cccd, phone, email, address, ... }
       coResidents, // Array
-      contractDetails, // { startDate, duration, services, paymentCycle }
+      contractDetails, // { startDate, duration, services, paymentCycle, rentPaidUntil }
       bookServices, // NEW: array of { serviceId, name, price, type, category, quantity }
+      rentPaidUntil, // Can be sent directly at root or inside contractDetails
     } = req.body;
 
     // 1. Validate Room Status (populate roomTypeId to get price)
@@ -163,6 +164,7 @@ exports.createContract = async (req, res) => {
       coResidents,
       startDate: contractDetails.startDate,
       endDate: endDate,
+      rentPaidUntil: rentPaidUntil || contractDetails.rentPaidUntil || null,
       duration: contractDetails.duration,
       status: "active",
       images: req.body.images || [],

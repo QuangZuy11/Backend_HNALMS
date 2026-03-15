@@ -6,25 +6,6 @@ const mongoose = require("mongoose");
 
 const buildingRulesSchema = new mongoose.Schema(
   {
-    title: {
-      type: String,
-      required: true,
-      default: "Nội Quy Tòa Nhà",
-    },
-    description: {
-      type: String,
-      required: true,
-    },
-    importantNotice: {
-      title: {
-        type: String,
-        default: "Thông Báo Quan Trọng",
-      },
-      content: {
-        type: String,
-        required: true,
-      },
-    },
     categories: [
       {
         title: {
@@ -34,7 +15,15 @@ const buildingRulesSchema = new mongoose.Schema(
         icon: {
           type: String,
           required: true,
-          enum: ["Clock", "Home", "Shield", "Users", "Zap", "AlertCircle"],
+          enum: [
+            "Clock",
+            "Home",
+            "Shield",
+            "Users",
+            "Zap",
+            "AlertCircle",
+            "Truck",
+          ],
         },
         rules: [
           {
@@ -56,14 +45,6 @@ const buildingRulesSchema = new mongoose.Schema(
         },
       },
     ],
-    contact: {
-      phone: {
-        type: String,
-      },
-      zalo: {
-        type: String,
-      },
-    },
     status: {
       type: String,
       enum: ["active", "inactive"],
@@ -75,6 +56,10 @@ const buildingRulesSchema = new mongoose.Schema(
   },
 );
 
-const BuildingRules = mongoose.model("BuildingRules", buildingRulesSchema);
+const BuildingRules = mongoose.model(
+  "BuildingRules",
+  buildingRulesSchema,
+  "policies",
+);
 
 module.exports = BuildingRules;

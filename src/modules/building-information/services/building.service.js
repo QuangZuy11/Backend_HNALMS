@@ -41,7 +41,7 @@ const getAllRules = async () => {
  */
 const getRuleById = async (id) => {
   try {
-    const rule = await BuildingRules.findById(id).lean();
+    const rule = await BuildingRules.collection.findOne({ _id: id });
 
     if (!rule) {
       throw new Error("Building rule not found");
@@ -60,9 +60,43 @@ const getRuleById = async (id) => {
  */
 const createRules = async (rulesData) => {
   try {
+    // Kiểm tra đã có document nào tồn tại chưa
+    const existing = await BuildingRules.findOne().lean();
+
+    if (existing) {
+      // Nếu đã có thì thêm (push) vào mảng cũ
+      const pushData = {};
+      if (rulesData.categories && rulesData.categories.length > 0) {
+        pushData.categories = {
+          $each: rulesData.categories.map(({ _id, ...cat }) => cat),
+        };
+      }
+      if (rulesData.guidelines && rulesData.guidelines.length > 0) {
+        pushData.guidelines = {
+          $each: rulesData.guidelines.map(({ _id, ...g }) => g),
+        };
+      }
+
+      const updateOps = {};
+      if (Object.keys(pushData).length > 0) {
+        updateOps.$push = pushData;
+      }
+      if (rulesData.status) {
+        updateOps.$set = { status: rulesData.status };
+      }
+
+      // Dùng native collection để tránh lỗi cast _id
+      const result = await BuildingRules.collection.findOneAndUpdate(
+        { _id: existing._id },
+        updateOps,
+        { returnDocument: "after" },
+      );
+      return result;
+    }
+
+    // Nếu chưa có thì tạo mới
     const newRules = new BuildingRules(rulesData);
     await newRules.save();
-
     return newRules;
   } catch (error) {
     throw new Error(`Error creating building rules: ${error.message}`);
@@ -77,10 +111,20 @@ const createRules = async (rulesData) => {
  */
 const updateRules = async (id, updateData) => {
   try {
-    const updatedRules = await BuildingRules.findByIdAndUpdate(
-      id,
-      { $set: updateData },
-      { new: true, runValidators: true },
+    const { _id, __v, createdAt, updatedAt, ...safeData } = updateData;
+
+    // Strip _id from subdocuments to avoid conflicts
+    if (safeData.categories) {
+      safeData.categories = safeData.categories.map(({ _id, ...cat }) => cat);
+    }
+    if (safeData.guidelines) {
+      safeData.guidelines = safeData.guidelines.map(({ _id, ...g }) => g);
+    }
+
+    const updatedRules = await BuildingRules.collection.findOneAndUpdate(
+      { _id: id },
+      { $set: safeData },
+      { returnDocument: "after" },
     );
 
     if (!updatedRules) {
@@ -100,7 +144,9 @@ const updateRules = async (id, updateData) => {
  */
 const deleteRules = async (id) => {
   try {
-    const deletedRules = await BuildingRules.findByIdAndDelete(id);
+    const deletedRules = await BuildingRules.collection.findOneAndDelete({
+      _id: id,
+    });
 
     if (!deletedRules) {
       throw new Error("Building rule not found");
