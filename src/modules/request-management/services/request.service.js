@@ -646,7 +646,7 @@ const updateRepairRequestStatus = async (
         amount,
         title,
         referenceId: request._id,
-        status: "Created",
+        status: "Pending",
         transactionDate: new Date(),
         paymentVoucher: voucherCode,
       });

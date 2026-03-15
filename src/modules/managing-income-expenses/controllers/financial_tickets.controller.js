@@ -80,11 +80,11 @@ const getNextPaymentVoucherCode = async (_req, res) => {
 /**
  * POST /api/financial-tickets/payments
  * Tạo phiếu chi thủ công cho manager nhập liệu
- * Body: { title, amount, status: "Pending" | "Paid" | "Cancelled" }
+ * Body: { title, amount }
  */
 const createManualPaymentTicket = async (req, res) => {
   try {
-    const { title, amount, status } = req.body || {};
+    const { title, amount } = req.body || {};
 
     if (!title || !String(title).trim()) {
       return res.status(400).json({
@@ -101,25 +101,16 @@ const createManualPaymentTicket = async (req, res) => {
       });
     }
 
-    const allowed = ["Pending", "Paid", "Cancelled"];
-    if (!allowed.includes(status)) {
-      return res.status(400).json({
-        success: false,
-        message:
-          'Trạng thái không hợp lệ. Chỉ chấp nhận "Pending", "Paid" hoặc "Cancelled".',
-      });
-    }
-
     const paymentVoucher = await getNextManualPaymentVoucher();
 
     const newTicket = await FinancialTicket.create({
       type: "Payment",
       amount: amountNumber,
       title: String(title).trim(),
-      status,
+      status: paymentVoucher?.startsWith("PAY-") ? "Pending" : "Created",
       paymentVoucher,
       transactionDate: new Date(),
-      accountantPaidAt: status === "Paid" ? new Date() : null,
+      accountantPaidAt: null,
       referenceId: null,
     });
 
@@ -451,6 +442,16 @@ const updatePaymentTicketStatus = async (req, res) => {
           ticket.type === "Payment"
             ? 'Trạng thái không hợp lệ. Chỉ chấp nhận "Pending", "Paid" hoặc "Cancelled".'
             : 'Trạng thái không hợp lệ. Chỉ chấp nhận "Paid" hoặc "Unpaid".',
+      });
+    }
+
+    if (
+      ticket.type === "Payment" &&
+      !["Pending", "Created"].includes(ticket.status)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Phiếu chi đã được xử lý, không thể cập nhật lại.",
       });
     }
 
