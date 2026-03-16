@@ -92,53 +92,76 @@ exports.createContract = async (req, res) => {
       );
     }
 
-    // 2. Always Create New Tenant Account
-    const passwordRaw = generateRandomString(8);
-    const hashedPassword = await bcrypt.hash(passwordRaw, 10);
+    // 2. Handle Tenant Account (Optimal Check)
+    // Check by Phone Number first - this is the strongest identifier for a person in VN
+    let user = await User.findOne({ phoneNumber: tenantInfo.phone }).session(session);
 
-    // Generate Username: email prefix + room name (sanitized)
-    const emailPrefix = tenantInfo.email.split("@")[0];
-    const roomNameSanitized = room.name
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/đ/g, "d")
-      .replace(/Đ/g, "D")
-      .replace(/[^a-zA-Z0-9]/g, "");
-    let finalUsername = `${emailPrefix}${roomNameSanitized}`;
+    let isNewUser = false;
+    let passwordRaw = null;
 
-    // Ensure username is unique
-    const existingUser = await User.findOne({
-      username: finalUsername,
-    }).session(session);
-    if (existingUser) {
-      finalUsername = `${finalUsername}${Math.floor(100 + Math.random() * 900)}`;
+    if (user) {
+      // If user exists by phone, we STRICTLY require the provided email to match what's in DB
+      if (user.email !== tenantInfo.email) {
+         throw new Error(`Khách hàng với số điện thoại này đã tồn tại, nhưng email không khớp. Vui lòng sử dụng đúng email cũ của khách hàng này để tiếp tục tạo hợp đồng.`);
+      }
+      console.log(`[CREATE CONTRACT] Existing User found by Phone: ID=${user._id}, phone=${user.phoneNumber}`);
+    } else {
+      // No user found by phone. 
+      // Now check if the Email is already in use by someone else
+      const emailInUse = await User.findOne({ email: tenantInfo.email }).session(session);
+      if (emailInUse) {
+         throw new Error(`Email "${tenantInfo.email}" đã tồn tại trong hệ thống nhưng thuộc về một số điện thoại khác. Vui lòng kiểm tra lại thông tin khách hàng.`);
+      }
+
+      // Safe to create new user
+      isNewUser = true;
+
+      passwordRaw = generateRandomString(8);
+      const hashedPassword = await bcrypt.hash(passwordRaw, 10);
+
+      // Generate Username: email prefix
+      let finalUsername = tenantInfo.email.split("@")[0];
+
+      // Ensure username is unique
+      let existingUserByUsername = await User.findOne({
+        username: finalUsername,
+      }).session(session);
+      
+      let tempUsername = finalUsername;
+      while (existingUserByUsername) {
+        tempUsername = `${finalUsername}${Math.floor(100 + Math.random() * 900)}`;
+        existingUserByUsername = await User.findOne({
+          username: tempUsername,
+        }).session(session);
+      }
+      finalUsername = tempUsername;
+
+      console.log(
+        `[CREATE USER] Creating new Tenant: email=${tenantInfo.email}, phone=${tenantInfo.phone}, username=${finalUsername}`,
+      );
+
+      user = new User({
+        username: finalUsername,
+        email: tenantInfo.email,
+        phoneNumber: tenantInfo.phone,
+        password: hashedPassword,
+        role: "Tenant",
+        status: "active",
+      });
+      await user.save({ session });
+      console.log(`[CREATE USER] ✅ New Tenant created with ID: ${user._id}`);
+
+      // Create UserInfo
+      const userInfo = new UserInfo({
+        userId: user._id,
+        fullname: tenantInfo.fullName,
+        cccd: tenantInfo.cccd,
+        address: tenantInfo.address,
+        dob: tenantInfo.dob,
+        gender: tenantInfo.gender || "Other",
+      });
+      await userInfo.save({ session });
     }
-
-    console.log(
-      `[CREATE USER] Creating new Tenant: email=${tenantInfo.email}, phone=${tenantInfo.phone}, username=${finalUsername}`,
-    );
-
-    const user = new User({
-      username: finalUsername,
-      email: tenantInfo.email,
-      phoneNumber: tenantInfo.phone,
-      password: hashedPassword,
-      role: "Tenant",
-      status: "active",
-    });
-    await user.save({ session });
-    console.log(`[CREATE USER] ✅ New Tenant created with ID: ${user._id}`);
-
-    // Create UserInfo
-    const userInfo = new UserInfo({
-      userId: user._id,
-      fullname: tenantInfo.fullName,
-      cccd: tenantInfo.cccd,
-      address: tenantInfo.address,
-      dob: tenantInfo.dob,
-      gender: tenantInfo.gender || "Other",
-    });
-    await userInfo.save({ session });
 
     // 3. Find the Deposit linked to this room (status = "Held")
     let linkedDepositId = depositId || null;
@@ -197,41 +220,47 @@ exports.createContract = async (req, res) => {
     session.endSession();
 
     // 6. Send Email Notification to the tenant's email from the form (NOT user.email from DB)
-    const recipientEmail = tenantInfo.email;
-    console.log(`[DEBUG] Preparing to send email to ${recipientEmail}`);
-    const emailContent = EMAIL_TEMPLATES.NEW_CONTRACT_ACCOUNT.getHtml(
-      tenantInfo.fullName,
-      user.username,
-      passwordRaw,
-      room.name,
-    );
+    if (isNewUser) {
+      const recipientEmail = tenantInfo.email;
+      console.log(`[DEBUG] Preparing to send email to ${recipientEmail}`);
+      const emailContent = EMAIL_TEMPLATES.NEW_CONTRACT_ACCOUNT.getHtml(
+        tenantInfo.fullName,
+        user.username,
+        passwordRaw,
+        room.name,
+      );
 
-    try {
-      await sendEmail(
-        recipientEmail,
-        EMAIL_TEMPLATES.NEW_CONTRACT_ACCOUNT.subject,
-        emailContent,
-      );
-      console.log(`✅ [DEBUG] Email successfully sent to ${recipientEmail}`);
-    } catch (emailError) {
-      console.error(
-        `❌ [DEBUG] Failed to send email to ${user.email}:`,
-        emailError,
-      );
-      // We don't throw here to ensure the contract creation success is still returned,
-      // but we might want to warn the user in the response if critical.
+      try {
+        await sendEmail(
+          recipientEmail,
+          EMAIL_TEMPLATES.NEW_CONTRACT_ACCOUNT.subject,
+          emailContent,
+        );
+        console.log(`✅ [DEBUG] Email successfully sent to ${recipientEmail}`);
+      } catch (emailError) {
+        console.error(
+          `❌ [DEBUG] Failed to send email to ${user.email}:`,
+          emailError,
+        );
+        // We don't throw here to ensure the contract creation success is still returned,
+        // but we might want to warn the user in the response if critical.
+      }
+    } else {
+      console.log(`[DEBUG] User existing. Skipping new account email.`);
     }
 
     res.status(201).json({
       success: true,
-      message:
-        "Contract created successfully. Account credentials sent to email.",
+      message: isNewUser 
+        ? "Đã tạo hợp đồng thành công. Tài khoản và mật khẩu đã được gửi đến email."
+        : "Tài khoản cho số điện thoại/email này đã tồn tại nên không tạo mới, hợp đồng đã được tạo thành công!",
       data: {
+        isNewUser,
         contract: newContract,
-        account: {
+        account: isNewUser ? {
           username: user.username,
           password: passwordRaw,
-        },
+        } : null,
       },
     });
   } catch (error) {
