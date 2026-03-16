@@ -71,4 +71,7 @@ ApiRouter.use("/financial-tickets", financialTicketRoutes);
 const roomDepositRoutes = require("../../modules/room-floor-management/routes/deposit-room.routes");
 ApiRouter.use("/deposits", roomDepositRoutes);
 
+const notificationRoutes = require("../../modules/notification-management/routes/notification.routes");
+ApiRouter.use("/notifications", notificationRoutes);
+
 module.exports = ApiRouter;
