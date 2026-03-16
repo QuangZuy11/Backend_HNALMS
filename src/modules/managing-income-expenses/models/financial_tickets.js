@@ -49,6 +49,11 @@ const FinancialTicketSchema = new Schema(
       default: null,
       index: true,
     },
+    rejectionReason: {
+      type: String,
+      default: null,
+      trim: true,
+    },
     transactionDate: {
       type: Date,
       default: Date.now,
