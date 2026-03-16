@@ -6,9 +6,16 @@ const Contract = require("../../contract-management/models/contract.model");
 class MeterReadingService {
   // 1. NHẬP CHỈ SỐ MỚI VÀ CẬP NHẬT TRỰC TIẾP VÀO HÓA ĐƠN NHÁP
   async enterReading(data) {
-    const usageAmount = data.newIndex - data.oldIndex;
+    // [ĐÃ SỬA] - Tính toán có tính đến trường hợp Reset đồng hồ (vòng qua 999999)
+    let usageAmount = data.newIndex - data.oldIndex;
+    
+    if (data.isReset && usageAmount < 0) {
+      const maxLimit = data.maxIndex || 100000; 
+      usageAmount = maxLimit - data.oldIndex + data.newIndex;
+    }
+
     if (usageAmount < 0) {
-      throw new Error("Chỉ số mới không được nhỏ hơn chỉ số cũ");
+      throw new Error("Chỉ số mới không được nhỏ hơn chỉ số cũ (Trừ khi đồng hồ quay vòng)");
     }
 
     // 1. Lưu lịch sử ghi chỉ số vào bảng MeterReading
@@ -44,7 +51,7 @@ class MeterReadingService {
     const startOfMonth = new Date(year, month - 1, 1);
     const endOfMonth = new Date(year, month, 0, 23, 59, 59);
 
-    // [ĐÃ SỬA] 3. Tìm Hợp đồng (Bao gồm cả hợp đồng vừa chấm dứt trong tháng này)
+    // 3. Tìm Hợp đồng (Bao gồm cả hợp đồng vừa chấm dứt trong tháng này)
     const targetContract = await Contract.findOne({ 
       roomId: data.roomId, 
       startDate: { $lte: endOfMonth },
@@ -109,9 +116,16 @@ class MeterReadingService {
     const oldIndex = data.oldIndex !== undefined ? data.oldIndex : reading.oldIndex;
     const newIndex = data.newIndex !== undefined ? data.newIndex : reading.newIndex;
     
-    const newUsageAmount = newIndex - oldIndex;
+    // [ĐÃ SỬA] - Tính toán cập nhật khi Edit cũng hỗ trợ Reset đồng hồ
+    let newUsageAmount = newIndex - oldIndex;
+    
+    if (data.isReset && newUsageAmount < 0) {
+      const maxLimit = data.maxIndex || 100000;
+      newUsageAmount = maxLimit - oldIndex + newIndex;
+    }
+
     if (newUsageAmount < 0) {
-      throw new Error("Chỉ số mới không được nhỏ hơn chỉ số cũ");
+      throw new Error("Chỉ số mới không được nhỏ hơn chỉ số cũ (Trừ khi đồng hồ quay vòng)");
     }
 
     const usageDifference = newUsageAmount - reading.usageAmount;
@@ -134,7 +148,6 @@ class MeterReadingService {
       const startOfMonth = new Date(year, month - 1, 1);
       const endOfMonth = new Date(year, month, 0, 23, 59, 59);
 
-      // [ĐÃ SỬA] Lấy hợp đồng (bao gồm cả hợp đồng vừa chấm dứt)
       const targetContract = await Contract.findOne({ 
         roomId: reading.roomId, 
         startDate: { $lte: endOfMonth },
@@ -168,7 +181,6 @@ class MeterReadingService {
              }
           }
 
-          // Tính lại tổng tiền cho chắc ăn
           draftInvoice.totalAmount = draftInvoice.items.reduce((sum, item) => sum + (item.amount || 0), 0);
           if (draftInvoice.totalAmount < 0) draftInvoice.totalAmount = 0; 
           await draftInvoice.save();
@@ -204,7 +216,6 @@ class MeterReadingService {
     const startOfMonth = new Date(year, month - 1, 1);
     const endOfMonth = new Date(year, month, 0, 23, 59, 59);
 
-    // [ĐÃ SỬA] Tìm hợp đồng (Bao gồm cả hợp đồng vừa chấm dứt)
     const targetContract = await Contract.findOne({ 
       roomId: reading.roomId, 
       startDate: { $lte: endOfMonth },

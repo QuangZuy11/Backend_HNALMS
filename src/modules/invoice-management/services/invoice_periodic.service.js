@@ -37,7 +37,6 @@ class InvoicePeriodicService {
     const startOfMonth = new Date(year, month - 1, 1);
     const endOfMonth = new Date(year, month, 0, 23, 59, 59);
 
-    // [ĐÃ FIX]: Lấy cả hợp đồng đang active VÀ hợp đồng vừa kết thúc trong tháng này
     const activeContracts = await Contract.find({
       startDate: { $lte: endOfMonth },
       $or: [
@@ -123,7 +122,7 @@ class InvoicePeriodicService {
       const invoiceItems = [];
 
       // ==============================================================
-      // TÍNH TIỀN PHÒNG (TRẢ TRƯỚC 2 THÁNG & CẮT NGÀY LẺ)
+      // TÍNH TIỀN PHÒNG (ĐÃ FIX LỖI BỎ QUA NGÀY LẺ THÁNG ĐẦU TIÊN)
       // ==============================================================
       if (contract.rentPaidUntil) {
         const rpuDate = new Date(contract.rentPaidUntil);
@@ -131,60 +130,77 @@ class InvoicePeriodicService {
         
         const eomDate = new Date(endOfMonth);
         eomDate.setHours(0, 0, 0, 0);
+        
+        const cStartDate = new Date(contract.startDate);
+        cStartDate.setHours(0,0,0,0);
 
-        // NẾU NGÀY ĐÁO HẠN NHỎ HƠN HOẶC BẰNG CUỐI THÁNG NÀY -> ĐẾN HẠN PHẢI THU TIỀN PHÒNG!
-        if (rpuDate <= eomDate) {
-          
-          // Bắt đầu tính tiền từ ngày liền sau ngày rentPaidUntil
-          let startCalc = new Date(rpuDate);
-          startCalc.setDate(startCalc.getDate() + 1);
-          startCalc.setHours(0, 0, 0, 0);
-
-          let targetUntilDate;
-
-          // CASE 1: Khách vào giữa tháng (Ví dụ: startCalc = 15/03, đang tính hóa đơn cuối tháng 3)
-          if (startCalc.getMonth() === (month - 1) && startCalc.getFullYear() === year && startCalc.getDate() !== 1) {
+        // CASE 1: LÀ THÁNG ĐẦU TIÊN KÝ HỢP ĐỒNG VÀ KÝ GIỮA THÁNG (Tính ngày lẻ)
+        if (cStartDate.getMonth() === (month - 1) && cStartDate.getFullYear() === year && cStartDate.getDate() !== 1) {
             
-            const daysUsed = Math.round((eomDate - startCalc) / (1000 * 60 * 60 * 24)) + 1;
+            const daysUsed = Math.round((eomDate - cStartDate) / (1000 * 60 * 60 * 24)) + 1;
             const pricePerDay = parsedPrice / daysInMonth;
             const roomRentAmount = pricePerDay * daysUsed;
             
-            targetUntilDate = new Date(eomDate); // Chỉ gia hạn đến cuối tháng hiện tại
-            
             invoiceItems.push({
-              itemName: `Tiền thuê phòng (${daysUsed} ngày lẻ từ ${formatVN(startCalc)} đến ${formatVN(eomDate)}) [Gia hạn đến ${formatVN(targetUntilDate)}]`,
+              itemName: `Tiền thuê phòng (Từ ${formatVN(cStartDate)} đến ${formatVN(eomDate)})`,
               usage: daysUsed,
               unitPrice: pricePerDay,
               amount: roomRentAmount,
               isIndex: false
             });
             totalAmount += roomRentAmount;
-          } 
-          // CASE 2: Đã đến hạn nộp chu kỳ mới (Thu 2 tháng gối đầu)
-          else {
-            targetUntilDate = new Date(startCalc);
-            targetUntilDate.setMonth(targetUntilDate.getMonth() + 2); // Cộng 2 tháng
-            targetUntilDate.setDate(0); // Lùi về ngày cuối cùng của tháng đó
-            
-            const roomRentAmount = parsedPrice * 2;
-            
-            const sm = startCalc.getMonth() + 1;
-            const sy = startCalc.getFullYear();
-            const em = targetUntilDate.getMonth() + 1;
-            const ey = targetUntilDate.getFullYear();
-
-            const periodStr = (sm === em && sy === ey) ? `Tháng ${sm}/${sy}` : `Tháng ${sm}/${sy} và Tháng ${em}/${ey}`;
-
-            invoiceItems.push({
-              itemName: `Tiền thuê phòng trả trước 2 tháng (${periodStr}) [Gia hạn đến ${formatVN(targetUntilDate)}]`,
-              usage: 2,
-              unitPrice: parsedPrice,
-              amount: roomRentAmount,
-              isIndex: false
-            });
-            totalAmount += roomRentAmount;
-          }
+        } 
+        // CASE 2: CÁC THÁNG BÌNH THƯỜNG KHÁC
+        else {
+            // NẾU ĐÃ ĐẾN HẠN TRẢ TIỀN (rpuDate <= eomDate) -> THU GỐI ĐẦU 2 THÁNG
+            if (rpuDate <= eomDate) {
+              let startCalc = new Date(rpuDate);
+              startCalc.setDate(startCalc.getDate() + 1);
+              startCalc.setHours(0, 0, 0, 0);
+              
+              let targetUntilDate = new Date(startCalc);
+              targetUntilDate.setMonth(targetUntilDate.getMonth() + 2); // Chu kỳ thu 2 tháng
+              targetUntilDate.setDate(0); // Lùi về ngày cuối tháng
+              
+              const roomRentAmount = parsedPrice * 2;
+              
+              const sm = startCalc.getMonth() + 1;
+              const sy = startCalc.getFullYear();
+              const em = targetUntilDate.getMonth() + 1;
+              const ey = targetUntilDate.getFullYear();
+  
+              const periodStr = (sm === em && sy === ey) ? `Tháng ${sm}/${sy}` : `Tháng ${sm}/${sy} và Tháng ${em}/${ey}`;
+  
+              invoiceItems.push({
+                itemName: `Tiền thuê phòng trả trước 2 tháng (${periodStr}) [Gia hạn đến ${formatVN(targetUntilDate)}]`,
+                usage: 2,
+                unitPrice: parsedPrice,
+                amount: roomRentAmount,
+                isIndex: false
+              });
+              totalAmount += roomRentAmount;
+            } 
+            // NẾU VẪN TRONG THỜI GIAN ĐÃ THANH TOÁN -> TIỀN PHÒNG = 0đ
+            else {
+              invoiceItems.push({
+                itemName: `Tiền thuê phòng (Đã thanh toán trước đến ${formatVN(rpuDate)})`,
+                usage: 1,
+                unitPrice: 0,
+                amount: 0,
+                isIndex: false
+              });
+            }
         }
+      } else {
+        // Backup cho hợp đồng cũ chưa có rentPaidUntil
+        invoiceItems.push({
+          itemName: `Tiền thuê phòng (Hợp đồng chưa thiết lập mốc thanh toán)`,
+          usage: 1,
+          unitPrice: parsedPrice,
+          amount: parsedPrice,
+          isIndex: false
+        });
+        totalAmount += parsedPrice;
       }
 
       // ==============================================================
@@ -283,7 +299,8 @@ class InvoicePeriodicService {
       };
     });
 
-    const validInvoicesToCreate = invoicesToCreate.filter(inv => inv.items.length > 0 && inv.totalAmount > 0);
+    // Cho phép tạo Hóa đơn 0đ để còn nhập số điện nước
+    const validInvoicesToCreate = invoicesToCreate.filter(inv => inv.items.length > 0);
 
     if (validInvoicesToCreate.length === 0) {
       throw new Error(`Không có hóa đơn hợp lệ nào được tạo.`);
@@ -308,24 +325,20 @@ class InvoicePeriodicService {
     if (!invoice) throw new Error("Không tìm thấy hóa đơn này.");
     if (invoice.status !== "Unpaid") throw new Error("Chỉ có thể xác nhận thanh toán cho hóa đơn đang ở trạng thái 'Chưa thu' (Unpaid).");
 
-    // =========================================================================
     // ĐỌC THÔNG TIN TỪ HÓA ĐƠN ĐỂ GIA HẠN NGÀY RENT_PAID_UNTIL CHO HỢP ĐỒNG
-    // =========================================================================
     const contract = await Contract.findById(invoice.contractId);
     if (contract) {
       let isContractUpdated = false;
 
       invoice.items.forEach(item => {
-        // Dùng Regex để quét tìm thẻ tag ẩn mà ta đã gài vào lúc tạo nháp
         const match = item.itemName.match(/\[Gia hạn đến (\d{2})\/(\d{2})\/(\d{4})\]/);
         if (match) {
           const dd = parseInt(match[1], 10);
-          const mm = parseInt(match[2], 10) - 1; // JS lưu tháng từ 0-11
+          const mm = parseInt(match[2], 10) - 1; 
           const yyyy = parseInt(match[3], 10);
           
           const newDate = new Date(yyyy, mm, dd, 23, 59, 59);
           
-          // Đảm bảo chỉ tịnh tiến ngày về phía trước, không vô tình lùi ngày
           if (!contract.rentPaidUntil || newDate > new Date(contract.rentPaidUntil)) {
             contract.rentPaidUntil = newDate;
             isContractUpdated = true;
@@ -338,7 +351,6 @@ class InvoicePeriodicService {
       }
     }
 
-    // Đánh dấu Hóa đơn là đã thanh toán
     invoice.status = "Paid";
     await invoice.save();
     return invoice;
