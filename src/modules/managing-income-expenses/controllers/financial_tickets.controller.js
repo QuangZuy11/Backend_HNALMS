@@ -420,7 +420,7 @@ const createManualReceiptTicket = async (req, res) => {
 const updatePaymentTicketStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status } = req.body || {};
+    const { status, paymentVoucher, rejectionReason } = req.body || {};
 
     const ticket = await FinancialTicket.findById(id).lean();
     if (!ticket) {
@@ -432,7 +432,7 @@ const updatePaymentTicketStatus = async (req, res) => {
 
     const allowed =
       ticket.type === "Payment"
-        ? ["Pending", "Paid", "Cancelled"]
+        ? ["Pending", "Approved", "Paid", "Rejected"]
         : ["Paid", "Unpaid"];
 
     if (!allowed.includes(status)) {
@@ -440,19 +440,39 @@ const updatePaymentTicketStatus = async (req, res) => {
         success: false,
         message:
           ticket.type === "Payment"
-            ? 'Trạng thái không hợp lệ. Chỉ chấp nhận "Pending", "Paid" hoặc "Cancelled".'
+            ? 'Trạng thái không hợp lệ. Chỉ chấp nhận "Pending", "Approved", "Paid" hoặc "Cancelled".'
             : 'Trạng thái không hợp lệ. Chỉ chấp nhận "Paid" hoặc "Unpaid".',
       });
     }
 
-    if (
-      ticket.type === "Payment" &&
-      !["Pending", "Created"].includes(ticket.status)
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: "Phiếu chi đã được xử lý, không thể cập nhật lại.",
-      });
+    if (ticket.type === "Payment") {
+      if (["Paid", "Rejected"].includes(ticket.status)) {
+        return res.status(400).json({
+          success: false,
+          message: "Phiếu chi đã được xử lý, không thể cập nhật lại.",
+        });
+      }
+
+      if (req.user?.role === "owner" && status !== "Approved" && status !== "Rejected") {
+        return res.status(403).json({
+          success: false,
+          message: "Chủ nhà chỉ được duyệt hoặc từ chối phiếu chi.",
+        });
+      }
+
+      if (req.user?.role === "accountant" && status !== "Paid") {
+        return res.status(403).json({
+          success: false,
+          message: "Kế toán chỉ được xác nhận đã thanh toán phiếu chi.",
+        });
+      }
+
+      if (status === "Rejected" && !String(rejectionReason || "").trim()) {
+        return res.status(400).json({
+          success: false,
+          message: "Vui lòng nhập lý do từ chối phiếu chi.",
+        });
+      }
     }
 
     const updateQuery = {
@@ -461,10 +481,23 @@ const updatePaymentTicketStatus = async (req, res) => {
       },
     };
 
+    if (status === "Rejected") {
+      updateQuery.$set.rejectionReason = String(rejectionReason || "").trim();
+    }
+
     if (status === "Paid") {
       updateQuery.$set.accountantPaidAt = new Date();
-    } else if (ticket.type === "Payment") {
+      if (paymentVoucher) {
+        updateQuery.$set.paymentVoucher = paymentVoucher;
+      }
+    }
+
+    if (status !== "Paid" && ticket.type === "Payment") {
       updateQuery.$set.accountantPaidAt = null;
+    }
+
+    if (status !== "Rejected" && ticket.type === "Payment") {
+      updateQuery.$set.rejectionReason = null;
     }
 
     const updated = await FinancialTicket.findByIdAndUpdate(

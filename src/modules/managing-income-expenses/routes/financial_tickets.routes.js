@@ -61,11 +61,11 @@ router.get(
   financialTicketsController.getReceiptTickets
 );
 
-// Cập nhật trạng thái phiếu chi (Payment) - chỉ dành cho chủ nhà
+// Cập nhật trạng thái phiếu chi (Payment) - chủ nhà duyệt, kế toán xác nhận đã thanh toán
 router.patch(
   "/:id/status",
   authenticate,
-  authorize("owner"),
+  authorize("owner", "accountant", "admin"),
   financialTicketsController.updatePaymentTicketStatus
 );
 

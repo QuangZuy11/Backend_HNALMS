@@ -550,6 +550,11 @@ const updateRepairRequestStatus = async (
     throw new Error("Yêu cầu sửa chữa không tồn tại");
   }
 
+  // Fix dữ liệu cũ: paymentType bị lưu sai thành "Pending"
+  if (request.paymentType === "Pending") {
+    request.paymentType = null;
+  }
+
   // Luồng đặc biệt: khi manager hoàn thành "sửa chữa có phí" (status=Done + paymentType=REVENUE)
   // thì chuyển trạng thái request sang "Unpaid" (chờ thanh toán) và KHÔNG dùng paymentStatus.
   const nextStatus =
@@ -591,6 +596,11 @@ const updateRepairRequestStatus = async (
       request.paymentType = "REVENUE";
     } else if (status === "Done") {
       request.paymentType = financialTicketData ? "EXPENSE" : null;
+    }
+
+    // Tránh lưu sai giá trị paymentType
+    if (request.paymentType === "Pending") {
+      request.paymentType = null;
     }
 
     // 1. Tạo hóa đơn nếu frontend gửi kèm dữ liệu invoice (sửa chữa có phí cho cư dân)
