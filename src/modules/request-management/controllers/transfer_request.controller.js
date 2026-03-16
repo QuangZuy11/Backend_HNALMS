@@ -265,3 +265,26 @@ exports.rejectTransferRequest = async (req, res) => {
     res.status(status).json({ success: false, message: error.message || "Server error" });
   }
 };
+
+/**
+ * [MANAGER] Hoàn tất chuyển phòng (Bàn giao phòng)
+ * PATCH /api/requests/transfer/:id/complete
+ * Thực hiện khi ngày chuyển đã tới
+ */
+exports.completeTransferRequest = async (req, res) => {
+  try {
+    const result = await transferService.completeTransferRequest(req.params.id);
+    res.status(200).json({
+      success: true,
+      message: "Chuyển phòng hoàn tất thành công",
+      data: result,
+    });
+  } catch (error) {
+    console.error("Complete transfer request error:", error);
+    const status = error.status || 500;
+    res.status(status).json({
+      success: false,
+      message: error.message || "Server error",
+    });
+  }
+};

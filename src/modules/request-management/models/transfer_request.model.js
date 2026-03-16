@@ -59,6 +59,22 @@ const transferRequestSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+    // [MỚI] Thời gian hoàn tất chuyển phòng
+    completedAt: {
+      type: Date,
+      default: null,
+    },
+    // [MỚI] Ghi chú về xử lý chênh lệch tiền
+    prorationNote: {
+      type: String,
+      default: "",
+    },
+    // [MỚI] ID của hợp đồng mới được tạo sau khi hoàn tất chuyển phòng
+    newContractId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Contracts",
+      default: null,
+    },
     // Thông tin tính toán chênh lệch tiền thuê
     proration: {
       oldRoomPrice: { type: Number, default: 0 },       // Giá phòng cũ

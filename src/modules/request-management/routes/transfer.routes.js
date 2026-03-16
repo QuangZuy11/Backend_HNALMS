@@ -130,4 +130,16 @@ router.patch(
   transferController.cancelTransferRequest,
 );
 
+/**
+ * [MANAGER] Hoàn tất chuyển phòng (Bàn giao phòng)
+ * PATCH /api/requests/transfer/:id/complete
+ * Thực hiện khi ngày chuyển đã tới
+ */
+router.patch(
+  "/:id/complete",
+  authenticate,
+  authorize("manager"),
+  transferController.completeTransferRequest,
+);
+
 module.exports = router;
