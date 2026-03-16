@@ -691,12 +691,14 @@ const completeTransferRequest = async (requestId) => {
     );
     console.log(`✅ Phòng mới (${newRoom.name}) → Occupied`);
 
-    // 6. ĐÓNG HỢP ĐỒNG CŨ - Đặt endDate = ngày chuyển phòng
+    // 6. ĐÓNG HỢP ĐỒNG CŨ - Đặt endDate = ngày chuyển phòng - 1 (23h59p)
     oldContract.status = "terminated";
-    oldContract.endDate = transferDate; // ✅ Update ngày chuyển phòng vào endDate
+    const endDateForOldContract = new Date(transferDate.getTime() - 24 * 60 * 60 * 1000);
+    endDateForOldContract.setHours(23, 59, 59, 999); // ✅ Đặt thời gian thành 23:59:59
+    oldContract.endDate = endDateForOldContract; // ✅ Update ngày chuyển phòng - 1 vào endDate
     await oldContract.save({ session });
     console.log(`📋 Hợp đồng cũ (${oldContract.contractCode}) → terminated`);
-    console.log(`   - Ngày kết thúc: ${transferDate.toLocaleDateString("vi-VN")}`);
+    console.log(`   - Ngày kết thúc: ${endDateForOldContract.toLocaleString("vi-VN")}`);
 
     // 7. TẠO HỢP ĐỒNG MỚI
     const newContractCode = generateNewContractCode(newRoom.name);
