@@ -176,45 +176,8 @@ class NotificationController {
     async getMyNotifications(req, res) {
         try {
             const userId = req.user.userId;
-            const userRole = req.user.role;
+            const userRole = (req.user.role || '').toLowerCase();
             const { page = 1, limit = 20, is_read, status, outbound, search, fromDate, toDate } = req.query;
-
-            // Nếu là tenant thì chỉ lấy thông báo type = 'tenant', status = 'sent'
-            if (userRole === 'tenant') {
-                const Notification = require('../models/notification.model');
-                const skip = (parseInt(page) - 1) * parseInt(limit);
-                let matchCondition = {
-                    type: 'tenant',
-                    status: 'sent'
-                };
-                if (search) {
-                    matchCondition.title = { $regex: search, $options: 'i' };
-                }
-                if (fromDate || toDate) {
-                    matchCondition.createdAt = {};
-                    if (fromDate) matchCondition.createdAt.$gte = new Date(fromDate);
-                    if (toDate) matchCondition.createdAt.$lte = new Date(toDate);
-                }
-                const notifications = await Notification.find(matchCondition)
-                    .sort({ createdAt: -1 })
-                    .skip(skip)
-                    .limit(parseInt(limit))
-                    .select('title content type status createdAt updatedAt');
-                const total = await Notification.countDocuments(matchCondition);
-                return res.status(200).json({
-                    success: true,
-                    message: 'Lấy danh sách thông báo tenant thành công',
-                    data: {
-                        notifications,
-                        pagination: {
-                            current_page: parseInt(page),
-                            total_pages: Math.ceil(total / parseInt(limit)),
-                            total_count: total,
-                            limit: parseInt(limit)
-                        }
-                    }
-                });
-            }
 
             // Các role khác giữ nguyên
             const result = await notificationService.getUserNotifications(
@@ -249,9 +212,9 @@ class NotificationController {
         try {
             const { notificationId } = req.params;
             const userId = req.user.userId;
-            const userRole = req.user.role;
+            const userRole = (req.user.role || '').toLowerCase();
 
-            // Chỉ Manager/Accountant mới có thể đánh dấu đã đọc
+            // Chỉ Manager/Accountant mới có thể đánh dấu đã đọc (vì chỉ staff notifications track is_read trong recipients)
             if (userRole !== 'manager' && userRole !== 'accountant') {
                 return res.status(403).json({
                     success: false,
@@ -279,7 +242,7 @@ class NotificationController {
     async markAllAsRead(req, res) {
         try {
             const userId = req.user.userId;
-            const userRole = req.user.role;
+            const userRole = (req.user.role || '').toLowerCase();
 
             // Chỉ Manager/Accountant mới có thể đánh dấu tất cả đã đọc
             if (userRole !== 'manager' && userRole !== 'accountant') {

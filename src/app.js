@@ -26,6 +26,8 @@ app.use(morgan("dev"));
 // File upload middleware removed from global to prevent conflict with multer
 // Routes
 app.use("/api", ApiRouter);
+// Backward-compatible alias (so `/notifications/...` also works when testing in browser/Postman)
+app.use("/", ApiRouter);
 //login
 // Home route
 app.get("/", async (req, res) => {

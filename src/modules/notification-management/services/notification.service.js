@@ -7,7 +7,8 @@ class NotificationService {
     // Tạo thông báo nháp
     async createDraftNotification(userId, userRole, title, content) {
         try {
-            const type = userRole === 'owner' ? 'staff' : 'tenant';
+            const normalizedRole = (userRole || '').toLowerCase();
+            const type = normalizedRole === 'owner' ? 'staff' : 'tenant';
             const notification = new Notification({
                 title,
                 content,
@@ -90,10 +91,11 @@ class NotificationService {
     // Lấy danh sách thông báo theo role
     async getUserNotifications(userId, userRole, page = 1, limit = 20, isRead = null, status = null, outbound = false, search = null, fromDate = null, toDate = null) {
         try {
+            const normalizedRole = (userRole || '').toLowerCase();
             const skip = (page - 1) * limit;
             let matchCondition = {};
 
-            if (userRole === 'owner' || (userRole === 'manager' && outbound)) {
+            if (normalizedRole === 'owner' || (normalizedRole === 'manager' && outbound)) {
                 // Owner hoặc Manager xem tất cả thông báo do mình tạo (draft + sent), có thể filter theo status
                 matchCondition = { created_by: new mongoose.Types.ObjectId(userId) };
 
@@ -139,7 +141,7 @@ class NotificationService {
                     }
                 };
 
-            } else if (userRole === 'manager' || userRole === 'accountant') {
+            } else if (normalizedRole === 'manager' || normalizedRole === 'accountant') {
                 // Manager/Accountant xem thông báo staff đã được gửi
                 matchCondition = {
                     type: 'staff',
@@ -193,6 +195,41 @@ class NotificationService {
                     { $skip: skip },
                     { $limit: limit }
                 ]);
+
+                const total = await Notification.countDocuments(matchCondition);
+
+                return {
+                    notifications,
+                    pagination: {
+                        current_page: page,
+                        total_pages: Math.ceil(total / limit),
+                        total_count: total,
+                        limit
+                    }
+                };
+            } else if (normalizedRole === 'tenant') {
+                // Tenant xem thông báo tenant đã được gửi (từ Manager) cho TẤT CẢ tenant
+                // => không dùng recipients (không track is_read per-tenant trong mô hình này)
+                matchCondition = {
+                    type: 'tenant',
+                    status: 'sent'
+                };
+
+                if (search) {
+                    matchCondition.title = { $regex: search, $options: 'i' };
+                }
+
+                if (fromDate || toDate) {
+                    matchCondition.createdAt = {};
+                    if (fromDate) matchCondition.createdAt.$gte = new Date(fromDate);
+                    if (toDate) matchCondition.createdAt.$lte = new Date(toDate);
+                }
+
+                const notifications = await Notification.find(matchCondition)
+                    .sort({ createdAt: -1 })
+                    .skip(skip)
+                    .limit(limit)
+                    .select('title content type status createdAt updatedAt');
 
                 const total = await Notification.countDocuments(matchCondition);
 
@@ -289,7 +326,9 @@ class NotificationService {
     // Đếm số thông báo chưa đọc (chỉ cho Manager/Accountant)
     async getUnreadCount(userId, userRole) {
         try {
-            if (userRole === 'manager' || userRole === 'accountant') {
+            const normalizedRole = (userRole || '').toLowerCase();
+
+            if (normalizedRole === 'manager' || normalizedRole === 'accountant') {
                 const count = await Notification.countDocuments({
                     type: 'staff',
                     status: 'sent',
