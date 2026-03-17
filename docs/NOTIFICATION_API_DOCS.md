@@ -22,12 +22,12 @@ interface Notification {
     _id: string;
     title: string;                    // Max 200 ký tự
     content: string;                  // Max 1000 ký tự
-    type: 'staff' | 'system';         // staff: từ owner, system: từ hệ thống
+    type: 'staff' | 'system' | 'tenant'; // staff: owner->manager, tenant: manager->tenant
     status: 'draft' | 'sent' | 'archived';
     created_by: string;               // ObjectId của người tạo
     recipients: Array<{               // Chỉ có khi status = 'sent'
         recipient_id: string;
-        recipient_role: 'manager' | 'accountant';
+        recipient_role: 'manager' | 'accountant' | 'tenant';
         is_read: boolean;
         read_at: Date | null;
     }>;
@@ -49,13 +49,14 @@ interface ApiResponse<T> {
 
 | Role | Tạo thông báo nháp | Sửa/Xóa nháp | Phát hành | Nhận thông báo | Đánh dấu đã đọc |
 |------|:------------------:|:-------------:|:---------:|:--------------:|:---------------:|
-| Owner | ✅ | ✅ | ✅ | ✅ (do mình tạo) | ❌ |
-| Manager | ❌ | ❌ | ❌ | ✅ | ✅ |
-| Accountant | ❌ | ❌ | ❌ | ✅ | ✅ |
+| **Owner** | ✅ (gửi Staff) | ✅ | ✅ | ✅ (do mình tạo) | ❌ |
+| **Manager** | ✅ (gửi Tenant)| ✅ | ✅ | ✅ (từ Owner) | ✅ |
+| **Accountant** | ❌ | ❌ | ❌ | ✅ (từ Owner) | ✅ |
+| **Tenant** | ❌ | ❌ | ❌ | ✅ (từ Manager) | ✅ |
 
 ## 🚀 API Endpoints
 
-### 1. 📝 [Owner] Tạo thông báo nháp
+### 1. 📝 [Owner/Manager] Tạo thông báo nháp
 
 **POST** `/draft`
 
@@ -84,7 +85,7 @@ interface ApiResponse<T> {
 }
 ```
 
-### 2. ✏️ [Owner] Sửa thông báo nháp
+### 2. ✏️ [Owner/Manager] Sửa thông báo nháp
 
 **PUT** `/draft/:notificationId`
 
@@ -112,7 +113,7 @@ interface ApiResponse<T> {
 }
 ```
 
-### 3. 🗑️ [Owner] Xóa thông báo nháp
+### 3. 🗑️ [Owner/Manager] Xóa thông báo nháp
 
 **DELETE** `/draft/:notificationId`
 
@@ -126,7 +127,7 @@ interface ApiResponse<T> {
 }
 ```
 
-### 4. 🚀 [Owner] Phát hành thông báo
+### 4. 🚀 [Owner/Manager] Phát hành thông báo
 
 **POST** `/draft/:notificationId/publish`
 
@@ -165,7 +166,7 @@ interface ApiResponse<T> {
 }
 ```
 
-### 5. 📄 [Owner] Lấy danh sách thông báo nháp
+### 5. 📄 [Owner/Manager] Lấy danh sách thông báo nháp
 
 **GET** `/my-drafts`
 
@@ -209,11 +210,12 @@ interface ApiResponse<T> {
 {
     page?: number;              // Default: 1
     limit?: number;             // Default: 20, max: 100
-    is_read?: 'true' | 'false'; // Filter theo trạng thái đã đọc (chỉ Manager/Accountant)
-    status?: 'draft' | 'sent' | 'archived'; // Filter theo trạng thái (chỉ Owner, không truyền = lấy tất cả)
+    is_read?: 'true' | 'false'; // Filter theo trạng thái đã đọc (chỉ người nhận)
+    status?: 'draft' | 'sent' | 'archived'; // Filter theo trạng thái (chỉ người gửi)
+    outbound?: 'true' | 'false'; // (CHỈ DÀNH CHO MANAGER): truyền outbound=true để xem danh sách thông báo Manager đã gửi đi (draft + sent)
 }
 
-// Response cho Owner - xem tất cả thông báo do mình tạo (draft + sent)
+// Response cho Owner (hoặc Manager gọi với outbound=true) - xem tất cả thông báo do mình tạo (draft + sent)
 // Nếu truyền ?status=draft → chỉ lấy nháp
 // Nếu truyền ?status=sent  → chỉ lấy đã gửi
 // Không truyền status       → lấy tất cả
@@ -254,7 +256,7 @@ interface ApiResponse<T> {
     }
 }
 
-// Response cho Manager/Accountant - xem thông báo nhận được
+// Response cho Người Nhận (Manager/Accountant/Tenant) - xem thông báo nhận được từ người khác (gọi KHÔNG CÓ outbound=true)
 {
     success: true,
     message: "Lấy danh sách thông báo thành công",
@@ -276,7 +278,7 @@ interface ApiResponse<T> {
 }
 ```
 
-### 7. ✅ [Manager/Accountant] Đánh dấu đã đọc
+### 7. ✅ [Người Nhận] Đánh dấu đã đọc
 
 **PATCH** `/:notificationId/read`
 
@@ -297,7 +299,7 @@ interface ApiResponse<T> {
 }
 ```
 
-### 8. ✅ [Manager/Accountant] Đánh dấu tất cả đã đọc
+### 8. ✅ [Người Nhận] Đánh dấu tất cả đã đọc
 
 **PATCH** `/mark-all-read`
 

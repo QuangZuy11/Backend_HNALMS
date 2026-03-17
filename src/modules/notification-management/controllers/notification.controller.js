@@ -10,16 +10,17 @@ class NotificationController {
             const userId = req.user.userId;
             const userRole = req.user.role;
 
-            // Chỉ Owner mới được tạo thông báo
-            if (userRole !== 'owner') {
+            // Chỉ Owner hoặc Manager mới được tạo thông báo
+            if (userRole !== 'owner' && userRole !== 'manager') {
                 return res.status(403).json({
                     success: false,
-                    message: 'Chỉ Owner mới có quyền tạo thông báo'
+                    message: 'Chỉ Owner hoặc Manager mới có quyền tạo thông báo'
                 });
             }
 
             const notification = await notificationService.createDraftNotification(
                 userId,
+                userRole,
                 title,
                 content
             );
@@ -46,11 +47,11 @@ class NotificationController {
             const userId = req.user.userId;
             const userRole = req.user.role;
 
-            // Chỉ Owner mới được sửa thông báo
-            if (userRole !== 'owner') {
+            // Chỉ Owner hoặc Manager mới được sửa thông báo
+            if (userRole !== 'owner' && userRole !== 'manager') {
                 return res.status(403).json({
                     success: false,
-                    message: 'Chỉ Owner mới có quyền sửa thông báo'
+                    message: 'Chỉ Owner hoặc Manager mới có quyền sửa thông báo'
                 });
             }
 
@@ -82,11 +83,11 @@ class NotificationController {
             const userId = req.user.userId;
             const userRole = req.user.role;
 
-            // Chỉ Owner mới được xóa thông báo nháp
-            if (userRole !== 'owner') {
+            // Chỉ Owner hoặc Manager mới được xóa thông báo nháp
+            if (userRole !== 'owner' && userRole !== 'manager') {
                 return res.status(403).json({
                     success: false,
-                    message: 'Chỉ Owner mới có quyền xóa thông báo nháp'
+                    message: 'Chỉ Owner hoặc Manager mới có quyền xóa thông báo nháp'
                 });
             }
 
@@ -112,11 +113,11 @@ class NotificationController {
             const userId = req.user.userId;
             const userRole = req.user.role;
 
-            // Chỉ Owner mới được phát hành thông báo
-            if (userRole !== 'owner') {
+            // Chỉ Owner hoặc Manager mới được phát hành thông báo
+            if (userRole !== 'owner' && userRole !== 'manager') {
                 return res.status(403).json({
                     success: false,
-                    message: 'Chỉ Owner mới có quyền phát hành thông báo'
+                    message: 'Chỉ Owner hoặc Manager mới có quyền phát hành thông báo'
                 });
             }
 
@@ -143,11 +144,11 @@ class NotificationController {
             const userRole = req.user.role;
             const { page = 1, limit = 20 } = req.query;
 
-            // Chỉ Owner mới có thông báo nháp
-            if (userRole !== 'owner') {
+            // Chỉ Owner hoặc Manager mới có thông báo nháp
+            if (userRole !== 'owner' && userRole !== 'manager') {
                 return res.status(403).json({
                     success: false,
-                    message: 'Chỉ Owner mới có thông báo nháp'
+                    message: 'Chỉ Owner hoặc Manager mới có chức năng quản lý thông báo nháp'
                 });
             }
 
@@ -176,7 +177,7 @@ class NotificationController {
         try {
             const userId = req.user.userId;
             const userRole = req.user.role;
-            const { page = 1, limit = 20, is_read, status } = req.query;
+            const { page = 1, limit = 20, is_read, status, outbound, search, fromDate, toDate } = req.query;
 
             const result = await notificationService.getUserNotifications(
                 userId,
@@ -184,7 +185,11 @@ class NotificationController {
                 parseInt(page),
                 parseInt(limit),
                 is_read !== undefined ? is_read === 'true' : null,
-                status
+                status,
+                outbound === 'true',
+                search,
+                fromDate,
+                toDate
             );
 
             res.status(200).json({

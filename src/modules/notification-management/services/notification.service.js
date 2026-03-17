@@ -4,15 +4,16 @@ const mongoose = require('mongoose');
 
 class NotificationService {
 
-    // [Owner] Tạo thông báo nháp
-    async createDraftNotification(ownerId, title, content) {
+    // Tạo thông báo nháp
+    async createDraftNotification(userId, userRole, title, content) {
         try {
+            const type = userRole === 'owner' ? 'staff' : 'tenant';
             const notification = new Notification({
                 title,
                 content,
-                type: 'staff',
+                type: type,
                 status: 'draft',
-                created_by: ownerId,
+                created_by: userId,
                 recipients: [] // Sẽ được tạo khi publish
             });
 
@@ -23,12 +24,12 @@ class NotificationService {
         }
     }
 
-    // [Owner] Cập nhật thông báo nháp
-    async updateDraftNotification(notificationId, ownerId, title, content) {
+    // Cập nhật thông báo nháp
+    async updateDraftNotification(notificationId, userId, title, content) {
         try {
             const notification = await Notification.findOne({
                 _id: notificationId,
-                created_by: ownerId,
+                created_by: userId,
                 status: 'draft'
             });
 
@@ -46,12 +47,12 @@ class NotificationService {
         }
     }
 
-    // [Owner] Xóa thông báo nháp
-    async deleteDraftNotification(notificationId, ownerId) {
+    // Xóa thông báo nháp
+    async deleteDraftNotification(notificationId, userId) {
         try {
             const notification = await Notification.findOne({
                 _id: notificationId,
-                created_by: ownerId,
+                created_by: userId,
                 status: 'draft'
             });
 
@@ -66,12 +67,12 @@ class NotificationService {
         }
     }
 
-    // [Owner] Phát hành thông báo (chuyển từ draft sang sent)
-    async publishNotification(notificationId, ownerId) {
+    // Phát hành thông báo (chuyển từ draft sang sent)
+    async publishNotification(notificationId, userId) {
         try {
             const notification = await Notification.findOne({
                 _id: notificationId,
-                created_by: ownerId,
+                created_by: userId,
                 status: 'draft'
             });
 
@@ -87,17 +88,27 @@ class NotificationService {
     }
 
     // Lấy danh sách thông báo theo role
-    async getUserNotifications(userId, userRole, page = 1, limit = 20, isRead = null, status = null) {
+    async getUserNotifications(userId, userRole, page = 1, limit = 20, isRead = null, status = null, outbound = false, search = null, fromDate = null, toDate = null) {
         try {
             const skip = (page - 1) * limit;
             let matchCondition = {};
 
-            if (userRole === 'owner') {
-                // Owner xem tất cả thông báo do mình tạo (draft + sent), có thể filter theo status
+            if (userRole === 'owner' || (userRole === 'manager' && outbound)) {
+                // Owner hoặc Manager xem tất cả thông báo do mình tạo (draft + sent), có thể filter theo status
                 matchCondition = { created_by: new mongoose.Types.ObjectId(userId) };
 
                 if (status) {
                     matchCondition.status = status;
+                }
+
+                if (search) {
+                    matchCondition.title = { $regex: search, $options: 'i' };
+                }
+                
+                if (fromDate || toDate) {
+                    matchCondition.createdAt = {};
+                    if (fromDate) matchCondition.createdAt.$gte = new Date(fromDate);
+                    if (toDate) matchCondition.createdAt.$lte = new Date(toDate);
                 }
 
                 const notifications = await Notification.find(matchCondition)
@@ -138,6 +149,16 @@ class NotificationService {
 
                 if (isRead !== null) {
                     matchCondition['recipients.is_read'] = isRead;
+                }
+
+                if (search) {
+                    matchCondition.title = { $regex: search, $options: 'i' };
+                }
+                
+                if (fromDate || toDate) {
+                    matchCondition.createdAt = {};
+                    if (fromDate) matchCondition.createdAt.$gte = new Date(fromDate);
+                    if (toDate) matchCondition.createdAt.$lte = new Date(toDate);
                 }
 
                 const notifications = await Notification.aggregate([
@@ -193,12 +214,12 @@ class NotificationService {
         }
     }
 
-    // [Owner] Lấy danh sách thông báo nháp
-    async getOwnerDraftNotifications(ownerId, page = 1, limit = 20) {
+    // Lấy danh sách thông báo nháp
+    async getMyDraftNotifications(userId, page = 1, limit = 20) {
         try {
             const skip = (page - 1) * limit;
             const matchCondition = {
-                created_by: ownerId,
+                created_by: userId,
                 status: 'draft'
             };
 
