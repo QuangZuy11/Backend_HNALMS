@@ -631,6 +631,7 @@ const updateRepairRequestStatus = async (
         title,
         totalAmount,
         status: "Unpaid",
+        type: "repair",
         dueDate,
       });
 

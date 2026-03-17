@@ -65,6 +65,7 @@ incurredRouter.post("/", invoiceIncurredController.create); // Thêm route tạo
 incurredRouter.put("/:id/release", invoiceIncurredController.release); 
 incurredRouter.get("/tenant/:tenantId", invoiceIncurredController.getInvoicesByTenant); 
 incurredRouter.get("/my/:id", authenticate, invoiceIncurredController.getMyInvoiceById); 
+incurredRouter.get("/next-code", invoiceIncurredController.getNextCode);
 incurredRouter.get("/:id", invoiceIncurredController.getInvoiceById);
 incurredRouter.put("/:id/pay", invoiceIncurredController.payInvoice); // Gắn với hàm thanh toán phát sinh
 

@@ -1,41 +1,168 @@
 const InvoiceIncurred = require("../models/invoice_incurred.model");
 const Contract = require("../../contract-management/models/contract.model");
 const RepairRequest = require("../../request-management/models/repair_requests.model");
+const FinancialTicket = require("../../managing-income-expenses/models/financial_tickets");
+const UserInfo = require("../../authentication/models/userInfor.model");
 
-// Ghi chú: Nếu bạn có model ReceiptTicket ở module kế toán thì require vào đây
-// const ReceiptTicket = require("../../accounting/models/receipt_ticket.model"); 
+// Hàm sinh mã vi phạm VP-DDMMYYYY-XXXX (XXXX tăng dần theo ngày)
+const buildViolationCode = async () => {
+  const date = new Date();
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = date.getFullYear();
+  const datePrefix = `${day}${month}${year}`;
+
+  const lastInvoice = await InvoiceIncurred.findOne({
+    invoiceCode: { $regex: `^VP-${datePrefix}-` }
+  })
+    .sort({ createdAt: -1 })
+    .select('invoiceCode')
+    .lean();
+
+  const lastSeq = lastInvoice?.invoiceCode?.split('-')?.[2];
+  const nextSeq = String((parseInt(lastSeq || '0', 10) + 1)).padStart(4, '0');
+  return `VP-${datePrefix}-${nextSeq}`;
+}; 
 
 class InvoiceIncurredService {
   
+  async getNextViolationCode() {
+    return buildViolationCode();
+  }
+
   // 1. LẤY DANH SÁCH HÓA ĐƠN PHÁT SINH
-  async getInvoices(query = {}) {
-    return await InvoiceIncurred.find(query)
+  async getInvoices({ status, page = 1, limit = 10, type } = {}) {
+    const parsedPage = Number(page) || 1;
+    const parsedLimit = Number(limit) || 10;
+    const skip = (parsedPage - 1) * parsedLimit;
+
+    const query = {};
+    if (status) {
+      query.status = status;
+    }
+    if (type) {
+      query.type = type;
+    }
+
+    const total = await InvoiceIncurred.countDocuments(query);
+    const rawInvoices = await InvoiceIncurred.find(query)
       .populate({
         path: "contractId",
         select: "contractCode roomId tenantId",
-        populate: { path: "roomId", select: "name floorId" }
+        populate: [
+          { path: "roomId", select: "name floorId" },
+          { path: "tenantId", select: "username phoneNumber" }
+        ]
       })
       .populate({
         path: "repairRequestId",
         select: "description status devicesId",
         populate: { path: "devicesId", select: "name" }
       })
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parsedLimit)
+      .lean();
+
+    const tenantIds = rawInvoices
+      .map((invoice) => invoice.contractId?.tenantId?._id)
+      .filter(Boolean);
+
+    const tenantInfos = await UserInfo.find({ userId: { $in: tenantIds } })
+      .select("userId fullname")
+      .lean();
+
+    const tenantInfoMap = new Map(
+      tenantInfos.map((info) => [info.userId.toString(), info.fullname])
+    );
+
+    const invoices = rawInvoices.map((invoice) => {
+      const tenantId = invoice.contractId?.tenantId?._id?.toString();
+      const fullname = tenantId ? tenantInfoMap.get(tenantId) : null;
+      if (fullname) {
+        return {
+          ...invoice,
+          contractId: {
+            ...invoice.contractId,
+            tenantId: {
+              ...invoice.contractId.tenantId,
+              fullname,
+            },
+          },
+        };
+      }
+      return invoice;
+    });
+
+    return {
+      invoices,
+      pagination: {
+        total,
+        page: parsedPage,
+        limit: parsedLimit,
+        totalPages: Math.ceil(total / parsedLimit),
+      },
+    };
   }
 
-  // 2. TẠO HÓA ĐƠN PHÁT SINH MỚI
+  // 2. TẠO HÓA ĐƠN PHÁT SINH MỚI (bao gồm tạo phiếu thu tự động)
   // Thường được gọi ngầm khi Quản lý duyệt 1 Yêu cầu sửa chữa và có báo giá
   async createIncurredInvoice(data) {
-    // Tự động sinh mã hóa đơn nếu chưa truyền vào
-    if (!data.invoiceCode) {
-      const date = new Date();
-      const monthYear = `${date.getMonth() + 1}${date.getFullYear()}`;
-      const randomSuffix = Math.floor(1000 + Math.random() * 9000);
-      data.invoiceCode = `INV-INC-${monthYear}-${randomSuffix}`;
+    // Tự động sinh mã vi phạm theo format VP-DDMMYYYY-XXXX
+    const invoiceCode = data.invoiceCode || await buildViolationCode();
+
+    const dueDate = data.dueDate || new Date(Date.now() + 5 * 24 * 60 * 60 * 1000);
+
+    // Lấy thông tin hợp đồng để hiển thị trên phiếu thu
+    const contract = await Contract.findById(data.contractId)
+      .populate('tenantId', 'fullname username')
+      .populate('roomId', 'name')
+      .lean();
+
+    if (!contract) {
+      throw new Error("Không tìm thấy hợp đồng");
     }
 
-    const newInvoice = new InvoiceIncurred(data);
-    return await newInvoice.save();
+    const tenantName = contract.tenantId?.fullname || contract.tenantId?.username || 'Unknown';
+    const roomName = contract.roomId?.name || 'Unknown';
+
+    // Tạo hóa đơn phát sinh trước để lấy ID
+    // Mặc định là Unpaid để hiển thị trong danh sách phiếu thu của kế toán
+    const newInvoice = new InvoiceIncurred({
+      ...data,
+      invoiceCode,
+      dueDate,
+      status: data.status || "Unpaid",
+      type: data.type || "violation",
+    });
+
+    await newInvoice.save();
+
+    // Tạo phiếu thu (FinancialTicket) tự động với reference tới invoice
+    // Sử dụng mã vi phạm làm mã phiếu thu
+    const receiptTicket = new FinancialTicket({
+      type: "Receipt",
+      title: `${data.title}`,
+      amount: data.totalAmount,
+      status: data.status || "Unpaid",
+      paymentVoucher: invoiceCode, // Dùng mã vi phạm làm mã phiếu thu
+      transactionDate: new Date(),
+      referenceId: newInvoice._id,
+    });
+
+    await receiptTicket.save();
+
+    // Cập nhật invoice với receiptTicketId
+    newInvoice.receiptTicketId = receiptTicket._id;
+    await newInvoice.save();
+
+    // Populate để trả về thông tin đầy đủ
+    await newInvoice.populate([
+      { path: 'contractId', populate: [{ path: 'roomId' }, { path: 'tenantId' }] },
+      { path: 'receiptTicketId' }
+    ]);
+
+    return newInvoice;
   }
 
   // 3. PHÁT HÀNH HÓA ĐƠN
