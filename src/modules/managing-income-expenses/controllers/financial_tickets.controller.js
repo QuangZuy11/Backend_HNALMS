@@ -1,7 +1,7 @@
 const FinancialTicket = require("../models/financial_tickets");
-const RepairRequest = require("../../request-management/models/repair_requests.model");
 const Contract = require("../../contract-management/models/contract.model");
 const Room = require("../../room-floor-management/models/room.model");
+const InvoiceIncurred = require("../../invoice-management/models/invoice_incurred.model");
 
 const buildTodayVoucherPrefix = () => {
   const now = new Date();
@@ -158,8 +158,8 @@ const getPaymentTickets = async (req, res) => {
     let tickets = await FinancialTicket.find(filter)
       .populate({
         path: "referenceId",
-        model: RepairRequest,
-        select: "tenantId",
+        model: InvoiceIncurred,
+        select: "contractId",
       })
       .sort({ transactionDate: -1 })
       .lean();
@@ -169,10 +169,10 @@ const getPaymentTickets = async (req, res) => {
       const filteredTickets = [];
 
       for (const ticket of tickets) {
-        if (ticket.referenceId && ticket.referenceId.tenantId) {
+        if (ticket.referenceId && ticket.referenceId.contractId) {
           // eslint-disable-next-line no-await-in-loop
           const activeContract = await Contract.findOne({
-            tenantId: ticket.referenceId.tenantId,
+            _id: ticket.referenceId.contractId,
             status: "active",
           })
             .populate({
@@ -201,9 +201,9 @@ const getPaymentTickets = async (req, res) => {
       tickets.map(async (ticket) => {
         let roomInfo = null;
 
-        if (ticket.referenceId && ticket.referenceId.tenantId) {
+        if (ticket.referenceId && ticket.referenceId.contractId) {
           const activeContract = await Contract.findOne({
-            tenantId: ticket.referenceId.tenantId,
+            _id: ticket.referenceId.contractId,
             status: "active",
           })
             .populate({
@@ -276,6 +276,7 @@ const getReceiptTickets = async (req, res) => {
         filter.status = normalized;
       }
     }
+
 
     const tickets = await FinancialTicket.find(filter)
       .sort({ transactionDate: -1 })

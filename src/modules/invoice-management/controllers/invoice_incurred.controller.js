@@ -3,8 +3,14 @@ const invoiceIncurredService = require("../services/invoice_incurred.service");
 class InvoiceIncurredController {
   async getAll(req, res) {
     try {
-      const invoices = await invoiceIncurredService.getInvoices(req.query);
-      res.status(200).json({ success: true, data: invoices });
+      const { status, page, limit, type } = req.query;
+      const result = await invoiceIncurredService.getInvoices({ status, page, limit, type });
+      res.status(200).json({
+        success: true,
+        data: result.invoices,
+        total: result.pagination.total,
+        totalPages: result.pagination.totalPages,
+      });
     } catch (error) { 
       res.status(500).json({ success: false, message: error.message }); 
     }
@@ -27,6 +33,16 @@ class InvoiceIncurredController {
       res.status(200).json({ success: true, data: invoice, message: "Phát hành thành công!" });
     } catch (error) { 
       res.status(400).json({ success: false, message: error.message }); 
+    }
+  }
+
+  // Lấy mã vi phạm tiếp theo
+  async getNextCode(req, res) {
+    try {
+      const code = await invoiceIncurredService.getNextViolationCode();
+      res.status(200).json({ success: true, data: code });
+    } catch (error) {
+      res.status(500).json({ success: false, message: error.message });
     }
   }
 

@@ -30,8 +30,7 @@ const FinancialTicketSchema = new Schema(
     },
     referenceId: {
       type: Schema.Types.ObjectId,
-      // Có thể tham chiếu tới nhiều loại entity khác nhau, hiện tại dùng cho RepairRequest
-      ref: "RepairRequest",
+      ref: "InvoiceIncurred",
       default: null,
     },
     status: {
