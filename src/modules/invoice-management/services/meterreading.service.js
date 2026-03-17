@@ -1,14 +1,21 @@
 const MeterReading = require("../models/meterreading.model");
-const InvoicePeriodic = require("../models/invoice_periodic.model"); // [ĐÃ SỬA] Dùng Model mới
+const InvoicePeriodic = require("../models/invoice_periodic.model"); 
 const Service = require("../../service-management/models/service.model"); 
-const Contract = require("../../contract-management/models/contract.model"); // [MỚI] Import Hợp đồng
+const Contract = require("../../contract-management/models/contract.model"); 
 
 class MeterReadingService {
   // 1. NHẬP CHỈ SỐ MỚI VÀ CẬP NHẬT TRỰC TIẾP VÀO HÓA ĐƠN NHÁP
   async enterReading(data) {
-    const usageAmount = data.newIndex - data.oldIndex;
+    // [ĐÃ SỬA] - Tính toán có tính đến trường hợp Reset đồng hồ (vòng qua 999999)
+    let usageAmount = data.newIndex - data.oldIndex;
+    
+    if (data.isReset && usageAmount < 0) {
+      const maxLimit = data.maxIndex || 100000; 
+      usageAmount = maxLimit - data.oldIndex + data.newIndex;
+    }
+
     if (usageAmount < 0) {
-      throw new Error("Chỉ số mới không được nhỏ hơn chỉ số cũ");
+      throw new Error("Chỉ số mới không được nhỏ hơn chỉ số cũ (Trừ khi đồng hồ quay vòng)");
     }
 
     // 1. Lưu lịch sử ghi chỉ số vào bảng MeterReading
@@ -40,17 +47,27 @@ class MeterReadingService {
     const month = now.getMonth() + 1; 
     const year = now.getFullYear();
     const titlePattern = `tháng ${month}/${year}`;
+    
+    const startOfMonth = new Date(year, month - 1, 1);
+    const endOfMonth = new Date(year, month, 0, 23, 59, 59);
 
-    // [MỚI] 3. Tìm Hợp đồng đang active của phòng này
-    const activeContract = await Contract.findOne({ 
+    // 3. Tìm Hợp đồng (Bao gồm cả hợp đồng vừa chấm dứt trong tháng này)
+    const targetContract = await Contract.findOne({ 
       roomId: data.roomId, 
-      status: "active" 
-    });
+      startDate: { $lte: endOfMonth },
+      $or: [
+        { status: "active" },
+        { 
+          status: { $in: ["expired", "terminated"] }, 
+          endDate: { $gte: startOfMonth } 
+        }
+      ]
+    }).sort({ createdAt: -1 });
 
-    if (activeContract) {
-      // [MỚI] 4. Tìm Hóa đơn Nháp ĐỊNH KỲ dựa trên contractId
+    if (targetContract) {
+      // 4. Tìm Hóa đơn Nháp ĐỊNH KỲ dựa trên contractId
       const draftInvoice = await InvoicePeriodic.findOne({
-        contractId: activeContract._id,
+        contractId: targetContract._id,
         status: "Draft",
         title: { $regex: titlePattern, $options: "i" }
       });
@@ -99,9 +116,16 @@ class MeterReadingService {
     const oldIndex = data.oldIndex !== undefined ? data.oldIndex : reading.oldIndex;
     const newIndex = data.newIndex !== undefined ? data.newIndex : reading.newIndex;
     
-    const newUsageAmount = newIndex - oldIndex;
+    // [ĐÃ SỬA] - Tính toán cập nhật khi Edit cũng hỗ trợ Reset đồng hồ
+    let newUsageAmount = newIndex - oldIndex;
+    
+    if (data.isReset && newUsageAmount < 0) {
+      const maxLimit = data.maxIndex || 100000;
+      newUsageAmount = maxLimit - oldIndex + newIndex;
+    }
+
     if (newUsageAmount < 0) {
-      throw new Error("Chỉ số mới không được nhỏ hơn chỉ số cũ");
+      throw new Error("Chỉ số mới không được nhỏ hơn chỉ số cũ (Trừ khi đồng hồ quay vòng)");
     }
 
     const usageDifference = newUsageAmount - reading.usageAmount;
@@ -120,19 +144,30 @@ class MeterReadingService {
       const month = now.getMonth() + 1; 
       const year = now.getFullYear();
       const titlePattern = `tháng ${month}/${year}`;
+      
+      const startOfMonth = new Date(year, month - 1, 1);
+      const endOfMonth = new Date(year, month, 0, 23, 59, 59);
 
-      // [MỚI] Lấy hợp đồng active
-      const activeContract = await Contract.findOne({ roomId: reading.roomId, status: "active" });
+      const targetContract = await Contract.findOne({ 
+        roomId: reading.roomId, 
+        startDate: { $lte: endOfMonth },
+        $or: [
+          { status: "active" },
+          { 
+            status: { $in: ["expired", "terminated"] }, 
+            endDate: { $gte: startOfMonth } 
+          }
+        ]
+      }).sort({ createdAt: -1 });
 
-      if (activeContract) {
+      if (targetContract) {
         const draftInvoice = await InvoicePeriodic.findOne({
-          contractId: activeContract._id,
+          contractId: targetContract._id,
           status: "Draft",
           title: { $regex: titlePattern, $options: "i" }
         });
 
         if (draftInvoice) {
-          // [ĐÃ FIX BUG] Cập nhật luôn chi tiết hiển thị trong mảng items thay vì chỉ sửa tổng tiền
           const serviceName = serviceInfo ? (serviceInfo.name || serviceInfo.serviceName) : "";
           if (serviceName) {
              const searchKeyword = `tiền ${serviceName.toLowerCase()}`;
@@ -146,7 +181,6 @@ class MeterReadingService {
              }
           }
 
-          // Tính lại tổng tiền cho chắc ăn
           draftInvoice.totalAmount = draftInvoice.items.reduce((sum, item) => sum + (item.amount || 0), 0);
           if (draftInvoice.totalAmount < 0) draftInvoice.totalAmount = 0; 
           await draftInvoice.save();
@@ -178,14 +212,26 @@ class MeterReadingService {
     const month = now.getMonth() + 1; 
     const year = now.getFullYear();
     const titlePattern = `tháng ${month}/${year}`;
+    
+    const startOfMonth = new Date(year, month - 1, 1);
+    const endOfMonth = new Date(year, month, 0, 23, 59, 59);
 
-    // [MỚI] Tìm hợp đồng active
-    const activeContract = await Contract.findOne({ roomId: reading.roomId, status: "active" });
+    const targetContract = await Contract.findOne({ 
+      roomId: reading.roomId, 
+      startDate: { $lte: endOfMonth },
+      $or: [
+        { status: "active" },
+        { 
+          status: { $in: ["expired", "terminated"] }, 
+          endDate: { $gte: startOfMonth } 
+        }
+      ]
+    }).sort({ createdAt: -1 });
 
-    if (activeContract) {
+    if (targetContract) {
       // Tìm hóa đơn nháp liên quan để trừ tiền
       const draftInvoice = await InvoicePeriodic.findOne({
-        contractId: activeContract._id,
+        contractId: targetContract._id,
         status: "Draft",
         title: { $regex: titlePattern, $options: "i" }
       });

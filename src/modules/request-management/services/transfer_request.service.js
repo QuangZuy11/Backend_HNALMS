@@ -691,10 +691,14 @@ const completeTransferRequest = async (requestId) => {
     );
     console.log(`✅ Phòng mới (${newRoom.name}) → Occupied`);
 
-    // 6. ĐÓNG HỢP ĐỒNG CŨ
+    // 6. ĐÓNG HỢP ĐỒNG CŨ - Đặt endDate = ngày chuyển phòng - 1 (23h59p)
     oldContract.status = "terminated";
+    const endDateForOldContract = new Date(transferDate.getTime() - 24 * 60 * 60 * 1000);
+    endDateForOldContract.setHours(23, 59, 59, 999); // ✅ Đặt thời gian thành 23:59:59
+    oldContract.endDate = endDateForOldContract; // ✅ Update ngày chuyển phòng - 1 vào endDate
     await oldContract.save({ session });
     console.log(`📋 Hợp đồng cũ (${oldContract.contractCode}) → terminated`);
+    console.log(`   - Ngày kết thúc: ${endDateForOldContract.toLocaleString("vi-VN")}`);
 
     // 7. TẠO HỢP ĐỒNG MỚI
     const newContractCode = generateNewContractCode(newRoom.name);
@@ -708,7 +712,7 @@ const completeTransferRequest = async (requestId) => {
       contractCode: newContractCode,
       roomId: request.targetRoomId,
       tenantId: oldContract.tenantId,
-      depositId: oldContract.depositId, // ✅ GIỮ NGUYÊN CỌIC
+      depositId: oldContract.depositId, // ✅ GIỮ NGUYÊN CỌC
       coResidents: oldContract.coResidents,
       startDate: newStartDate,
       endDate: newEndDate,
@@ -723,85 +727,12 @@ const completeTransferRequest = async (requestId) => {
     console.log(`   - Phòng: ${newRoom.name}`);
     console.log(`   - Ngày bắt đầu: ${newStartDate.toLocaleDateString("vi-VN")}`);
     console.log(`   - Ngày kết thúc: ${newEndDate.toLocaleDateString("vi-VN")}`);
-    console.log(`   - Cọc: ${oldContract.depositId ? "Giữ nguyên từ hợp đồng cũ" : "Không có"}`);
+    console.log(`   - Chuyển dữ liệu:`);
+    console.log(`     • CoResidents: ${oldContract.coResidents?.length || 0} người`);
+    console.log(`     • CỌC (ID: ${oldContract.depositId ? oldContract.depositId : "N/A"})`);
+    console.log(`     • Terms & Conditions: Giữ nguyên`);
 
-    // 8. Cập nhật Deposit - giữ nguyên nhưng để reference là phòng mới (nếu cần)
-    if (oldContract.depositId) {
-      // Có thể cập nhật Deposit.room để reference phòng mới nếu cần
-      // Nhưng hiện tại giữ nguyên để đơn giản
-      console.log(`✅ Cọc (ID: ${oldContract.depositId}) vẫn giữ nguyên`);
-    }
-
-    // 9. Xử lý chênh lệch tiền - Cộng/Trừ vào hóa đơn cuối tháng
-    const { difference } = request.proration;
-    
-    if (difference !== 0) {
-      const Invoice = require("../../invoice-management/models/invoice.model");
-      const monthStart = new Date(transferDate.getFullYear(), transferDate.getMonth(), 1);
-      const monthEnd = new Date(transferDate.getFullYear(), transferDate.getMonth() + 1, 0);
-      
-      // Tìm hóa đơn chưa thanh toán trong tháng này (của hợp đồng cũ hoặc mới)
-      let invoice = await Invoice.findOne({
-        contractId: { $in: [oldContract._id, newContract._id] },
-        status: "Unpaid",
-        createdAt: { $gte: monthStart, $lte: monthEnd }
-      }).session(session);
-      
-      if (!invoice) {
-        // Tạo hóa đơn mới cho hợp đồng mới
-        console.log(`📋 Tạo hóa đơn mới cho tháng ${transferDate.getMonth() + 1}/${transferDate.getFullYear()}`);
-        const invoiceCode = `INV-${newContract._id}-${transferDate.getFullYear()}${String(transferDate.getMonth() + 1).padStart(2, '0')}`;
-        
-        invoice = new Invoice({
-          invoiceCode,
-          contractId: newContract._id,
-          roomId: request.targetRoomId,
-          title: `Hóa đơn tháng ${transferDate.getMonth() + 1}/${transferDate.getFullYear()}`,
-          type: "Periodic",
-          items: [
-            {
-              itemName: `Chênh lệch chuyển phòng từ ngày ${transferDate.getDate()}/${transferDate.getMonth() + 1}`,
-              usage: 1,
-              unitPrice: difference,
-              amount: difference,
-              isIndex: false,
-            }
-          ],
-          totalAmount: difference,
-          status: "Unpaid",
-          dueDate: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000),
-        });
-        
-        await invoice.save({ session });
-        console.log(`✅ Hóa đơn tạo mới: ${invoiceCode}`);
-      } else {
-        // Cập nhật hóa đơn hiện tại
-        console.log(`📝 Cộng/Trừ chênh lệch vào hóa đơn: ${difference}`);
-        
-        invoice.items.push({
-          itemName: `Chênh lệch chuyển phòng từ ngày ${transferDate.getDate()}/${transferDate.getMonth() + 1} (${request.proration.oldRoomPrice.toLocaleString("vi-VN")} → ${request.proration.newRoomPrice.toLocaleString("vi-VN")})`,
-          usage: request.proration.daysRemainingInMonth,
-          unitPrice: (difference / request.proration.daysRemainingInMonth),
-          amount: difference,
-          isIndex: false,
-        });
-        
-        invoice.totalAmount = invoice.totalAmount + difference;
-        await invoice.save({ session });
-        console.log(`✅ Hóa đơn được cập nhật: ${invoice.invoiceCode}`);
-      }
-      
-      // Ghi chú về xử lý chênh lệch
-      if (difference > 0) {
-        request.prorationNote = `Cộng thêm ${difference.toLocaleString('vi-VN')} vào hóa đơn tháng ${transferDate.getMonth() + 1}/${transferDate.getFullYear()}`;
-        console.log(`💰 Phải đóng thêm: +${difference.toLocaleString('vi-VN')}`);
-      } else {
-        request.prorationNote = `Trừ ${Math.abs(difference).toLocaleString('vi-VN')} từ hóa đơn tháng ${transferDate.getMonth() + 1}/${transferDate.getFullYear()}`;
-        console.log(`🎁 Được hoàn: ${difference.toLocaleString('vi-VN')}`);
-      }
-    }
-
-    // 10. Cập nhật TransferRequest → Completed
+    // 8. Cập nhật TransferRequest → Completed
     request.status = "Completed";
     request.completedAt = new Date();
     request.newContractId = newContract._id; // Lưu ID hợp đồng mới
