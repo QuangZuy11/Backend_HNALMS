@@ -1,7 +1,6 @@
 const InvoiceIncurred = require("../models/invoice_incurred.model");
 const Contract = require("../../contract-management/models/contract.model");
 const RepairRequest = require("../../request-management/models/repair_requests.model");
-const FinancialTicket = require("../../managing-income-expenses/models/financial_tickets");
 const UserInfo = require("../../authentication/models/userInfor.model");
 
 // Hàm sinh mã vi phạm VP-DDMMYYYY-XXXX (XXXX tăng dần theo ngày)
@@ -31,7 +30,7 @@ class InvoiceIncurredService {
   }
 
   // 1. LẤY DANH SÁCH HÓA ĐƠN PHÁT SINH
-  async getInvoices({ status, page = 1, limit = 10, type } = {}) {
+  async getInvoices({ status, page = 1, limit = 10, type, from, to } = {}) {
     const parsedPage = Number(page) || 1;
     const parsedLimit = Number(limit) || 10;
     const skip = (parsedPage - 1) * parsedLimit;
@@ -42,6 +41,17 @@ class InvoiceIncurredService {
     }
     if (type) {
       query.type = type;
+    }
+    if (from || to) {
+      query.createdAt = {};
+      if (from) {
+        query.createdAt.$gte = new Date(from);
+      }
+      if (to) {
+        const endDate = new Date(to);
+        endDate.setHours(23, 59, 59, 999);
+        query.createdAt.$lte = endDate;
+      }
     }
 
     const total = await InvoiceIncurred.countDocuments(query);
@@ -113,18 +123,14 @@ class InvoiceIncurredService {
 
     const dueDate = data.dueDate || new Date(Date.now() + 5 * 24 * 60 * 60 * 1000);
 
-    // Lấy thông tin hợp đồng để hiển thị trên phiếu thu
+    // Lấy thông tin hợp đồng để kiểm tra tồn tại
     const contract = await Contract.findById(data.contractId)
-      .populate('tenantId', 'fullname username')
-      .populate('roomId', 'name')
+      .select('_id')
       .lean();
 
     if (!contract) {
       throw new Error("Không tìm thấy hợp đồng");
     }
-
-    const tenantName = contract.tenantId?.fullname || contract.tenantId?.username || 'Unknown';
-    const roomName = contract.roomId?.name || 'Unknown';
 
     // Tạo hóa đơn phát sinh trước để lấy ID
     // Mặc định là Unpaid để hiển thị trong danh sách phiếu thu của kế toán
@@ -138,28 +144,11 @@ class InvoiceIncurredService {
 
     await newInvoice.save();
 
-    // Tạo phiếu thu (FinancialTicket) tự động với reference tới invoice
-    // Sử dụng mã vi phạm làm mã phiếu thu
-    const receiptTicket = new FinancialTicket({
-      type: "Receipt",
-      title: `${data.title}`,
-      amount: data.totalAmount,
-      status: data.status || "Unpaid",
-      paymentVoucher: invoiceCode, // Dùng mã vi phạm làm mã phiếu thu
-      transactionDate: new Date(),
-      referenceId: newInvoice._id,
-    });
-
-    await receiptTicket.save();
-
-    // Cập nhật invoice với receiptTicketId
-    newInvoice.receiptTicketId = receiptTicket._id;
-    await newInvoice.save();
+    // Không tạo phiếu thu trong financial_tickets (phiếu thu là invoices_incurred)
 
     // Populate để trả về thông tin đầy đủ
     await newInvoice.populate([
-      { path: 'contractId', populate: [{ path: 'roomId' }, { path: 'tenantId' }] },
-      { path: 'receiptTicketId' }
+      { path: 'contractId', populate: [{ path: 'roomId' }, { path: 'tenantId' }] }
     ]);
 
     return newInvoice;
@@ -208,7 +197,7 @@ class InvoiceIncurredService {
   }
 
   // 5. XÁC NHẬN THANH TOÁN (Logic móc nối 2 Module)
-  async payIncurredInvoice(invoiceId, receiptTicketId = null) {
+  async payIncurredInvoice(invoiceId) {
     const invoice = await InvoiceIncurred.findById(invoiceId);
     
     if (!invoice) throw new Error("Không tìm thấy hóa đơn phát sinh.");
@@ -218,9 +207,6 @@ class InvoiceIncurredService {
 
     // A. Cập nhật Hóa đơn -> Đã thu
     invoice.status = "Paid";
-    if (receiptTicketId) {
-      invoice.receiptTicketId = receiptTicketId; // Lưu ID Phiếu thu để đối soát
-    }
     await invoice.save();
 
     // B. Cập nhật Yêu cầu sửa chữa tương ứng -> "Paid" (Đã thanh toán xong)

@@ -437,7 +437,6 @@ const getNextRepairInvoiceCode = async () => {
  */
 const getNextPaymentVoucherCode = async () => {
   const latest = await FinancialTicket.findOne({
-    type: "Payment",
     paymentVoucher: { $regex: `^${PAYMENT_VOUCHER_PREFIX}\\d{4}$` },
   })
     .select("paymentVoucher")
@@ -481,7 +480,6 @@ const getNextPaymentVoucherCode = async () => {
  */
 const getNextMaintenancePaymentVoucherCode = async () => {
   const latest = await FinancialTicket.findOne({
-    type: "Payment",
     paymentVoucher: { $regex: `^${MAINTENANCE_PAYMENT_VOUCHER_PREFIX}\\d{4}$` },
   })
     .select("paymentVoucher")
@@ -638,24 +636,13 @@ const updateRepairRequestStatus = async (
       await newInvoice.save();
 
       // Tạo thêm phiếu thu cho hóa đơn sửa chữa có phí
-      const newReceiptTicket = new FinancialTicket({
-        type: "Receipt",
-        amount: totalAmount,
-        title: title || `Phiếu thu sửa chữa - ${invoiceCode}`,
-        referenceId: request._id,
-        status: "Unpaid",
-        transactionDate: new Date(),
-        paymentVoucher: invoiceCode,
-      });
 
-      await newReceiptTicket.save();
-      // Không cần lưu invoiceId vào RepairRequest nữa, đã có repairRequestId trong InvoiceIncurred
+      // Không cần tạo phiếu thu trong financial_tickets cho sửa chữa có phí (đã có invoices_incurred)
     }
 
     // 2. Tạo phiếu chi nội bộ nếu frontend gửi kèm dữ liệu financialTicket (sửa chữa miễn phí)
     if (financialTicketData) {
-      const { type = "Payment", amount, title, paymentVoucher } =
-        financialTicketData;
+      const { amount, title, paymentVoucher } = financialTicketData;
 
       if (amount === undefined || amount === null) {
         throw new Error("Thiếu số tiền cho phiếu chi");
@@ -665,7 +652,6 @@ const updateRepairRequestStatus = async (
         paymentVoucher || (await getNextPaymentVoucherCode());
 
       const newTicket = new FinancialTicket({
-        type: type || "Payment",
         amount,
         title,
         referenceId: request._id,
