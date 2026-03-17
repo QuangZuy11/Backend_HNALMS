@@ -70,40 +70,27 @@ NotificationSchema.methods.publishNotification = async function () {
         throw new Error('Chỉ có thể phát hành thông báo ở trạng thái nháp');
     }
 
-    const User = require('../../authentication/models/user.model');
-    let targetUsers = [];
-
     if (this.type === 'staff') {
-        // Gửi cho Manager và Accountant
-        targetUsers = await User.find({
+        const User = require('../../authentication/models/user.model');
+        const targetUsers = await User.find({
             role: { $in: ['manager', 'accountant'] },
             status: 'active'
         }).select('_id role');
-        
         if (targetUsers.length === 0) {
             throw new Error('Không tìm thấy Manager hoặc Accountant nào để gửi thông báo');
         }
+        this.recipients = targetUsers.map(user => ({
+            recipient_id: user._id,
+            recipient_role: user.role,
+            is_read: false,
+            read_at: null
+        }));
     } else if (this.type === 'tenant') {
-        // Gửi cho tất cả Tenant
-        targetUsers = await User.find({
-            role: 'tenant',
-            status: 'active'
-        }).select('_id role');
-
-        if (targetUsers.length === 0) {
-            throw new Error('Không tìm thấy Tenant nào để gửi thông báo');
-        }
+        // Không cần tạo recipients, chỉ đổi trạng thái
+        this.recipients = [];
     } else {
         throw new Error('Loại thông báo không hợp lệ để phát hành thủ công');
     }
-
-    // Tạo recipients list
-    this.recipients = targetUsers.map(user => ({
-        recipient_id: user._id,
-        recipient_role: user.role,
-        is_read: false,
-        read_at: null
-    }));
 
     this.status = 'sent';
     return this.save();
