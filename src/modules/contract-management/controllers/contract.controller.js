@@ -461,6 +461,9 @@ exports.getMyContracts = async (req, res) => {
         };
       });
 
+      // Include rentPaidUntil field for tenant to see payment date
+      c.rentPaidUntil = c.rentPaidUntil || null;
+
       return c;
     });
 
