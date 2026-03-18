@@ -31,7 +31,7 @@ exports.getAvailableRoomsForTransfer = async (req, res) => {
 /**
  * [TENANT] Tạo yêu cầu chuyển phòng
  * POST /api/requests/transfer
- * Body: { targetRoomId, transferDate, reason }
+ * Body: { roomId?, targetRoomId, transferDate, reason }
  */
 exports.createTransferRequest = async (req, res) => {
   try {
@@ -153,7 +153,7 @@ exports.cancelTransferRequest = async (req, res) => {
 /**
  * [TENANT] Cập nhật yêu cầu chuyển phòng (chỉ khi Pending)
  * PUT /api/requests/transfer/:id
- * Body: { targetRoomId?, transferDate?, reason? }
+ * Body: { roomId?, targetRoomId?, transferDate?, reason? }
  */
 exports.updateTransferRequest = async (req, res) => {
   try {
