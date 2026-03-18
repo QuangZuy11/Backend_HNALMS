@@ -2,6 +2,7 @@ const RepairRequest = require("../models/repair_requests.model");
 const User = require("../../authentication/models/user.model");
 const UserInfo = require("../../authentication/models/userInfor.model");
 const Device = require("../../room-floor-management/models/devices.model");
+const Room = require("../../room-floor-management/models/room.model");
 const Contract = require("../../contract-management/models/contract.model");
 const InvoiceIncurred = require("../../invoice-management/models/invoice_incurred.model");
 const FinancialTicket = require("../../managing-income-expenses/models/financial_tickets");
@@ -111,7 +112,7 @@ const attachComputedCost = async (requests) => {
  * @returns {Object} Yêu cầu vừa tạo
  */
 const createRepairRequest = async (data) => {
-  const { tenantId, devicesId, type, description, images } = data;
+  const { tenantId, roomId, devicesId, type, description, images } = data;
 
   // Kiểm tra device có tồn tại không
   const device = await Device.findById(devicesId);
@@ -125,9 +126,30 @@ const createRepairRequest = async (data) => {
     throw new Error("Người dùng không tồn tại");
   }
 
+  // Nếu không có roomId, tự động lấy từ contract active
+  let finalRoomId = roomId;
+  if (!finalRoomId) {
+    const activeContract = await Contract.findOne({
+      tenantId,
+      status: "active",
+    }).lean();
+    if (activeContract?.roomId) {
+      finalRoomId = activeContract.roomId;
+    }
+  }
+
+  // Kiểm tra room có tồn tại không
+  if (finalRoomId) {
+    const room = await Room.findById(finalRoomId);
+    if (!room) {
+      throw new Error("Phòng không tồn tại");
+    }
+  }
+
   // Tạo yêu cầu mới
   const newRequest = new RepairRequest({
     tenantId,
+    roomId: finalRoomId,
     devicesId,
     type,
     description,
@@ -186,6 +208,11 @@ const getRepairRequests = async (filters = {}) => {
         path: "devicesId",
         select: "name brand model category unit price description",
         model: Device,
+      })
+      .populate({
+        path: "roomId",
+        select: "name roomCode",
+        model: Room,
       })
       .sort({ createdDate: -1 })
       .limit(MAX_QUERY_LIMIT)
@@ -262,16 +289,25 @@ const getRepairRequests = async (filters = {}) => {
           request.tenantId.fullname = fullname;
         }
 
-        // Lấy room từ contract map
-        const activeContract = contractMap.get(tenantIdStr);
-        if (activeContract?.roomId) {
+        // Lấy room trực tiếp từ roomId đã populate
+        if (request.roomId) {
           request.room = {
-            _id: activeContract.roomId._id,
-            name: activeContract.roomId.name,
-            roomCode: activeContract.roomId.roomCode,
+            _id: request.roomId._id,
+            name: request.roomId.name,
+            roomCode: request.roomId.roomCode,
           };
         } else {
-          request.room = null;
+          // Fallback: lấy từ contract map
+          const activeContract = contractMap.get(tenantIdStr);
+          if (activeContract?.roomId) {
+            request.room = {
+              _id: activeContract.roomId._id,
+              name: activeContract.roomId.name,
+              roomCode: activeContract.roomId.roomCode,
+            };
+          } else {
+            request.room = null;
+          }
         }
       }
 

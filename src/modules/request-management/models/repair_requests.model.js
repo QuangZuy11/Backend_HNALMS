@@ -8,6 +8,12 @@ const RepairRequestSchema = new Schema({
     required: true,
     index: true
   },
+  roomId: {
+    type: Schema.Types.ObjectId,
+    ref: "Room",
+    required: true,
+    index: true
+  },
   devicesId: {
     type: Schema.Types.ObjectId,
     ref: "Device",
