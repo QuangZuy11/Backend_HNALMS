@@ -74,4 +74,8 @@ ApiRouter.use("/deposits", roomDepositRoutes);
 const notificationRoutes = require("../../modules/notification-management/routes/notification.routes");
 ApiRouter.use("/notifications", notificationRoutes);
 
+// Test routes ( không cần auth)
+const testRoutes = require("./test-routes");
+ApiRouter.use("/test", testRoutes);
+
 module.exports = ApiRouter;

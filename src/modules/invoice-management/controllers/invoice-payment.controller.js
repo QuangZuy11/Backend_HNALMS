@@ -218,14 +218,21 @@ exports.sepayWebhookForInvoice = async (req, res) => {
   try {
     const { transferAmount, content } = req.body;
 
+    console.log("[INVOICE WEBHOOK] 📥 Raw content:", content);
+    console.log("[INVOICE WEBHOOK] 💰 Transfer amount:", transferAmount);
+
     const matchCode = content.match(/HD\s+\S+\s+\d{8}/i);
     if (!matchCode) {
       console.warn("[INVOICE WEBHOOK] ⚠️ Không tìm thấy mã HD trong nội dung:", content);
       return res.status(200).json({ success: true, message: "No matching invoice transaction code" });
     }
     const transactionCode = matchCode[0];
+    console.log("[INVOICE WEBHOOK] 🔍 Extracted transactionCode:", transactionCode);
 
     const payment = await Payment.findOne({ transactionCode, status: "Pending" });
+    console.log("[INVOICE WEBHOOK] 🔍 Payment query:", { transactionCode, status: "Pending" });
+    console.log("[INVOICE WEBHOOK] 🔍 Payment found:", payment);
+
     if (!payment) {
       console.warn("[INVOICE WEBHOOK] ⚠️ Payment không tồn tại hoặc đã xử lý:", transactionCode);
       return res.status(200).json({ success: true, message: "Payment not found or already processed" });
