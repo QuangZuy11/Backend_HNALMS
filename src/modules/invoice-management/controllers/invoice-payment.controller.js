@@ -1,3 +1,4 @@
+const InvoicePeriodic = require("../models/invoice_periodic.model");
 const InvoiceIncurred = require("../models/invoice_incurred.model");
 const Payment = require("../models/payment.model");
 const RepairRequest = require("../../request-management/models/repair_requests.model");
@@ -25,12 +26,25 @@ const generateInvoiceTransactionCode = (invoiceCode) => {
 exports.initiateInvoicePayment = async (req, res) => {
   try {
     const { id: invoiceId } = req.params;
+    const { type } = req.body; // 'periodic' hoặc 'incurred'
 
-    const invoice = await InvoiceIncurred.findById(invoiceId).populate({
-      path: "contractId",
-      select: "roomId",
-      populate: { path: "roomId", select: "name" },
-    });
+    let invoice;
+    let invoiceType = type || 'incurred';
+
+    // Tìm hóa đơn theo loại
+    if (invoiceType === 'periodic') {
+      invoice = await InvoicePeriodic.findById(invoiceId).populate({
+        path: "contractId",
+        select: "roomId",
+        populate: { path: "roomId", select: "name" },
+      });
+    } else {
+      invoice = await InvoiceIncurred.findById(invoiceId).populate({
+        path: "contractId",
+        select: "roomId",
+        populate: { path: "roomId", select: "name" },
+      });
+    }
 
     if (!invoice) {
       return res.status(404).json({ success: false, message: "Không tìm thấy hóa đơn." });
@@ -42,10 +56,12 @@ exports.initiateInvoicePayment = async (req, res) => {
       });
     }
 
-    const existingPending = await Payment.findOne({
-      incurredInvoiceId: invoice._id,
-      status: "Pending",
-    });
+    // Tìm payment đang chờ theo loại hóa đơn
+    const paymentQuery = invoiceType === 'periodic'
+      ? { invoiceId: invoice._id, status: "Pending" }
+      : { incurredInvoiceId: invoice._id, status: "Pending" };
+
+    const existingPending = await Payment.findOne(paymentQuery);
     if (existingPending) {
       const createdAt = new Date(existingPending.createdAt);
       const expireAt = new Date(createdAt.getTime() + 5 * 60 * 1000);
@@ -64,6 +80,7 @@ exports.initiateInvoicePayment = async (req, res) => {
             transactionCode: existingPending.transactionCode,
             invoiceAmount: existingPending.amount,
             invoiceCode: invoice.invoiceCode,
+            invoiceType: invoiceType,
             roomName: invoice.contractId?.roomId?.name || null,
             qrUrl,
             bankInfo: {
@@ -83,13 +100,21 @@ exports.initiateInvoicePayment = async (req, res) => {
     const transactionCode = generateInvoiceTransactionCode(invoice.invoiceCode);
     const expireAt = new Date(Date.now() + 5 * 60 * 1000);
 
-    const payment = new Payment({
-      incurredInvoiceId: invoice._id,
+    // Tạo payment với trường phù hợp theo loại hóa đơn
+    const paymentData = {
       amount: invoice.totalAmount,
       transactionCode,
       status: "Pending",
       paymentDate: null,
-    });
+    };
+
+    if (invoiceType === 'periodic') {
+      paymentData.invoiceId = invoice._id;
+    } else {
+      paymentData.incurredInvoiceId = invoice._id;
+    }
+
+    const payment = new Payment(paymentData);
     await payment.save();
 
     const bankBin = process.env.BANK_BIN;
@@ -106,6 +131,7 @@ exports.initiateInvoicePayment = async (req, res) => {
         transactionCode,
         invoiceAmount: invoice.totalAmount,
         invoiceCode: invoice.invoiceCode,
+        invoiceType: invoiceType,
         roomName: invoice.contractId?.roomId?.name || null,
         qrUrl,
         bankInfo: {
@@ -130,11 +156,16 @@ exports.getInvoicePaymentStatus = async (req, res) => {
     const { transactionCode } = req.params;
 
     const payment = await Payment.findOne({ transactionCode })
+      .populate("invoiceId", "invoiceCode status totalAmount")
       .populate("incurredInvoiceId", "invoiceCode status totalAmount");
 
     if (!payment) {
       return res.status(404).json({ success: false, message: "Không tìm thấy giao dịch hoặc giao dịch đã hết hạn." });
     }
+
+    // Xác định loại hóa đơn
+    const invoice = payment.invoiceId || payment.incurredInvoiceId;
+    const invoiceType = payment.invoiceId ? 'periodic' : 'incurred';
 
     if (payment.status === "Pending") {
       const expireAt = new Date(new Date(payment.createdAt).getTime() + 5 * 60 * 1000);
@@ -158,7 +189,8 @@ exports.getInvoicePaymentStatus = async (req, res) => {
           paymentId: payment._id,
           transactionCode,
           amount: payment.amount,
-          invoice: payment.incurredInvoiceId,
+          invoice,
+          invoiceType,
           expireInSeconds,
         },
       });
@@ -172,7 +204,8 @@ exports.getInvoicePaymentStatus = async (req, res) => {
         transactionCode,
         amount: payment.amount,
         paymentDate: payment.paymentDate,
-        invoice: payment.incurredInvoiceId,
+        invoice,
+        invoiceType,
       },
     });
   } catch (error) {
@@ -204,9 +237,22 @@ exports.sepayWebhookForInvoice = async (req, res) => {
       return res.status(200).json({ success: true, message: "Amount mismatch" });
     }
 
-    const invoice = await InvoiceIncurred.findById(payment.incurredInvoiceId);
+    // Xác định loại hóa đơn và cập nhật
+    let invoice;
+    let invoiceType = '';
+
+    if (payment.invoiceId) {
+      // Hóa đơn định kỳ (InvoicePeriodic)
+      invoice = await InvoicePeriodic.findById(payment.invoiceId);
+      invoiceType = 'periodic';
+    } else if (payment.incurredInvoiceId) {
+      // Hóa đơn phát sinh (InvoiceIncurred)
+      invoice = await InvoiceIncurred.findById(payment.incurredInvoiceId);
+      invoiceType = 'incurred';
+    }
+
     if (!invoice) {
-      console.warn("[INVOICE WEBHOOK] ⚠️ Invoice không tìm thấy:", payment.incurredInvoiceId);
+      console.warn("[INVOICE WEBHOOK] ⚠️ Invoice không tìm thấy");
       return res.status(200).json({ success: true, message: "Invoice not found" });
     }
 
@@ -217,7 +263,8 @@ exports.sepayWebhookForInvoice = async (req, res) => {
     invoice.status = "Paid";
     await invoice.save();
 
-    if (invoice.repairRequestId) {
+    // Chỉ cập nhật repair request cho hóa đơn phát sinh
+    if (invoiceType === 'incurred' && invoice.repairRequestId) {
       await RepairRequest.findByIdAndUpdate(invoice.repairRequestId, { status: "Paid" });
     }
 
