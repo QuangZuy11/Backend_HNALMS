@@ -373,6 +373,17 @@ class NotificationService {
                     }
                 });
                 return { unread_count: count };
+            } else if (normalizedRole === 'tenant') {
+                // Tenant đếm thông báo chưa đọc: type = 'tenant' + type = 'system' gửi cho tenant đó
+                const count = await Notification.countDocuments({
+                    $or: [
+                        // Thông báo từ Manager cho tất cả tenant
+                        { type: 'tenant', status: 'sent' },
+                        // Thông báo hệ thống gửi cho tenant cụ thể
+                        { type: 'system', status: 'sent', 'recipients.recipient_id': userId, 'recipients.is_read': false }
+                    ]
+                });
+                return { unread_count: count };
             }
 
             return { unread_count: 0 };

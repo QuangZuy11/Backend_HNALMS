@@ -93,7 +93,7 @@ async function sendRenewalNotification(contract, config) {
 
         // 2. Tạo notification (hệ thống không cần created_by)
         const roomName = contract.roomId?.name || "Unknown";
-        const title = `Thông báo gia hạn hợp đồng - Phòng ${roomName}`;
+        const title = `Thông báo gia hạn hợp đồng - ${roomName}`;
         const content = `Hợp đồng thuê phòng ${contract.contractCode} sẽ hết hạn sau ${config.days} ngày (${formatDate(contract.endDate)}). Vui lòng liên hệ Quản Lý để gia hạn hoặc truy cập vào mục Gia Hạn Hợp Đồng trên ứng dụng. Xin Cảm Ơn !`;
 
         const notification = new Notification({
