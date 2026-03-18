@@ -144,15 +144,26 @@ exports.updateService = async (id, data) => {
 };
 
 /**
- * Lấy danh sách dịch vụ đã đăng ký của tenant (qua hợp đồng active)
+ * Lấy danh sách dịch vụ đã đăng ký của tenant
  * @param {string} tenantId - ID của tenant
+ * @param {string} contractId - ID của hợp đồng (optional, nếu không có sẽ dùng active contract)
  * @returns {Array} Danh sách BookService kèm thông tin dịch vụ và hợp đồng
  */
-exports.getBookedServicesByTenant = async (tenantId) => {
-  // Tìm hợp đồng đang active của tenant
-  const contract = await Contract.findOne({ tenantId, status: "active" }).lean();
-  if (!contract) {
-    return [];
+exports.getBookedServicesByTenant = async (tenantId, contractId = null) => {
+  let contract;
+
+  if (contractId) {
+    // Nếu có contractId → kiểm tra nó thuộc về tenant này và status active
+    contract = await Contract.findOne({ _id: contractId, tenantId, status: "active" }).lean();
+    if (!contract) {
+      throw { status: 404, message: "Hợp đồng không tồn tại hoặc không hoạt động." };
+    }
+  } else {
+    // Tìm hợp đồng đang active của tenant
+    contract = await Contract.findOne({ tenantId, status: "active" }).lean();
+    if (!contract) {
+      return [];
+    }
   }
 
   const bookService = await BookService.findOne({ contractId: contract._id })
@@ -212,9 +223,21 @@ exports.deleteService = async (id) => {
  * - Fixed: hiển thị, không cho book/huỷ
  * - Extension: hiển thị, cho book nếu chưa đăng ký, cho huỷ nếu đã đăng ký
  * @param {string} tenantId
+ * @param {string} contractId - ID của hợp đồng (optional, nếu không có sẽ dùng active contract)
  */
-exports.getAllServicesForTenant = async (tenantId) => {
-  const contract = await Contract.findOne({ tenantId, status: "active" }).lean();
+exports.getAllServicesForTenant = async (tenantId, contractId = null) => {
+  let contract;
+
+  if (contractId) {
+    // Nếu có contractId → kiểm tra nó thuộc về tenant này
+    contract = await Contract.findOne({ _id: contractId, tenantId, status: "active" }).lean();
+    if (!contract) {
+      throw { status: 404, message: "Hợp đồng không tồn tại hoặc không hoạt động." };
+    }
+  } else {
+    // Tìm hợp đồng đang active của tenant
+    contract = await Contract.findOne({ tenantId, status: "active" }).lean();
+  }
 
   // Dùng Map để lưu cả serviceId -> quantity (chỉ entry đang active: endDate = null)
   let bookedServiceMap = new Map();
@@ -241,6 +264,7 @@ exports.getAllServicesForTenant = async (tenantId) => {
       bookedQuantity: isBooked ? bookedServiceMap.get(svcIdStr) : null,
       canBook: !isFixed && !isBooked && !!contract,
       canCancel: !isFixed && isBooked,
+      contractId: contract?._id || null,
     };
   });
 };
@@ -250,8 +274,9 @@ exports.getAllServicesForTenant = async (tenantId) => {
  * @param {string} tenantId
  * @param {string} serviceId
  * @param {number} quantity
+ * @param {string} contractId - ID của hợp đồng (optional, nếu không có sẽ dùng active contract)
  */
-exports.bookServiceForTenant = async (tenantId, serviceId, quantity = 1) => {
+exports.bookServiceForTenant = async (tenantId, serviceId, quantity = 1, contractId = null) => {
   // Validate quantity: phải là số nguyên dương
   if (!Number.isInteger(quantity) || quantity < 1) {
     throw { status: 400, message: "Số lượng người phải là số nguyên dương (>= 1)." };
@@ -264,8 +289,18 @@ exports.bookServiceForTenant = async (tenantId, serviceId, quantity = 1) => {
     throw { status: 400, message: "Dịch vụ cố định (Fixed) không thể đăng ký thêm." };
   }
 
-  const contract = await Contract.findOne({ tenantId, status: "active" }).lean();
-  if (!contract) throw { status: 400, message: "Bạn không có hợp đồng hiệu lực." };
+  let contract;
+  if (contractId) {
+    // Nếu có contractId → kiểm tra nó thuộc về tenant này và status active
+    contract = await Contract.findOne({ _id: contractId, tenantId, status: "active" }).lean();
+    if (!contract) {
+      throw { status: 404, message: "Hợp đồng không tồn tại hoặc không hoạt động." };
+    }
+  } else {
+    // Tìm hợp đồng active
+    contract = await Contract.findOne({ tenantId, status: "active" }).lean();
+    if (!contract) throw { status: 400, message: "Bạn không có hợp đồng hiệu lực." };
+  }
 
   // Validate quantity không vượt quá số người tối đa của loại phòng
   const room = await Room.findById(contract.roomId).lean();
@@ -328,16 +363,27 @@ exports.bookServiceForTenant = async (tenantId, serviceId, quantity = 1) => {
  * Tenant huỷ đăng ký dịch vụ Extension
  * @param {string} tenantId
  * @param {string} serviceId
+ * @param {string} contractId - ID của hợp đồng (optional, nếu không có sẽ dùng active contract)
  */
-exports.cancelBookedServiceForTenant = async (tenantId, serviceId) => {
+exports.cancelBookedServiceForTenant = async (tenantId, serviceId, contractId = null) => {
   const service = await Service.findById(serviceId);
   if (!service) throw { status: 404, message: "Dịch vụ không tồn tại." };
   if (service.type === "Fixed") {
     throw { status: 400, message: "Dịch vụ cố định (Fixed) không thể huỷ đăng ký." };
   }
 
-  const contract = await Contract.findOne({ tenantId, status: "active" }).lean();
-  if (!contract) throw { status: 400, message: "Bạn không có hợp đồng hiệu lực." };
+  let contract;
+  if (contractId) {
+    // Nếu có contractId → kiểm tra nó thuộc về tenant này và status active
+    contract = await Contract.findOne({ _id: contractId, tenantId, status: "active" }).lean();
+    if (!contract) {
+      throw { status: 404, message: "Hợp đồng không tồn tại hoặc không hoạt động." };
+    }
+  } else {
+    // Tìm hợp đồng active
+    contract = await Contract.findOne({ tenantId, status: "active" }).lean();
+    if (!contract) throw { status: 400, message: "Bạn không có hợp đồng hiệu lực." };
+  }
 
   const serviceObjectId = new mongoose.Types.ObjectId(serviceId);
 

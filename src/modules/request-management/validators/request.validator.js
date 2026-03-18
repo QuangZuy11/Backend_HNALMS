@@ -11,6 +11,15 @@
 const validateCreateRepairRequest = (data) => {
   const errors = [];
 
+  // Validate roomId
+  if (!data.roomId) {
+    errors.push("Room ID là bắt buộc");
+  } else if (typeof data.roomId !== "string") {
+    errors.push("Room ID phải là chuỗi ký tự");
+  } else if (!/^[a-fA-F0-9]{24}$/.test(data.roomId)) {
+    errors.push("Room ID không hợp lệ");
+  }
+
   // Validate devicesId
   if (!data.devicesId) {
     errors.push("Device ID là bắt buộc");
@@ -74,9 +83,17 @@ const validateCreateRepairRequest = (data) => {
 const validateUpdateRepairRequest = (data) => {
   const errors = [];
 
-  if (!data.type && !data.description && !data.images && !data.devicesId) {
-    errors.push("Ít nhất một trường phải được cập nhật (type, devicesId, description, images)");
+  if (!data.type && !data.description && !data.images && !data.devicesId && !data.roomId) {
+    errors.push("Ít nhất một trường phải được cập nhật (roomId, type, devicesId, description, images)");
     return { valid: false, errors };
+  }
+
+  if (data.roomId !== undefined) {
+    if (typeof data.roomId !== "string") {
+      errors.push("Room ID phải là chuỗi ký tự");
+    } else if (!/^[a-fA-F0-9]{24}$/.test(data.roomId)) {
+      errors.push("Room ID không hợp lệ");
+    }
   }
 
   if (data.devicesId !== undefined) {

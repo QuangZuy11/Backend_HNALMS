@@ -5,19 +5,23 @@ const { authenticate } = require("../../authentication/middlewares/");
 const { authorize } = require("../../authentication/middlewares/");
 
 // Lấy danh sách dịch vụ đã đăng ký của tenant đang đăng nhập
-// GET /api/services/my-services
+// GET /api/services/my-services?contractId={contractId}
+// Query: contractId (optional - nếu không có sẽ dùng active contract)
 router.get("/my-services", authenticate, authorize("Tenant"), serviceController.getMyBookedServices);
 
 // Lấy toàn bộ dịch vụ với trạng thái book cho Service List Screen
-// GET /api/services/list
+// GET /api/services/list?contractId={contractId}
+// Query: contractId (optional - nếu không có sẽ dùng active contract)
 router.get("/list", authenticate, authorize("Tenant"), serviceController.getAllServicesForTenant);
 
 // Đăng ký dịch vụ Extension
 // POST /api/services/book
+// Body: { serviceId, quantity, contractId(optional) }
 router.post("/book", authenticate, authorize("Tenant"), serviceController.bookService);
 
 // Huỷ đăng ký dịch vụ Extension (cập nhật endDate = now, không xoá)
-// PATCH /api/services/book/:serviceId/cancel
+// PATCH /api/services/book/:serviceId/cancel?contractId={contractId}
+// Query: contractId (optional - nếu không có sẽ dùng active contract)
 router.patch("/book/:serviceId/cancel", authenticate, authorize("Tenant"), serviceController.cancelBookedService);
 
 // Lấy danh sách dịch vụ đã đăng ký của một tenant cụ thể (dành cho manager)

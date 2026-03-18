@@ -26,8 +26,8 @@ router.use("/transfer", transferRoutes);
  * Tạo yêu cầu sửa chữa/bảo trì mới
  * POST /api/requests/repair
  * Dành cho tenant
- * Body (multipart/form-data): { devicesId, type, description, images?: File[] }
- * hoặc Body (JSON): { devicesId, type, description, images?: string[] }
+ * Body (multipart/form-data): { roomId, devicesId, type, description, images?: File[] }
+ * hoặc Body (JSON): { roomId, devicesId, type, description, images?: string[] }
  */
 router.post(
   "/repair",

@@ -11,12 +11,12 @@ cloudinary.config({
 /**
  * Tạo yêu cầu sửa chữa/bảo trì mới
  * POST /api/requests/repair
- * Body (multipart/form-data): { devicesId, type, description, images?: File[] }
- * hoặc Body (JSON): { devicesId, type, description, images?: string[] }
+ * Body (multipart/form-data): { roomId, devicesId, type, description, images?: File[] }
+ * hoặc Body (JSON): { roomId, devicesId, type, description, images?: string[] }
  */
 exports.createRepairRequest = async (req, res) => {
   try {
-    const { devicesId, type, description } = req.body;
+    const { roomId, devicesId, type, description } = req.body;
     const tenantId = req.user?.userId;
 
     if (!tenantId) {
@@ -64,6 +64,7 @@ exports.createRepairRequest = async (req, res) => {
 
     const newRequest = await requestService.createRepairRequest({
       tenantId,
+      roomId,
       devicesId,
       type,
       description,

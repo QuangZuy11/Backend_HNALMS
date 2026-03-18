@@ -70,7 +70,8 @@ class ServiceController {
       if (!tenantId) {
         return res.status(401).json({ success: false, message: "Không tìm thấy thông tin người dùng" });
       }
-      const data = await ServiceService.getBookedServicesByTenant(tenantId);
+      const { contractId } = req.query;
+      const data = await ServiceService.getBookedServicesByTenant(tenantId, contractId || null);
       res.status(200).json({ success: true, count: data.length, data });
     } catch (error) {
       handleError(res, error);
@@ -95,7 +96,8 @@ class ServiceController {
       if (!tenantId) {
         return res.status(401).json({ success: false, message: "Không tìm thấy thông tin người dùng" });
       }
-      const data = await ServiceService.getAllServicesForTenant(tenantId);
+      const { contractId } = req.query;
+      const data = await ServiceService.getAllServicesForTenant(tenantId, contractId || null);
       res.status(200).json({ success: true, count: data.length, data });
     } catch (error) {
       handleError(res, error);
@@ -109,7 +111,7 @@ class ServiceController {
       if (!tenantId) {
         return res.status(401).json({ success: false, message: "Không tìm thấy thông tin người dùng" });
       }
-      const { serviceId, quantity } = req.body;
+      const { serviceId, quantity, contractId } = req.body;
       if (!serviceId) {
         return res.status(400).json({ success: false, message: "serviceId là bắt buộc" });
       }
@@ -117,7 +119,7 @@ class ServiceController {
       if (isNaN(parsedQuantity) || parsedQuantity < 1) {
         return res.status(400).json({ success: false, message: "Số lượng người (quantity) phải là số nguyên >= 1" });
       }
-      const data = await ServiceService.bookServiceForTenant(tenantId, serviceId, parsedQuantity);
+      const data = await ServiceService.bookServiceForTenant(tenantId, serviceId, parsedQuantity, contractId || null);
       res.status(201).json({ success: true, message: "Đăng ký dịch vụ thành công", data });
     } catch (error) {
       handleError(res, error);
@@ -132,7 +134,8 @@ class ServiceController {
         return res.status(401).json({ success: false, message: "Không tìm thấy thông tin người dùng" });
       }
       const { serviceId } = req.params;
-      const result = await ServiceService.cancelBookedServiceForTenant(tenantId, serviceId);
+      const { contractId } = req.query;
+      const result = await ServiceService.cancelBookedServiceForTenant(tenantId, serviceId, contractId || null);
       res.status(200).json({ success: true, message: result.message });
     } catch (error) {
       handleError(res, error);

@@ -43,7 +43,7 @@ router.get(
 /**
  * [TENANT] Tạo yêu cầu chuyển phòng
  * POST /api/requests/transfer
- * Body: { targetRoomId, transferDate, reason }
+ * Body: { roomId?, targetRoomId, transferDate, reason }
  */
 router.post(
   "/",
@@ -100,11 +100,13 @@ router.patch(
 /**
  * [TENANT] Cập nhật yêu cầu chuyển phòng (chỉ khi Pending)
  * PUT /api/requests/transfer/:id
+ * Body: { roomId?, targetRoomId?, transferDate?, reason? }
  */
 router.put(
   "/:id",
   authenticate,
   authorize("Tenant"),
+  transferValidator.validateUpdateTransferRequestMiddleware,
   transferController.updateTransferRequest
 );
 
