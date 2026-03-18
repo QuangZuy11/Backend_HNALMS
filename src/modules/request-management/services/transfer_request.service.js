@@ -3,6 +3,7 @@ const Contract = require("../../contract-management/models/contract.model");
 const Room = require("../../room-floor-management/models/room.model");
 const User = require("../../authentication/models/user.model");
 const UserInfo = require("../../authentication/models/userInfor.model");
+const BookService = require("../../contract-management/models/bookservice.model");
 const mongoose = require("mongoose");
 
 /**
@@ -756,6 +757,7 @@ const completeTransferRequest = async (requestId) => {
       status: "active",
       terms: oldContract.terms,
       images: [],
+      rentPaidUntil: oldContract.rentPaidUntil, // ✅ CHUYỂN DỮ LIỆU NGÀY THANH TOÁN TIỀN THUÊ
     });
 
     await newContract.save({ session });
@@ -766,7 +768,130 @@ const completeTransferRequest = async (requestId) => {
     console.log(`   - Chuyển dữ liệu:`);
     console.log(`     • CoResidents: ${oldContract.coResidents?.length || 0} người`);
     console.log(`     • CỌC (ID: ${oldContract.depositId ? oldContract.depositId : "N/A"})`);
+    console.log(`     • Ngày thanh toán tiền thuê: ${oldContract.rentPaidUntil ? new Date(oldContract.rentPaidUntil).toLocaleDateString("vi-VN") : "N/A"}`);
     console.log(`     • Terms & Conditions: Giữ nguyên`);
+
+    // 7.5 CHUYỂN DỊCH VỤ TỪ HỢP ĐỒNG CŨ SANG HỢP ĐỒNG MỚI (CỐ ĐỊNH + MỞ RỘNG)
+    // LOGIC THANG MÁY: Tầng 1 → Tầng khác = Thêm, Tầng khác → Tầng 1 = Bỏ
+    const oldBookService = await BookService.findOne({
+      contractId: oldContract._id,
+    }).session(session);
+
+    // Lấy thông tin floor của phòng cũ và phòng mới
+    const oldRoom = await Room.findById(request.currentRoomId)
+      .populate("floorId", "name floorNumber")
+      .session(session);
+    const newRoomInfo = await Room.findById(request.targetRoomId)
+      .populate("floorId", "name floorNumber")
+      .session(session);
+
+    const oldFloorNumber = oldRoom?.floorId?.floorNumber || 1;
+    const newFloorNumber = newRoomInfo?.floorId?.floorNumber || 1;
+
+    if (oldBookService && oldBookService.services.length > 0) {
+      // Lấy danh sách dịch vụ để xác định loại (fixed_monthly hay quantity_based)
+      const Service = require("../../service-management/models/service.model");
+      const allServices = await Service.find({ isActive: true }).session(session);
+
+      const getCategory = (name) => {
+        const n = name.toLowerCase();
+        if (n.includes("xe máy") || n.includes("xe đạp"))
+          return "quantity_based";
+        if (
+          n.includes("thang máy") ||
+          n.includes("elevator") ||
+          n.includes("vệ sinh") ||
+          n.includes("điện") ||
+          n.includes("nước") ||
+          n.includes("internet") ||
+          n.includes("wifi")
+        )
+          return "fixed_monthly";
+        return "quantity_based";
+      };
+
+      // Build map serviceId -> name
+      const serviceNameMap = {};
+      allServices.forEach((s) => {
+        serviceNameMap[s._id.toString()] = s.name;
+      });
+
+      const isElevatorService = (serviceId) => {
+        const name = serviceNameMap[serviceId.toString()] || "";
+        return name.toLowerCase().includes("thang máy") || name.toLowerCase().includes("elevator");
+      };
+
+      // Lọc dịch vụ fixed_monthly và quantity_based từ hợp đồng cũ
+      let fixedServices = oldBookService.services.filter((s) => {
+        const name = serviceNameMap[s.serviceId.toString()] || "";
+        return getCategory(name) === "fixed_monthly";
+      });
+
+      const optionalServices = oldBookService.services.filter((s) => {
+        const name = serviceNameMap[s.serviceId.toString()] || "";
+        return getCategory(name) === "quantity_based";
+      });
+
+      // ✅ LOGIC THANG MÁY: 
+      // - Từ tầng 1 (oldFloorNumber === 1) lên tầng khác (newFloorNumber > 1) → Thêm thang máy
+      // - Từ tầng khác (oldFloorNumber > 1) xuống tầng 1 (newFloorNumber === 1) → Bỏ thang máy
+      let elevatorServiceId = null;
+
+      // Tìm serviceId của dịch vụ thang máy
+      for (const service of allServices) {
+        if (isElevatorService(service._id)) {
+          elevatorServiceId = service._id;
+          break;
+        }
+      }
+
+      // Xử lý thêm/bỏ dịch vụ thang máy
+      const hasElevator = fixedServices.some((s) => isElevatorService(s.serviceId));
+
+      if (oldFloorNumber === 1 && newFloorNumber > 1 && !hasElevator && elevatorServiceId) {
+        // Thêm dịch vụ thang máy
+        fixedServices.push({
+          serviceId: elevatorServiceId,
+          quantity: 1,
+          startDate: oldBookService.services[0]?.startDate || oldContract.startDate,
+          endDate: null,
+        });
+        console.log(`   ✅ Thêm dịch vụ thang máy (Tầng 1 → Tầng ${newFloorNumber})`);
+      } else if (oldFloorNumber > 1 && newFloorNumber === 1 && hasElevator) {
+        // Bỏ dịch vụ thang máy
+        fixedServices = fixedServices.filter((s) => !isElevatorService(s.serviceId));
+        console.log(`   ✅ Bỏ dịch vụ thang máy (Tầng ${oldFloorNumber} → Tầng 1)`);
+      }
+
+      // Tạo BookService mới với tất cả dịch vụ được chuyển
+      const allTransferredServices = [
+        ...fixedServices.map((s) => ({
+          serviceId: s.serviceId,
+          quantity: s.quantity || 1,
+          startDate: newStartDate,
+          endDate: null,
+        })),
+        ...optionalServices.map((s) => ({
+          serviceId: s.serviceId,
+          quantity: s.quantity || 1,
+          startDate: newStartDate,
+          endDate: null,
+        })),
+      ];
+
+      if (allTransferredServices.length > 0) {
+        const newBookService = new BookService({
+          contractId: newContract._id,
+          services: allTransferredServices,
+        });
+        await newBookService.save({ session });
+        console.log(`   • Dịch vụ cố định: ${fixedServices.length} dịch vụ`);
+        console.log(`   • Dịch vụ mở rộng: ${optionalServices.length} dịch vụ`);
+        console.log(`   • Tổng cộng: ${allTransferredServices.length} dịch vụ được chuyển`);
+      } else {
+        console.log(`   • Dịch vụ: Không có dịch vụ nào được chuyển`);
+      }
+    }
 
     // 8. Cập nhật TransferRequest → Completed
     request.status = "Completed";
