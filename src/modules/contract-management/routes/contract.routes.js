@@ -6,6 +6,9 @@ const {
   authenticate,
 } = require("../../authentication/middlewares/authenticate");
 
+// Route test: Gửi thông báo gia hạn hợp đồng thủ công
+router.post("/renewal/send-notifications", contractController.sendRenewalNotifications);
+
 // Route to upload contract images to Cloudinary
 router.post(
   "/upload-images",

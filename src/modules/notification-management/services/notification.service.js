@@ -7,7 +7,8 @@ class NotificationService {
     // Tạo thông báo nháp
     async createDraftNotification(userId, userRole, title, content) {
         try {
-            const type = userRole === 'owner' ? 'staff' : 'tenant';
+            const normalizedRole = (userRole || '').toLowerCase();
+            const type = normalizedRole === 'owner' ? 'staff' : 'tenant';
             const notification = new Notification({
                 title,
                 content,
@@ -90,10 +91,11 @@ class NotificationService {
     // Lấy danh sách thông báo theo role
     async getUserNotifications(userId, userRole, page = 1, limit = 20, isRead = null, status = null, outbound = false, search = null, fromDate = null, toDate = null) {
         try {
+            const normalizedRole = (userRole || '').toLowerCase();
             const skip = (page - 1) * limit;
             let matchCondition = {};
 
-            if (userRole === 'owner' || (userRole === 'manager' && outbound)) {
+            if (normalizedRole === 'owner' || (normalizedRole === 'manager' && outbound)) {
                 // Owner hoặc Manager xem tất cả thông báo do mình tạo (draft + sent), có thể filter theo status
                 matchCondition = { created_by: new mongoose.Types.ObjectId(userId) };
 
@@ -139,7 +141,7 @@ class NotificationService {
                     }
                 };
 
-            } else if (userRole === 'manager' || userRole === 'accountant') {
+            } else if (normalizedRole === 'manager' || normalizedRole === 'accountant') {
                 // Manager/Accountant xem thông báo staff đã được gửi
                 matchCondition = {
                     type: 'staff',
@@ -186,6 +188,74 @@ class NotificationService {
                             status: 1,
                             createdAt: 1,
                             is_read: '$recipient_info.is_read',
+                            read_at: '$recipient_info.read_at'
+                        }
+                    },
+                    { $sort: { createdAt: -1 } },
+                    { $skip: skip },
+                    { $limit: limit }
+                ]);
+
+                const total = await Notification.countDocuments(matchCondition);
+
+                return {
+                    notifications,
+                    pagination: {
+                        current_page: page,
+                        total_pages: Math.ceil(total / limit),
+                        total_count: total,
+                        limit
+                    }
+                };
+            } else if (normalizedRole === 'tenant') {
+                // Tenant xem thông báo:
+                // 1. type = 'tenant' (từ Manager) cho TẤT CẢ tenant
+                // 2. type = 'system' VÀ recipient_id = tenantId (thông báo hệ thống gửi cho tenant cụ thể)
+                const orConditions = [
+                    { type: 'tenant', status: 'sent' },
+                    { type: 'system', status: 'sent', 'recipients.recipient_id': userId }
+                ];
+
+                matchCondition = {
+                    $or: orConditions
+                };
+
+                if (search) {
+                    matchCondition.title = { $regex: search, $options: 'i' };
+                }
+
+                if (fromDate || toDate) {
+                    matchCondition.createdAt = {};
+                    if (fromDate) matchCondition.createdAt.$gte = new Date(fromDate);
+                    if (toDate) matchCondition.createdAt.$lte = new Date(toDate);
+                }
+
+                // Sử dụng aggregate để lấy thông báo và kiểm tra is_read cho từng tenant
+                const notifications = await Notification.aggregate([
+                    { $match: matchCondition },
+                    {
+                        $addFields: {
+                            recipient_info: {
+                                $arrayElemAt: [
+                                    {
+                                        $filter: {
+                                            input: '$recipients',
+                                            cond: { $eq: ['$$this.recipient_id', userId] }
+                                        }
+                                    },
+                                    0
+                                ]
+                            }
+                        }
+                    },
+                    {
+                        $project: {
+                            title: 1,
+                            content: 1,
+                            type: 1,
+                            status: 1,
+                            createdAt: 1,
+                            is_read: { $ifNull: ['$recipient_info.is_read', false] },
                             read_at: '$recipient_info.read_at'
                         }
                     },
@@ -289,7 +359,9 @@ class NotificationService {
     // Đếm số thông báo chưa đọc (chỉ cho Manager/Accountant)
     async getUnreadCount(userId, userRole) {
         try {
-            if (userRole === 'manager' || userRole === 'accountant') {
+            const normalizedRole = (userRole || '').toLowerCase();
+
+            if (normalizedRole === 'manager' || normalizedRole === 'accountant') {
                 const count = await Notification.countDocuments({
                     type: 'staff',
                     status: 'sent',
@@ -299,6 +371,17 @@ class NotificationService {
                             is_read: false
                         }
                     }
+                });
+                return { unread_count: count };
+            } else if (normalizedRole === 'tenant') {
+                // Tenant đếm thông báo chưa đọc: type = 'tenant' + type = 'system' gửi cho tenant đó
+                const count = await Notification.countDocuments({
+                    $or: [
+                        // Thông báo từ Manager cho tất cả tenant
+                        { type: 'tenant', status: 'sent' },
+                        // Thông báo hệ thống gửi cho tenant cụ thể
+                        { type: 'system', status: 'sent', 'recipients.recipient_id': userId, 'recipients.is_read': false }
+                    ]
                 });
                 return { unread_count: count };
             }

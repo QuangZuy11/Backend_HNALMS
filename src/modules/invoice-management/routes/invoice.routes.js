@@ -34,10 +34,17 @@ const router = express.Router();
 // Import 2 Controller mới đã tách
 const invoicePeriodicController = require("../controllers/invoice_periodic.controller");
 const invoiceIncurredController = require("../controllers/invoice_incurred.controller");
+const invoiceUnifiedController = require("../controllers/invoice-unified.controller");
 
 // Controller thanh toán giữ nguyên
 const invoicePaymentController = require("../controllers/invoice-payment.controller");
 const { authenticate } = require("../../authentication/middlewares");
+
+// ============================================================================
+// 0. NHÓM HÓA ĐƠN UNIFIED (Lấy cả Periodic và Incurred)
+// Prefix tự động: /api/invoices
+// ============================================================================
+router.get("/tenant/:tenantId", invoiceUnifiedController.getInvoicesByTenant);
 
 // ============================================================================
 // 1. NHÓM HÓA ĐƠN ĐỊNH KỲ (Tiền thuê phòng hàng tháng)

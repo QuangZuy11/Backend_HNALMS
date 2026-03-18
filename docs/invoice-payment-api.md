@@ -32,18 +32,20 @@ Production:  https://your-domain.com/api
 
 | # | Method | Endpoint | Mô tả |
 |---|--------|----------|-------|
-| 1 | GET | `/invoices/tenant/:tenantId` | Danh sách hóa đơn của Tenant (phân trang) |
-| 2 | GET | `/invoices/my/:id` | Chi tiết hóa đơn (Tenant tự xem, cần đăng nhập) |
-| 3 | GET | `/invoices/:id/incurred` | Chi tiết hóa đơn phát sinh (gồm RepairRequest + Device) |
+| 1 | GET | `/invoices/tenant/:tenantId` | **Unified** - Danh sách hóa đơn của Tenant (cả Periodic & Incurred, có filter) |
+| 2 | GET | `/invoices/periodic/tenant/:tenantId` | Chỉ hóa đơn định kỳ |
+| 3 | GET | `/invoices/incurred/tenant/:tenantId` | Chỉ hóa đơn phát sinh |
+| 4 | GET | `/invoices/periodic/my/:id` | Chi tiết hóa đơn định kỳ (Tenant tự xem, cần đăng nhập) |
+| 5 | GET | `/invoices/incurred/my/:id` | Chi tiết hóa đơn phát sinh (Tenant tự xem, cần đăng nhập) |
 
 ### Thanh toán QR (Tất cả hóa đơn)
 
 | # | Method | Endpoint | Mô tả |
 |---|--------|----------|-------|
-| 4 | POST | `/invoices/:id/payment/initiate` | Khởi tạo thanh toán → nhận QR |
-| 5 | GET | `/invoices/payment/status/:transactionCode` | Polling kiểm tra trạng thái |
-| 6 | POST | `/invoices/payment/cancel/:transactionCode` | Hủy giao dịch đang Pending |
-| 7 | POST | `/webhook/sepay` | ⚠️ Nội bộ — Sepay gọi tự động (webhook chung) |
+| 6 | POST | `/invoices/payment/:id/initiate` | Khởi tạo thanh toán → nhận QR |
+| 7 | GET | `/invoices/payment/status/:transactionCode` | Polling kiểm tra trạng thái |
+| 8 | POST | `/invoices/payment/cancel/:transactionCode` | Hủy giao dịch đang Pending |
+| 9 | POST | `/webhook/sepay` | ⚠️ Nội bộ — Sepay gọi tự động (webhook chung) |
 
 ---
 
@@ -51,12 +53,12 @@ Production:  https://your-domain.com/api
 
 ---
 
-### 1. Danh Sách Hóa Đơn Của Tenant
+### 1. Danh Sách Hóa Đơn Của Tenant (Unified)
 
 Lấy tất cả hóa đơn của tenant (bao gồm cả Periodic và Incurred). **Hóa đơn trạng thái `Draft` sẽ KHÔNG được trả về.**
 
 ```
-GET /invoices/tenant/:tenantId
+GET /api/invoices/tenant/:tenantId
 ```
 
 #### Path Parameters
@@ -69,10 +71,22 @@ GET /invoices/tenant/:tenantId
 |-----------|------|---------|-------|
 | page | number | 1 | Trang hiện tại |
 | limit | number | 10 | Số hóa đơn mỗi trang |
+| type | string | "all" | Lọc theo loại: `"periodic"` \| `"incurred"` \| `"all"` |
+| status | string | "all" | Lọc theo trạng thái: `"Unpaid"` \| `"Paid"` \| `"all"` |
 
-#### Request Example
+#### Request Examples
 ```
-GET /invoices/tenant/69a9953b1a42128b79652850?page=1&limit=10
+# Lấy tất cả hóa đơn
+GET /api/invoices/tenant/69a9953b1a42128b79652850
+
+# Lấy hóa đơn định kỳ
+GET /api/invoices/tenant/69a9953b1a42128b79652850?type=periodic
+
+# Lấy hóa đơn phát sinh chưa thanh toán
+GET /api/invoices/tenant/69a9953b1a42128b79652850?type=incurred&status=Unpaid
+
+# Phân trang
+GET /api/invoices/tenant/69a9953b1a42128b79652850?page=1&limit=20&type=all&status=all
 ```
 
 #### Response Success (200)
@@ -89,7 +103,7 @@ GET /invoices/tenant/69a9953b1a42128b79652850?page=1&limit=10
         "name": "Phòng 310"
       },
       "title": "Hóa đơn tiền thuê & dịch vụ tháng 3/2026",
-      "type": "Periodic",
+      "invoiceType": "Periodic",
       "totalAmount": 2906612.90,
       "status": "Unpaid",
       "dueDate": "2026-04-04T17:00:00.000Z",
@@ -98,13 +112,14 @@ GET /invoices/tenant/69a9953b1a42128b79652850?page=1&limit=10
     {
       "_id": "69a99cddd832c0de61cf2113",
       "invoiceCode": "INV-RP-0001",
+      "contractId": "69a9953b1a42128b79652850",
       "roomId": {
         "_id": "69a680b62327a1f0e037f3ac",
         "name": "Phòng 310"
       },
       "repairRequestId": "69a99d146b1cddc0e772361e",
       "title": "Sửa chữa điều hoà",
-      "type": "Incurred",
+      "invoiceType": "Incurred",
       "totalAmount": 100000,
       "status": "Unpaid",
       "dueDate": "2026-03-12T00:00:00.000Z",
@@ -116,11 +131,17 @@ GET /invoices/tenant/69a9953b1a42128b79652850?page=1&limit=10
     "page": 1,
     "limit": 10,
     "totalPages": 1
+  },
+  "filters": {
+    "type": "all",
+    "status": "all"
   }
 }
 ```
 
-> **Lưu ý:** Hóa đơn `Draft` không xuất hiện trong kết quả. Chỉ hiển thị hóa đơn đã được phát hành (`Unpaid`, `Paid`, `Overdue`, `Cancelled`).
+> **Lưu ý:**
+> - Hóa đơn `Draft` không xuất hiện trong kết quả
+> - Trường `invoiceType` để phân biệt loại hóa đơn: `"Periodic"` hoặc `"Incurred"`
 
 #### Response Errors
 | Status | Trường hợp |
@@ -129,12 +150,12 @@ GET /invoices/tenant/69a9953b1a42128b79652850?page=1&limit=10
 
 ---
 
-### 2. Chi Tiết Hóa Đơn (Tenant Tự Xem)
+### 2. Chi Tiết Hóa Đơn Định Kỳ (Periodic)
 
-Tenant xem chi tiết 1 hóa đơn của mình. Hệ thống tự kiểm tra quyền sở hữu qua JWT token.
+Tenant xem chi tiết 1 hóa đơn định kỳ của mình. Hệ thống tự kiểm tra quyền sở hữu qua JWT token.
 
 ```
-GET /invoices/my/:id
+GET /api/invoices/periodic/my/:id
 ```
 
 #### Headers
@@ -145,7 +166,7 @@ GET /invoices/my/:id
 #### Path Parameters
 | Parameter | Type | Mô tả |
 |-----------|------|-------|
-| id | string | ObjectId của hóa đơn (`Invoice._id`) |
+| id | string | ObjectId của hóa đơn (`InvoicePeriodic._id`) |
 
 #### Response Success (200)
 ```json
@@ -196,13 +217,18 @@ GET /invoices/my/:id
 Trả về thông tin tối ưu cho hóa đơn phát sinh, bao gồm RepairRequest và Device.
 
 ```
-GET /invoices/:id/incurred
+GET /api/invoices/incurred/my/:id
 ```
+
+#### Headers
+| Header | Giá trị |
+|--------|--------|
+| Authorization | `Bearer {accessToken}` |
 
 #### Path Parameters
 | Parameter | Type | Mô tả |
 |-----------|------|-------|
-| id | string | ObjectId của hóa đơn (`Invoice._id`) |
+| id | string | ObjectId của hóa đơn (`InvoiceIncurred._id`) |
 
 #### Response Success (200)
 ```json
@@ -241,13 +267,31 @@ Tạo giao dịch thanh toán và nhận QR code chuyển khoản. QR có hiệu
 Áp dụng cho **cả 2 loại** hóa đơn: `Periodic` (định kỳ) và `Incurred` (phát sinh).
 
 ```
-POST /invoices/:id/payment/initiate
+POST /api/invoices/payment/:id/initiate
 ```
 
 #### Path Parameters
 | Parameter | Type | Mô tả |
 |-----------|------|-------|
-| id | string | ObjectId của hóa đơn (`Invoice._id`) |
+| id | string | ObjectId của hóa đơn (`InvoicePeriodic._id` hoặc `InvoiceIncurred._id`) |
+
+#### Request Body
+| Parameter | Type | Required | Mô tả |
+|-----------|------|----------|-------|
+| type | string | No | Loại hóa đơn: `"periodic"` hoặc `"incurred"`. Mặc định: `"incurred"` |
+
+#### Ví dụ Request
+```json
+{
+  "type": "periodic"
+}
+```
+Hoặc cho hóa đơn phát sinh:
+```json
+{
+  "type": "incurred"
+}
+```
 
 #### Điều kiện hóa đơn hợp lệ
 - `status` phải là `"Unpaid"` (chưa thanh toán)
@@ -263,6 +307,7 @@ POST /invoices/:id/payment/initiate
     "transactionCode": "HD INV320 05032026",
     "invoiceAmount": 350000,
     "invoiceCode": "INV-2026-320",
+    "invoiceType": "periodic",
     "roomName": "Phòng 310",
     "qrUrl": "https://img.vietqr.io/image/970418-4270992356-qr_only.jpg?amount=350000&addInfo=HD%20INV320%2005032026&accountName=PHAM%20QUANG%20DUY",
     "bankInfo": {
@@ -295,7 +340,7 @@ POST /invoices/:id/payment/initiate
 Frontend gọi định kỳ (3–5 giây) để biết giao dịch đã được xác nhận chưa.
 
 ```
-GET /invoices/payment/status/:transactionCode
+GET /api/invoices/payment/status/:transactionCode
 ```
 
 #### Path Parameters
@@ -305,7 +350,7 @@ GET /invoices/payment/status/:transactionCode
 
 > **Lưu ý:** Encode URL trước khi đặt vào path. Dấu cách → `%20`.
 > ```
-> GET /invoices/payment/status/HD%20INV320%2005032026
+> GET /api/invoices/payment/status/HD%20INV320%2005032026
 > ```
 
 #### Response — Đang chờ thanh toán (Pending)
@@ -321,9 +366,9 @@ GET /invoices/payment/status/:transactionCode
       "_id": "67b9c0d1e2f3a4b5c6d7e8f9",
       "invoiceCode": "INV-2026-320",
       "status": "Unpaid",
-      "type": "Incurred",
       "totalAmount": 350000
     },
+    "invoiceType": "incurred",
     "expireInSeconds": 185
   }
 }
@@ -343,9 +388,9 @@ GET /invoices/payment/status/:transactionCode
       "_id": "67b9c0d1e2f3a4b5c6d7e8f9",
       "invoiceCode": "INV-2026-320",
       "status": "Paid",
-      "type": "Incurred",
       "totalAmount": 350000
-    }
+    },
+    "invoiceType": "incurred"
   }
 }
 ```
@@ -383,7 +428,7 @@ GET /invoices/payment/status/:transactionCode
 Frontend gọi khi user **tự đóng modal QR** trước khi thanh toán.
 
 ```
-POST /invoices/payment/cancel/:transactionCode
+POST /api/invoices/payment/cancel/:transactionCode
 ```
 
 #### Path Parameters
@@ -434,8 +479,8 @@ Hệ thống tự phân biệt loại giao dịch qua nội dung chuyển khoả
 
 Khi Sepay phát hiện biến động số dư ngân hàng khớp với mã giao dịch hóa đơn, endpoint này sẽ:
 1. Cập nhật `Payment.status` → `"Success"`
-2. Cập nhật `Invoice.status` → `"Paid"`
-3. Cập nhật `RepairRequest.status` → `"Paid"` (nếu hóa đơn liên kết với yêu cầu sửa chữa)
+2. Cập nhật `InvoicePeriodic.status` → `"Paid"` HOẶC `InvoiceIncurred.status` → `"Paid"` (tùy loại)
+3. Cập nhật `RepairRequest.status` → `"Paid"` (chỉ khi là hóa đơn phát sinh liên kết với yêu cầu sửa chữa)
 
 #### Authorization
 | Header | Giá trị |
@@ -472,15 +517,16 @@ Khi Sepay phát hiện biến động số dư ngân hàng khớp với mã giao
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  STEP 1: User xem chi tiết hóa đơn phát sinh                    │
-│  → Kiểm tra: type = "Incurred" VÀ status = "Unpaid"             │
+│  STEP 1: User xem chi tiết hóa đơn                              │
+│  → Kiểm tra: type = "Periodic" HOẶC "Incurred" VÀ status = "Unpaid" │
 │  → Hiển thị nút "Thanh toán ngay"                               │
 └─────────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
 │  STEP 2: User click "Thanh toán ngay"                           │
-│  → POST /api/invoices/:invoiceId/payment/initiate               │
-│  → Nhận về: transactionCode, invoiceAmount, qrUrl, expireAt     │
+│  → POST /api/invoices/payment/:invoiceId/initiate              │
+│  → Body: { "type": "periodic" } hoặc { "type": "incurred" }  │
+│  → Nhận về: transactionCode, invoiceAmount, qrUrl, invoiceType │
 └─────────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
@@ -499,9 +545,9 @@ Khi Sepay phát hiện biến động số dư ngân hàng khớp với mã giao
               ↓                               ↓
 ┌─────────────────────────┐     ┌─────────────────────────────────┐
 │  User click "Đóng/Hủy"  │     │  STEP 4: Polling mỗi 3–5 giây  │
-│          ↓              │     │  GET /api/invoices/payment/     │
-│  POST /payment/cancel/  │     │      status/:transactionCode    │
-│         :code           │     └─────────────────────────────────┘
+│          ↓              │     │  GET /api/invoices/payment/    │
+│  POST /cancel/          │     │      status/:transactionCode   │
+│     :transactionCode    │     └─────────────────────────────────┘
 │          ↓              │                   ↓
 │  → Payment bị XÓA       │        ┌──────────┴──────────┐
 │  → Invoice vẫn "Unpaid" │        ↓                     ↓
@@ -539,18 +585,45 @@ HD [InvoiceCode rút gọn] [DDMMYYYY]
 
 ## Mô Hình Dữ Liệu
 
-### Invoice (Hóa Đơn)
+### InvoicePeriodic (Hóa Đơn Định Kỳ)
 ```javascript
 {
   _id: ObjectId,
-  invoiceCode: String,         // Mã hóa đơn (VD: "INV-2026-320")
-  roomId: ObjectId,            // Ref → Room
-  repairRequestId: ObjectId,   // Ref → RepairRequest (chỉ có với Incurred)
-  type: "Incurred",            // Loại hóa đơn
-  title: String,               // Tiêu đề (VD: "Sửa điều hòa phòng 310")
-  totalAmount: Number,         // Số tiền cần thanh toán
-  status: Enum,                // "Draft" | "Unpaid" | "Paid" | "Overdue" | "Cancelled"
-  dueDate: Date,               // Hạn thanh toán
+  invoiceCode: String,         // Mã hóa đơn (VD: "INV-Phòng 310-32026-2223")
+  contractId: ObjectId,        // Ref → Contract
+  title: String,               // Tiêu đề (VD: "Hóa đơn tiền thuê & dịch vụ tháng 3/2026")
+  items: [
+    {
+      itemName: String,        // Tên item (VD: "Tiền thuê phòng", "Tiền điện")
+      oldIndex: Number,       // Chỉ số cũ (cho điện/nước)
+      newIndex: Number,       // Chỉ số mới
+      usage: Number,           // Lượng sử dụng
+      unitPrice: Number,      // Đơn giá
+      amount: Number,         // Thành tiền
+      isIndex: Boolean        // Đánh dấu có chốt số
+    }
+  ],
+  totalAmount: Number,         // Tổng tiền
+  status: Enum,               // "Draft" | "Unpaid" | "Paid"
+  dueDate: Date,              // Hạn thanh toán
+  createdAt: Date,
+  updatedAt: Date
+}
+```
+
+### InvoiceIncurred (Hóa Đơn Phát Sinh)
+```javascript
+{
+  _id: ObjectId,
+  invoiceCode: String,         // Mã hóa đơn (VD: "INV-RP-0001")
+  contractId: ObjectId,        // Ref → Contract
+  title: String,              // Tiêu đề (VD: "Sửa chữa điều hòa")
+  totalAmount: Number,        // Số tiền cần thanh toán
+  type: String,               // Loại: "repair" | "violation"
+  status: Enum,               // "Draft" | "Unpaid" | "Paid" | "Cancelled"
+  dueDate: Date,              // Hạn thanh toán
+  repairRequestId: ObjectId,  // Ref → RepairRequest (nếu là hóa đơn sửa chữa)
+  images: [String],           // URLs của hình ảnh
   createdAt: Date,
   updatedAt: Date
 }
@@ -560,7 +633,8 @@ HD [InvoiceCode rút gọn] [DDMMYYYY]
 ```javascript
 {
   _id: ObjectId,
-  invoiceId: ObjectId,         // Ref → Invoice
+  invoiceId: ObjectId,         // Ref → InvoicePeriodic (hóa đơn định kỳ)
+  incurredInvoiceId: ObjectId, // Ref → InvoiceIncurred (hóa đơn phát sinh)
   depositId: ObjectId,         // Ref → Deposit (null với invoice payment)
   amount: Number,              // Số tiền giao dịch
   transactionCode: String,     // Mã giao dịch unique (VD: "HD INV320 05032026")
@@ -570,6 +644,8 @@ HD [InvoiceCode rút gọn] [DDMMYYYY]
   updatedAt: Date
 }
 ```
+
+> **Lưu ý:** Payment chỉ lưu một trong hai trường `invoiceId` hoặc `incurredInvoiceId` tùy loại hóa đơn.
 
 ### RepairRequest (Yêu Cầu Sửa Chữa)
 ```javascript

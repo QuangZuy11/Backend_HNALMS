@@ -6,6 +6,7 @@ const UserInfo = require("../../authentication/models/userInfor.model");
 const Deposit = require("../models/deposit.model");
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs"); // Ensure bcryptjs is installed
+const { checkAndSendRenewalNotifications } = require("../services/contract-renewal.service");
 
 // Helper to generate random string
 const generateRandomString = (length) => {
@@ -733,6 +734,24 @@ exports.updateContract = async (req, res) => {
     await session.abortTransaction();
     session.endSession();
     console.error("Update Contract Error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Internal Server Error",
+    });
+  }
+};
+
+// Test: Gửi thông báo gia hạn hợp đồng thủ công
+exports.sendRenewalNotifications = async (req, res) => {
+  try {
+    console.log("[API] Gọi api gửi notification gia hạn hợp đồng...");
+    await checkAndSendRenewalNotifications();
+    res.status(200).json({
+      success: true,
+      message: "Đã chạy kiểm tra và gửi thông báo gia hạn hợp đồng",
+    });
+  } catch (error) {
+    console.error("Send Renewal Notifications Error:", error);
     res.status(500).json({
       success: false,
       message: error.message || "Internal Server Error",
