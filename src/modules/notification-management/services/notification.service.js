@@ -208,11 +208,16 @@ class NotificationService {
                     }
                 };
             } else if (normalizedRole === 'tenant') {
-                // Tenant xem thông báo tenant đã được gửi (từ Manager) cho TẤT CẢ tenant
-                // => không dùng recipients (không track is_read per-tenant trong mô hình này)
+                // Tenant xem thông báo:
+                // 1. type = 'tenant' (từ Manager) cho TẤT CẢ tenant
+                // 2. type = 'system' VÀ recipient_id = tenantId (thông báo hệ thống gửi cho tenant cụ thể)
+                const orConditions = [
+                    { type: 'tenant', status: 'sent' },
+                    { type: 'system', status: 'sent', 'recipients.recipient_id': userId }
+                ];
+
                 matchCondition = {
-                    type: 'tenant',
-                    status: 'sent'
+                    $or: orConditions
                 };
 
                 if (search) {
@@ -225,11 +230,39 @@ class NotificationService {
                     if (toDate) matchCondition.createdAt.$lte = new Date(toDate);
                 }
 
-                const notifications = await Notification.find(matchCondition)
-                    .sort({ createdAt: -1 })
-                    .skip(skip)
-                    .limit(limit)
-                    .select('title content type status createdAt updatedAt');
+                // Sử dụng aggregate để lấy thông báo và kiểm tra is_read cho từng tenant
+                const notifications = await Notification.aggregate([
+                    { $match: matchCondition },
+                    {
+                        $addFields: {
+                            recipient_info: {
+                                $arrayElemAt: [
+                                    {
+                                        $filter: {
+                                            input: '$recipients',
+                                            cond: { $eq: ['$$this.recipient_id', userId] }
+                                        }
+                                    },
+                                    0
+                                ]
+                            }
+                        }
+                    },
+                    {
+                        $project: {
+                            title: 1,
+                            content: 1,
+                            type: 1,
+                            status: 1,
+                            createdAt: 1,
+                            is_read: { $ifNull: ['$recipient_info.is_read', false] },
+                            read_at: '$recipient_info.read_at'
+                        }
+                    },
+                    { $sort: { createdAt: -1 } },
+                    { $skip: skip },
+                    { $limit: limit }
+                ]);
 
                 const total = await Notification.countDocuments(matchCondition);
 

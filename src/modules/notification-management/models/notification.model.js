@@ -29,7 +29,8 @@ const NotificationSchema = new Schema({
     created_by: {
         type: Schema.Types.ObjectId,
         ref: 'User',
-        required: true
+        required: false, // Cho phép null với notification từ hệ thống
+        default: null
     },
     // Chỉ tạo recipients khi status = 'sent'
     recipients: [{
