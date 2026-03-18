@@ -234,7 +234,6 @@ exports.updateRepairStatus = async (req, res) => {
       // Dành cho sửa chữa miễn phí → tạo phiếu chi nội bộ
       financialTitle,
       financialAmount,
-      financialType,
       paymentVoucher,
       // Loại thanh toán (REVENUE / EXPENSE)
       paymentType,
@@ -260,7 +259,6 @@ exports.updateRepairStatus = async (req, res) => {
     const financialTicketData =
       financialTitle && financialAmount !== undefined && financialAmount !== null
         ? {
-            type: financialType || "Payment",
             title: financialTitle,
             amount: financialAmount,
             paymentVoucher,

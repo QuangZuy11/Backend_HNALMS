@@ -4,7 +4,6 @@ const { Schema } = mongoose;
 
 /**
  * financial_tickets
- * - type: 'Receipt' | 'Payment'
  * - amount: number
  * - title: string
  * - referenceId: ObjectId (tham chiếu tới bản ghi nguồn, ví dụ: RepairRequest)
@@ -13,11 +12,6 @@ const { Schema } = mongoose;
  */
 const FinancialTicketSchema = new Schema(
   {
-    type: {
-      type: String,
-      enum: ["Receipt", "Payment"],
-      required: true,
-    },
     amount: {
       type: Number,
       required: true,

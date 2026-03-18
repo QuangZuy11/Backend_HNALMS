@@ -13,11 +13,6 @@ const invoiceIncurredSchema = new mongoose.Schema(
       ref: "RepairRequest",
       default: null,
     },
-    receiptTicketId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "FinancialTicket",
-      default: null,
-    },
     title: { type: String, required: true, trim: true },
     totalAmount: { type: Number, required: true, default: 0 },
     status: { type: String, enum: ["Paid", "Unpaid", "Draft"], default: "Draft" },
