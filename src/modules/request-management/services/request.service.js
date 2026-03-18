@@ -2,6 +2,7 @@ const RepairRequest = require("../models/repair_requests.model");
 const User = require("../../authentication/models/user.model");
 const UserInfo = require("../../authentication/models/userInfor.model");
 const Device = require("../../room-floor-management/models/devices.model");
+const Room = require("../../room-floor-management/models/room.model");
 const Contract = require("../../contract-management/models/contract.model");
 const InvoiceIncurred = require("../../invoice-management/models/invoice_incurred.model");
 const FinancialTicket = require("../../managing-income-expenses/models/financial_tickets");
@@ -111,7 +112,23 @@ const attachComputedCost = async (requests) => {
  * @returns {Object} Yêu cầu vừa tạo
  */
 const createRepairRequest = async (data) => {
-  const { tenantId, devicesId, type, description, images } = data;
+  const { tenantId, roomId, devicesId, type, description, images } = data;
+
+  // Kiểm tra room có tồn tại không
+  const room = await Room.findById(roomId);
+  if (!room) {
+    throw new Error("Phòng không tồn tại");
+  }
+
+  // Kiểm tra room có thuộc về tenant không (bằng cách kiểm tra contract hoạt động)
+  const activeContract = await Contract.findOne({
+    roomId: roomId,
+    tenantId: tenantId,
+    status: "active"
+  });
+  if (!activeContract) {
+    throw new Error("Phòng không thuộc về người dùng hoặc hợp đồng không còn hoạt động");
+  }
 
   // Kiểm tra device có tồn tại không
   const device = await Device.findById(devicesId);
@@ -128,6 +145,7 @@ const createRepairRequest = async (data) => {
   // Tạo yêu cầu mới
   const newRequest = new RepairRequest({
     tenantId,
+    roomId,
     devicesId,
     type,
     description,
@@ -144,6 +162,11 @@ const createRepairRequest = async (data) => {
       path: "tenantId",
       select: "username email phoneNumber role",
       model: User,
+    })
+    .populate({
+      path: "roomId",
+      select: "name roomCode status",
+      model: Room,
     })
     .populate({
       path: "devicesId",
