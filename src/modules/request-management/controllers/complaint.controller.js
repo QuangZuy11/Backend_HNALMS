@@ -4,6 +4,7 @@
  */
 
 const complaintService = require("../services/complaint.service");
+const notificationService = require("../../notification-management/services/notification.service");
 const { successResponse, errorResponse } = require("../../../shared/utils/response");
 
 /**
@@ -30,6 +31,23 @@ exports.createComplaint = async (req, res) => {
       content,
       category
     });
+
+    // Tạo thông báo hệ thống cho manager
+    console.log(`📬 [COMPLAINT] Gọi createSystemNotificationForRequest với data:`, {
+      tenantId,
+      category: category,
+      complaintContent: content
+    });
+    
+    await notificationService.createSystemNotificationForRequest(
+      tenantId,
+      'complaint',
+      {
+        category: category,
+        complaintContent: content
+      }
+    );
+    console.log(`✅ [COMPLAINT] Hoàn tất tạo notification`);
 
     return successResponse(
       res,

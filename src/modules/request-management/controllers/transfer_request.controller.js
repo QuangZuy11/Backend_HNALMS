@@ -1,4 +1,6 @@
 const transferService = require("../services/transfer_request.service");
+const notificationService = require("../../notification-management/services/notification.service");
+const Room = require("../../room-floor-management/models/room.model");
 
 /**
  * [TENANT] Lấy danh sách phòng trống để chọn chuyển đến
@@ -44,6 +46,32 @@ exports.createTransferRequest = async (req, res) => {
       tenantId,
       req.body,
     );
+
+    // Lấy thông tin phòng hiện tại và phòng đích
+    const currentRoom = await Room.findById(result.currentRoomId).select('name');
+    const targetRoom = await Room.findById(result.targetRoomId).select('name');
+    console.log(`📍 [TRANSFER] Rooms found: ${currentRoom?.name} -> ${targetRoom?.name}`);
+
+    // Tạo thông báo hệ thống cho manager
+    console.log(`📬 [TRANSFER] Gọi createSystemNotificationForRequest với data:`, {
+      tenantId,
+      currentRoomName: currentRoom?.name || 'Phòng không xác định',
+      targetRoomName: targetRoom?.name || 'Phòng không xác định',
+      reason: req.body.reason,
+      transferDate: result.transferDate
+    });
+    
+    await notificationService.createSystemNotificationForRequest(
+      tenantId,
+      'transfer',
+      {
+        currentRoomName: currentRoom?.name || 'Phòng không xác định',
+        targetRoomName: targetRoom?.name || 'Phòng không xác định',
+        reason: req.body.reason,
+        transferDate: result.transferDate
+      }
+    );
+    console.log(`✅ [TRANSFER] Hoàn tất tạo notification`);
 
     res.status(201).json({
       success: true,

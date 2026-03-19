@@ -1,4 +1,6 @@
 const requestService = require("../services/request.service");
+const notificationService = require("../../notification-management/services/notification.service");
+const Room = require("../../room-floor-management/models/room.model");
 const cloudinary = require("cloudinary").v2;
 require("dotenv").config();
 
@@ -70,6 +72,29 @@ exports.createRepairRequest = async (req, res) => {
       description,
       images,
     });
+
+    // Lấy thông tin phòng để tạo thông báo
+    const room = await Room.findById(roomId).select('name');
+    console.log(`📍 [REPAIR] Room found: ${room?.name || 'null'}`);
+
+    // Tạo thông báo hệ thống cho manager
+    console.log(`📬 [REPAIR] Gọi createSystemNotificationForRequest với data:`, {
+      tenantId,
+      type: type,
+      roomName: room?.name || 'Phòng không xác định',
+      description: description
+    });
+    
+    await notificationService.createSystemNotificationForRequest(
+      tenantId,
+      'repair',
+      {
+        type: type,
+        roomName: room?.name || 'Phòng không xác định',
+        description: description
+      }
+    );
+    console.log(`✅ [REPAIR] Hoàn tất tạo notification`);
 
     res.status(201).json({
       success: true,
