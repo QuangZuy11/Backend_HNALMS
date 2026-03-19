@@ -1,4 +1,6 @@
 const invoiceIncurredService = require("../services/invoice_incurred.service");
+const notificationService = require("../../notification-management/services/notification.service");
+const Contract = require("../../contract-management/models/contract.model");
 
 class InvoiceIncurredController {
   async getAll(req, res) {
@@ -25,18 +27,90 @@ class InvoiceIncurredController {
 
   async create(req, res) {
     try {
+      console.log(`[INVOICE INCURRED CONTROLLER] 🔄 Bắt đầu tạo hóa đơn phát sinh...`);
       const invoice = await invoiceIncurredService.createIncurredInvoice(req.body);
+      console.log(`[INVOICE INCURRED CONTROLLER] ✅ Đã tạo hóa đơn: ${invoice.invoiceCode}`);
+      
+      // Gửi thông báo cho tenant khi hóa đơn phát sinh được tạo
+      if (invoice && invoice.contractId) {
+        try {
+          console.log(`[INVOICE INCURRED CONTROLLER] 🎯 Tìm contract: ${invoice.contractId}`);
+          const contract = await Contract.findById(invoice.contractId).select('tenantId');
+          if (contract && contract.tenantId) {
+            console.log(`[INVOICE INCURRED CONTROLLER] 📬 Gửi notification đến tenant: ${contract.tenantId}`);
+            const notifResult = await notificationService.createInvoiceNotification(
+              contract.tenantId,
+              'incurred',
+              {
+                invoiceCode: invoice.invoiceCode,
+                title: invoice.title,
+                totalAmount: invoice.totalAmount,
+                dueDate: invoice.dueDate,
+                type: invoice.type,
+                description: `Hóa đơn ${invoice.type === 'repair' ? 'sửa chữa' : invoice.type === 'violation' ? 'vi phạm' : 'cọc'}`
+              }
+            );
+            if (notifResult) {
+              console.log(`[INVOICE INCURRED CONTROLLER] ✅ Notification đã được lưu vào DB`);
+            } else {
+              console.warn(`[INVOICE INCURRED CONTROLLER] ⚠️ Notification không được lưu (null result)`);
+            }
+          } else {
+            console.warn(`[INVOICE INCURRED CONTROLLER] ⚠️ Không tìm thấy contract hoặc tenantId`);
+          }
+        } catch (notifError) {
+          console.error(`[INVOICE INCURRED CONTROLLER] ❌ Lỗi gửi notification:`, notifError.message);
+        }
+      }
+      
       res.status(201).json({ success: true, data: invoice });
     } catch (error) {
+      console.error(`[INVOICE INCURRED CONTROLLER] ❌ Lỗi tạo hóa đơn:`, error.message);
       res.status(400).json({ success: false, message: error.message });
     }
   }
 
   async release(req, res) {
     try {
+      console.log(`[INVOICE INCURRED CONTROLLER] 🔄 Phát hành hóa đơn: ${req.params.id}`);
       const invoice = await invoiceIncurredService.releaseInvoice(req.params.id);
+      console.log(`[INVOICE INCURRED CONTROLLER] ✅ Phát hành thành công, invoiceCode: ${invoice.invoiceCode}`);
+      
+      // Gửi thông báo cho tenant khi hóa đơn phát sinh được phát hành
+      if (invoice && invoice.contractId) {
+        try {
+          console.log(`[INVOICE INCURRED CONTROLLER] 🎯 Tìm contract: ${invoice.contractId}`);
+          const contract = await Contract.findById(invoice.contractId).select('tenantId');
+          if (contract && contract.tenantId) {
+            console.log(`[INVOICE INCURRED CONTROLLER] 📬 Gửi notification đến tenant: ${contract.tenantId}`);
+            const notifResult = await notificationService.createInvoiceNotification(
+              contract.tenantId,
+              'incurred',
+              {
+                invoiceCode: invoice.invoiceCode,
+                title: invoice.title,
+                totalAmount: invoice.totalAmount,
+                dueDate: invoice.dueDate,
+                type: invoice.type,
+                description: `Hóa đơn ${invoice.type === 'repair' ? 'sửa chữa' : invoice.type === 'violation' ? 'vi phạm' : 'cọc'}`
+              }
+            );
+            if (notifResult) {
+              console.log(`[INVOICE INCURRED CONTROLLER] ✅ Notification đã được lưu vào DB`);
+            } else {
+              console.warn(`[INVOICE INCURRED CONTROLLER] ⚠️ Notification không được lưu (null result)`);
+            }
+          } else {
+            console.warn(`[INVOICE INCURRED CONTROLLER] ⚠️ Không tìm thấy contract hoặc tenantId`);
+          }
+        } catch (notifError) {
+          console.error(`[INVOICE INCURRED CONTROLLER] ❌ Lỗi gửi notification:`, notifError.message);
+        }
+      }
+      
       res.status(200).json({ success: true, data: invoice, message: "Phát hành hóa đơn thành công!" });
     } catch (error) {
+      console.error(`[INVOICE INCURRED CONTROLLER] ❌ Lỗi phát hành hóa đơn:`, error.message);
       res.status(400).json({ success: false, message: error.message });
     }
   }

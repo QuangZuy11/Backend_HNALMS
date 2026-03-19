@@ -461,6 +461,82 @@ class NotificationService {
             return null;
         }
     }
+
+    // Tạo thông báo hệ thống khi tenant có hóa đơn mới
+    async createInvoiceNotification(tenantId, invoiceType, invoiceData) {
+        try {
+            console.log(`[INVOICE NOTIFICATION] 📌 Bắt đầu tạo notification...`);
+            console.log(`[INVOICE NOTIFICATION] Input: tenantId=${tenantId}, invoiceType=${invoiceType}, invoiceCode=${invoiceData?.invoiceCode}`);
+            
+            // Lấy thông tin tenant
+            const tenant = await User.findById(tenantId).select('fullName email');
+            if (!tenant) {
+                console.error(`[INVOICE NOTIFICATION] ❌ Không tìm thấy tenant: ${tenantId}`);
+                return null;
+            }
+            console.log(`[INVOICE NOTIFICATION] ✅ Tìm thấy tenant: ${tenant.fullName}`);
+
+            // Tạo tiêu đề và nội dung dựa vào loại hóa đơn
+            let title, content;
+            
+            if (invoiceType === 'periodic') {
+                // Hóa đơn định kỳ (Tiền thuê, điện, nước, wifi)
+                const { invoiceCode, title: invoiceTitle, totalAmount, dueDate, items } = invoiceData;
+                const itemsList = items?.map(item => `• ${item.itemName}: ${item.amount?.toLocaleString('vi-VN')} đ`).join('\n') || '';
+                
+                title = `[Hóa Đơn Định Kỳ] ${invoiceCode}`;
+                content = `Phòng của bạn có hóa đơn định kỳ:\n\n${itemsList}\n\nTổng tiền: ${totalAmount?.toLocaleString('vi-VN')} đ\nHạn thanh toán: ${new Date(dueDate).toLocaleDateString('vi-VN')}\n\nVui lòng thanh toán đúng hạn.`;
+                
+            } else if (invoiceType === 'incurred') {
+                // Hóa đơn phát sinh (Sửa chữa, vi phạm, cọc)
+                const { invoiceCode, title: invoiceTitle, totalAmount, dueDate, type, description } = invoiceData;
+                
+                let typeLabel = 'Phát Sinh';
+                if (type === 'repair') typeLabel = 'Sửa Chữa';
+                else if (type === 'violation') typeLabel = 'Vi Phạm';
+                else if (type === 'prepaid') typeLabel = 'Cọc';
+                
+                title = `[Hóa Đơn ${typeLabel}] ${invoiceCode}`;
+                content = `Phòng của bạn có hóa đơn ${typeLabel}:\n\n${invoiceTitle}\nTiền: ${totalAmount?.toLocaleString('vi-VN')} đ\nHạn thanh toán: ${new Date(dueDate).toLocaleDateString('vi-VN')}\n\nVui lòng thanh toán đúng hạn.`;
+                
+            } else {
+                console.warn(`[INVOICE NOTIFICATION] ⚠️ Loại hóa đơn không được hỗ trợ: ${invoiceType}`);
+                return null;
+            }
+
+            console.log(`[INVOICE NOTIFICATION] 📝 Title: ${title}`);
+
+            // Tạo notification - Gửi cho tenant cụ thể (type = 'system')
+            const notification = new Notification({
+                title,
+                content,
+                type: 'system',
+                status: 'sent',
+                created_by: null,
+                recipients: [{
+                    recipient_id: tenantId,
+                    recipient_role: 'tenant',
+                    is_read: false,
+                    read_at: null
+                }]
+            });
+
+            console.log(`[INVOICE NOTIFICATION] 💾 Lưu notification vào DB...`);
+            const savedNotif = await notification.save();
+            console.log(`[INVOICE NOTIFICATION] ✅ THÀNH CÔNG! Notification đã lưu vào DB`);
+            console.log(`[INVOICE NOTIFICATION] 🆔 Notification ID: ${savedNotif._id}`);
+            console.log(`[INVOICE NOTIFICATION] 👤 Tenant: ${tenant.fullName} (${tenantId})`);
+            console.log(`[INVOICE NOTIFICATION] 📧 Email: ${tenant.email}`);
+            
+            return savedNotif;
+            
+        } catch (error) {
+            console.error(`[INVOICE NOTIFICATION] ❌ LỖI: ${error.message}`);
+            console.error(`[INVOICE NOTIFICATION] 📌 Stack trace:`, error.stack);
+            // Không throw để không làm ảnh hưởng đến việc tạo hóa đơn
+            return null;
+        }
+    }
 }
 
 module.exports = new NotificationService();

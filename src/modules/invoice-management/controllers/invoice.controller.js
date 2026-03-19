@@ -1,4 +1,6 @@
 const invoiceService = require("../services/invoice.service");
+const notificationService = require("../../notification-management/services/notification.service");
+const Contract = require("../../contract-management/models/contract.model");
 
 class InvoiceController {
   async getAll(req, res) {
@@ -11,17 +13,97 @@ class InvoiceController {
   // Tạo hóa đơn nháp
   async generateDrafts(req, res) {
     try {
+      console.log(`[INVOICE CONTROLLER] 🔄 Bắt đầu tạo hóa đơn nháp...`);
       const result = await invoiceService.generateDraftInvoices(req.body);
+      console.log(`[INVOICE CONTROLLER] ✅ Đã tạo ${result.length} hóa đơn nháp`);
+      
+      // Gửi thông báo cho tenant khi hóa đơn nháp được tạo
+      if (result && result.length > 0) {
+        console.log(`[INVOICE CONTROLLER] 📬 Bắt đầu gửi notification cho ${result.length} hóa đơn...`);
+        for (const invoice of result) {
+          try {
+            if (invoice && invoice.contractId) {
+              console.log(`[INVOICE CONTROLLER] 📌 Xử lý hóa đơn: ${invoice.invoiceCode}, contractId: ${invoice.contractId}`);
+              const contract = await Contract.findById(invoice.contractId).select('tenantId');
+              if (contract && contract.tenantId) {
+                console.log(`[INVOICE CONTROLLER] 🎯 Gửi notification đến tenant: ${contract.tenantId}`);
+                const notifResult = await notificationService.createInvoiceNotification(
+                  contract.tenantId,
+                  'periodic',
+                  {
+                    invoiceCode: invoice.invoiceCode,
+                    title: invoice.title,
+                    totalAmount: invoice.totalAmount,
+                    dueDate: invoice.dueDate,
+                    items: invoice.items
+                  }
+                );
+                if (notifResult) {
+                  console.log(`[INVOICE CONTROLLER] ✅ Notification đã được lưu vào DB`);
+                } else {
+                  console.warn(`[INVOICE CONTROLLER] ⚠️ Notification không được lưu (null result)`);
+                }
+              } else {
+                console.warn(`[INVOICE CONTROLLER] ⚠️ Không tìm thấy contract hoặc tenantId`);
+              }
+            }
+          } catch (notifError) {
+            console.error(`[INVOICE CONTROLLER] ❌ Lỗi gửi notification cho hóa đơn ${invoice.invoiceCode}:`, notifError.message);
+          }
+        }
+        console.log(`[INVOICE CONTROLLER] ✅ Hoàn thành gửi notification cho tất cả hóa đơn`);
+      }
+      
       res.status(201).json({ success: true, message: `Tạo thành công ${result.length} hóa đơn nháp` });
-    } catch (error) { res.status(400).json({ success: false, message: error.message }); }
+    } catch (error) { 
+      console.error(`[INVOICE CONTROLLER] ❌ Lỗi tạo hóa đơn:`, error.message);
+      res.status(400).json({ success: false, message: error.message }); 
+    }
   }
 
   // Phát hành
   async release(req, res) {
     try {
+      console.log(`[INVOICE CONTROLLER] 🔄 Phát hành hóa đơn: ${req.params.id}`);
       const invoice = await invoiceService.releaseInvoice(req.params.id);
+      console.log(`[INVOICE CONTROLLER] ✅ Phát hành thành công, invoiceCode: ${invoice.invoiceCode}`);
+      
+      // Gửi thông báo cho tenant khi hóa đơn định kỳ được phát hành
+      if (invoice && invoice.contractId) {
+        try {
+          console.log(`[INVOICE CONTROLLER] 🎯 Tìm contract: ${invoice.contractId}`);
+          const contract = await Contract.findById(invoice.contractId).select('tenantId');
+          if (contract && contract.tenantId) {
+            console.log(`[INVOICE CONTROLLER] 📬 Gửi notification đến tenant: ${contract.tenantId}`);
+            const notifResult = await notificationService.createInvoiceNotification(
+              contract.tenantId,
+              'periodic',
+              {
+                invoiceCode: invoice.invoiceCode,
+                title: invoice.title,
+                totalAmount: invoice.totalAmount,
+                dueDate: invoice.dueDate,
+                items: invoice.items
+              }
+            );
+            if (notifResult) {
+              console.log(`[INVOICE CONTROLLER] ✅ Notification đã được lưu vào DB`);
+            } else {
+              console.warn(`[INVOICE CONTROLLER] ⚠️ Notification không được lưu (null result)`);
+            }
+          } else {
+            console.warn(`[INVOICE CONTROLLER] ⚠️ Không tìm thấy contract hoặc tenantId`);
+          }
+        } catch (notifError) {
+          console.error(`[INVOICE CONTROLLER] ❌ Lỗi gửi notification:`, notifError.message);
+        }
+      }
+      
       res.status(200).json({ success: true, data: invoice, message: "Phát hành thành công!" });
-    } catch (error) { res.status(400).json({ success: false, message: error.message }); }
+    } catch (error) { 
+      console.error(`[INVOICE CONTROLLER] ❌ Lỗi phát hành hóa đơn:`, error.message);
+      res.status(400).json({ success: false, message: error.message }); 
+    }
   }
 
   // [THÊM MỚI] Xử lý request xem chi tiết hóa đơn
