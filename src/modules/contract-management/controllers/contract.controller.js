@@ -4,6 +4,7 @@ const Room = require("../../room-floor-management/models/room.model");
 const User = require("../../authentication/models/user.model");
 const UserInfo = require("../../authentication/models/userInfor.model");
 const Deposit = require("../models/deposit.model");
+const InvoiceIncurred = require("../../invoice-management/models/invoice_incurred.model");
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs"); // Ensure bcryptjs is installed
 const { checkAndSendRenewalNotifications } = require("../services/contract-renewal.service");
@@ -42,10 +43,9 @@ exports.createContract = async (req, res) => {
       depositId, // Optional
       tenantInfo, // { fullName, dob, cccd, phone, email, address, ... }
       coResidents, // Array
-      contractDetails, // { startDate, duration, services, paymentCycle, ContRentPaidUntil }
+      contractDetails, // { startDate, duration, services, paymentCycle, rentPaidUntil }
       bookServices, // NEW: array of { serviceId, name, price, type, category, quantity }
-      ContRentPaidUntil, // Can be sent directly at root or inside contractDetails
-      InvRentPaidUntil,
+      rentPaidUntil, // Can be sent directly at root or inside contractDetails
     } = req.body;
 
     // 1. Validate Room Status (populate roomTypeId to get price)
@@ -71,9 +71,9 @@ exports.createContract = async (req, res) => {
         if (contractStartDate > maxStartDate) {
           throw new Error(
             `Ngày bắt đầu thuê không được quá 7 ngày từ khi đặt cọc. ` +
-              `Ngày cọc: ${depositCreatedDate.toLocaleDateString("vi-VN")}, ` +
-              `Hạn cuối: ${maxStartDate.toLocaleDateString("vi-VN")}, ` +
-              `Ngày bắt đầu: ${contractStartDate.toLocaleDateString("vi-VN")}`,
+            `Ngày cọc: ${depositCreatedDate.toLocaleDateString("vi-VN")}, ` +
+            `Hạn cuối: ${maxStartDate.toLocaleDateString("vi-VN")}, ` +
+            `Ngày bắt đầu: ${contractStartDate.toLocaleDateString("vi-VN")}`,
           );
         }
       }
@@ -104,7 +104,7 @@ exports.createContract = async (req, res) => {
     if (user) {
       // If user exists by phone, we STRICTLY require the provided email to match what's in DB
       if (user.email !== tenantInfo.email) {
-         throw new Error(`Khách hàng với số điện thoại này đã tồn tại, nhưng email không khớp. Vui lòng sử dụng đúng email cũ của khách hàng này để tiếp tục tạo hợp đồng.`);
+        throw new Error(`Khách hàng với số điện thoại này đã tồn tại, nhưng email không khớp. Vui lòng sử dụng đúng email cũ của khách hàng này để tiếp tục tạo hợp đồng.`);
       }
       console.log(`[CREATE CONTRACT] Existing User found by Phone: ID=${user._id}, phone=${user.phoneNumber}`);
     } else {
@@ -112,7 +112,7 @@ exports.createContract = async (req, res) => {
       // Now check if the Email is already in use by someone else
       const emailInUse = await User.findOne({ email: tenantInfo.email }).session(session);
       if (emailInUse) {
-         throw new Error(`Email "${tenantInfo.email}" đã tồn tại trong hệ thống nhưng thuộc về một số điện thoại khác. Vui lòng kiểm tra lại thông tin khách hàng.`);
+        throw new Error(`Email "${tenantInfo.email}" đã tồn tại trong hệ thống nhưng thuộc về một số điện thoại khác. Vui lòng kiểm tra lại thông tin khách hàng.`);
       }
 
       // Safe to create new user
@@ -128,7 +128,7 @@ exports.createContract = async (req, res) => {
       let existingUserByUsername = await User.findOne({
         username: finalUsername,
       }).session(session);
-      
+
       let tempUsername = finalUsername;
       while (existingUserByUsername) {
         tempUsername = `${finalUsername}${Math.floor(100 + Math.random() * 900)}`;
@@ -189,8 +189,7 @@ exports.createContract = async (req, res) => {
       coResidents,
       startDate: contractDetails.startDate,
       endDate: endDate,
-      ContRentPaidUntil: ContRentPaidUntil || contractDetails.ContRentPaidUntil || null,
-      InvRentPaidUntil: InvRentPaidUntil || contractDetails.InvRentPaidUntil || null,
+      rentPaidUntil: rentPaidUntil || contractDetails.rentPaidUntil || null,
       duration: contractDetails.duration,
       status: "active",
       images: req.body.images || [],
@@ -211,6 +210,29 @@ exports.createContract = async (req, res) => {
         })),
       });
       await bookServiceRecord.save({ session });
+    }
+
+    // 4.5 Create prepaid invoice if prepayMonths is provided
+    const prepayMonths = req.body.prepayMonths ? Number(req.body.prepayMonths) : 0;
+    if (prepayMonths > 0) {
+      const totalAmount = prepayMonths * roomPrice;
+      const date = new Date();
+      const datePrefix = `${String(date.getDate()).padStart(2, '0')}${String(date.getMonth() + 1).padStart(2, '0')}${date.getFullYear()}`;
+      const nextSeq = String(Math.floor(Math.random() * 10000)).padStart(4, '0');
+      const invoiceCode = `HD-PREPAID-${datePrefix}-${nextSeq}`;
+
+      const prepaidInvoice = new InvoiceIncurred({
+        invoiceCode,
+        contractId: newContract._id,
+        repairRequestId: null,
+        title: `Thanh toán tiền phòng trả trước (${prepayMonths} tháng)`,
+        totalAmount,
+        status: "Paid",
+        type: "prepaid",
+        dueDate: new Date(),
+        images: [],
+      });
+      await prepaidInvoice.save({ session });
     }
 
     // 5. Update Room Status
@@ -254,7 +276,7 @@ exports.createContract = async (req, res) => {
 
     res.status(201).json({
       success: true,
-      message: isNewUser 
+      message: isNewUser
         ? "Đã tạo hợp đồng thành công. Tài khoản và mật khẩu đã được gửi đến email."
         : "Tài khoản cho số điện thoại/email này đã tồn tại nên không tạo mới, hợp đồng đã được tạo thành công!",
       data: {
@@ -360,14 +382,14 @@ exports.getContractById = async (req, res) => {
     // Map bookServices with populated data
     const bookServices = bookServiceRecord
       ? bookServiceRecord.services.map((s) => ({
-          serviceId: s.serviceId?._id,
-          name: s.serviceId?.name || "—",
-          currentPrice: s.serviceId?.currentPrice
-            ? parseFloat(s.serviceId.currentPrice.toString())
-            : 0,
-          type: s.serviceId?.type || "",
-          quantity: s.quantity || null,
-        }))
+        serviceId: s.serviceId?._id,
+        name: s.serviceId?.name || "—",
+        currentPrice: s.serviceId?.currentPrice
+          ? parseFloat(s.serviceId.currentPrice.toString())
+          : 0,
+        type: s.serviceId?.type || "",
+        quantity: s.quantity || null,
+      }))
       : [];
 
     // Map room assets

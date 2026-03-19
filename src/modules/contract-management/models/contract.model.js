@@ -41,11 +41,7 @@ const contractSchema = new Schema(
       type: Date,
       required: true,
     },
-    ContRentPaidUntil: {
-      type: Date,
-      default: null,
-    },
-    InvRentPaidUntil: {
+    rentPaidUntil: {
       type: Date,
       default: null,
     },
