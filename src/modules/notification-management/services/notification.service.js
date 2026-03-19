@@ -142,9 +142,9 @@ class NotificationService {
                 };
 
             } else if (normalizedRole === 'manager' || normalizedRole === 'accountant') {
-                // Manager/Accountant xem thông báo staff đã được gửi
+                // Manager/Accountant xem thông báo staff + system đã được gửi
                 matchCondition = {
-                    type: 'staff',
+                    type: { $in: ['staff', 'system'] },  // ✅ Xem cả staff và system
                     status: 'sent',
                     'recipients.recipient_id': new mongoose.Types.ObjectId(userId)
                 };
@@ -363,7 +363,7 @@ class NotificationService {
 
             if (normalizedRole === 'manager' || normalizedRole === 'accountant') {
                 const count = await Notification.countDocuments({
-                    type: 'staff',
+                    type: { $in: ['staff', 'system'] },  // ✅ Đếm cả staff và system
                     status: 'sent',
                     'recipients': {
                         $elemMatch: {
@@ -389,6 +389,76 @@ class NotificationService {
             return { unread_count: 0 };
         } catch (error) {
             throw new Error(`Lỗi đếm thông báo chưa đọc: ${error.message}`);
+        }
+    }
+
+    // Tạo thông báo hệ thống tự động khi tenant gửi request (sửa chữa, khiếu nại, chuyển phòng)
+    async createSystemNotificationForRequest(tenantId, requestType, requestData) {
+        try {
+            console.log(`🔔 [NOTIFICATION] Tạo notification cho request type: ${requestType}, tenantId: ${tenantId}`);
+            
+            // Lấy thông tin tenant
+            const tenant = await User.findById(tenantId).select('fullName');
+            if (!tenant) {
+                console.error(`❌ [NOTIFICATION] Không tìm thấy tenant: ${tenantId}`);
+                throw new Error('Không tìm thấy thông tin tenant');
+            }
+            console.log(`✅ [NOTIFICATION] Tenant found: ${tenant.fullName}`);
+
+            // Tạo tiêu đề và nội dung dựa vào loại request
+            let title, content;
+            if (requestType === 'repair') {
+                const { type, roomName, description } = requestData;
+                title = `📋 Yêu cầu ${type} từ ${tenant.fullName}`;
+                content = `Phòng: ${roomName}\nLoại: ${type}\nMô tả: ${description}`;
+            } else if (requestType === 'complaint') {
+                const { category, complaintContent } = requestData;
+                title = `⚠️ Khiếu nại (${category}) từ ${tenant.fullName}`;
+                content = complaintContent;
+            } else if (requestType === 'transfer') {
+                const { currentRoomName, targetRoomName, reason, transferDate } = requestData;
+                title = `🏠 Yêu cầu chuyển phòng từ ${tenant.fullName}`;
+                content = `Từ phòng: ${currentRoomName}\nSang phòng: ${targetRoomName}\nNgày chuyển: ${new Date(transferDate).toLocaleDateString('vi-VN')}\nLý do: ${reason}`;
+            } else {
+                throw new Error('Loại request không hợp lệ');
+            }
+
+            // Lấy tất cả manager có trạng thái active
+            const managers = await User.find({ 
+                role: 'manager', 
+                status: 'active' 
+            }).select('_id');
+            
+            console.log(`🔍 [NOTIFICATION] Tìm thấy ${managers.length} manager(s) active`);
+            if (managers.length === 0) {
+                console.warn('⚠️ [NOTIFICATION] Không tìm thấy manager nào để gửi thông báo');
+                return null;
+            }
+
+            // Tạo notification đã gửi ngay (status = 'sent')
+            const notification = new Notification({
+                title,
+                content,
+                type: 'system',
+                status: 'sent',
+                created_by: null, // Thông báo từ hệ thống
+                recipients: managers.map(manager => ({
+                    recipient_id: manager._id,
+                    recipient_role: 'manager',
+                    is_read: false,
+                    read_at: null
+                }))
+            });
+
+            await notification.save();
+            console.log(`✅ [NOTIFICATION] Đã tạo thông báo hệ thống (ID: ${notification._id}) cho ${managers.length} manager`);
+            console.log(`📨 [NOTIFICATION] Title: ${title}`);
+            return notification;
+        } catch (error) {
+            console.error(`❌ [NOTIFICATION ERROR] ${error.message}`);
+            console.error(`❌ [NOTIFICATION STACK] ${error.stack}`);
+            // Không throw để không làm ảnh hưởng đến việc tạo request
+            return null;
         }
     }
 }
