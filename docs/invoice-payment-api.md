@@ -12,8 +12,6 @@ API quản lý hóa đơn cho Tenant: xem danh sách, chi tiết, và thanh toá
 > - `Draft` — Nháp (Quản lý chưa phát hành) → **Tenant KHÔNG thấy**
 > - `Unpaid` — Chưa thanh toán → Hiển thị cho Tenant
 > - `Paid` — Đã thanh toán
-> - `Overdue` — Quá hạn
-> - `Cancelled` — Đã hủy
 
 ---
 
@@ -587,6 +585,7 @@ HD [InvoiceCode rút gọn] [DDMMYYYY]
 
 ### InvoicePeriodic (Hóa Đơn Định Kỳ)
 ```javascript
+// Collection: invoice_periodics
 {
   _id: ObjectId,
   invoiceCode: String,         // Mã hóa đơn (VD: "INV-Phòng 310-32026-2223")
@@ -600,7 +599,7 @@ HD [InvoiceCode rút gọn] [DDMMYYYY]
       usage: Number,           // Lượng sử dụng
       unitPrice: Number,      // Đơn giá
       amount: Number,         // Thành tiền
-      isIndex: Boolean        // Đánh dấu có chốt số
+      isIndex: Boolean        // Đánh dấu có chốt số (Điện, Nước)
     }
   ],
   totalAmount: Number,         // Tổng tiền
@@ -613,14 +612,15 @@ HD [InvoiceCode rút gọn] [DDMMYYYY]
 
 ### InvoiceIncurred (Hóa Đơn Phát Sinh)
 ```javascript
+// Collection: invoices_incurred
 {
   _id: ObjectId,
   invoiceCode: String,         // Mã hóa đơn (VD: "INV-RP-0001")
   contractId: ObjectId,        // Ref → Contract
   title: String,              // Tiêu đề (VD: "Sửa chữa điều hòa")
   totalAmount: Number,        // Số tiền cần thanh toán
-  type: String,               // Loại: "repair" | "violation"
-  status: Enum,               // "Draft" | "Unpaid" | "Paid" | "Cancelled"
+  type: Enum,                // "violation" | "repair" | "prepaid"
+  status: Enum,               // "Draft" | "Unpaid" | "Paid"
   dueDate: Date,              // Hạn thanh toán
   repairRequestId: ObjectId,  // Ref → RepairRequest (nếu là hóa đơn sửa chữa)
   images: [String],           // URLs của hình ảnh
@@ -631,6 +631,7 @@ HD [InvoiceCode rút gọn] [DDMMYYYY]
 
 ### Payment (Giao Dịch Thanh Toán)
 ```javascript
+// Collection: payments
 {
   _id: ObjectId,
   invoiceId: ObjectId,         // Ref → InvoicePeriodic (hóa đơn định kỳ)
@@ -656,7 +657,7 @@ HD [InvoiceCode rút gọn] [DDMMYYYY]
   title: String,
   description: String,
   status: Enum,                // "Pending" | "Processing" | "Done" | "Unpaid" | "Paid"
-  // status → "Paid" sau khi thanh toán hóa đơn phát sinh
+  // status → "Paid" khi hóa đơn phát sinh liên kết được thanh toán thành công
 }
 ```
 
@@ -666,9 +667,8 @@ HD [InvoiceCode rút gọn] [DDMMYYYY]
 
 ### Invoice Status
 ```
-Draft → Unpaid → Paid
-              ↘ Overdue (quá hạn)
-              ↘ Cancelled
+InvoicePeriodic:  Draft → Unpaid → Paid
+InvoiceIncurred:  Draft → Unpaid → Paid
 ```
 
 ### Payment Status
@@ -679,7 +679,7 @@ Pending → Success  (Sepay xác nhận, invoice → Paid)
 
 ### RepairRequest Status (liên quan)
 ```
-Unpaid → Paid  (sau khi thanh toán invoice Incurred)
+Unpaid → Paid  (sau khi thanh toán hóa đơn phát sinh liên kết)
 ```
 
 ---

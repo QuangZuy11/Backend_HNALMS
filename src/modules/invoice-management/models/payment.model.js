@@ -5,7 +5,7 @@ const paymentSchema = new Schema(
   {
     invoiceId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "Invoice",
+      ref: "InvoicePeriodic",
       default: null,
     },
     incurredInvoiceId: {
