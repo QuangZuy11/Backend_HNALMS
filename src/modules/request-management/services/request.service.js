@@ -6,6 +6,7 @@ const Room = require("../../room-floor-management/models/room.model");
 const Contract = require("../../contract-management/models/contract.model");
 const InvoiceIncurred = require("../../invoice-management/models/invoice_incurred.model");
 const FinancialTicket = require("../../managing-income-expenses/models/financial_tickets");
+const notificationService = require("../../notification-management/services/notification.service");
 
 const REPAIR_INVOICE_PREFIX = "INV-RP-";
 const PAYMENT_VOUCHER_PREFIX = "PMV-RP-";
@@ -691,6 +692,27 @@ const updateRepairRequestStatus = async (
       });
 
       await newInvoice.save();
+
+      // Gửi thông báo cho tenant về hóa đơn sửa chữa mới
+      try {
+        console.log(`[REPAIR REQUEST SERVICE] 📬 Gửi notification hóa đơn sửa chữa cho tenant: ${request.tenantId}`);
+        await notificationService.createInvoiceNotification(
+          request.tenantId,
+          'incurred',
+          {
+            invoiceCode: newInvoice.invoiceCode,
+            title: newInvoice.title,
+            totalAmount: newInvoice.totalAmount,
+            dueDate: newInvoice.dueDate,
+            type: newInvoice.type,
+            description: `Hóa đơn sửa chữa - ${newInvoice.title || 'Sửa chữa'}`
+          }
+        );
+        console.log(`[REPAIR REQUEST SERVICE] ✅ Notification đã được gửi`);
+      } catch (notifError) {
+        console.error(`[REPAIR REQUEST SERVICE] ⚠️ Không gửi được notification:`, notifError.message);
+        // Không throw lỗi, vẫn tiếp tục dù notification thất bại
+      }
 
       // Tạo thêm phiếu thu cho hóa đơn sửa chữa có phí
 
