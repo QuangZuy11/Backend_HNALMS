@@ -78,4 +78,8 @@ ApiRouter.use("/notifications", notificationRoutes);
 const testRoutes = require("./test-routes");
 ApiRouter.use("/test", testRoutes);
 
+const financeRoute = require('../../modules/report-management/routes/finance.routes');
+ApiRouter.use("/finance", financeRoute);
+
+
 module.exports = ApiRouter;
