@@ -21,6 +21,35 @@ class FinanceController {
       });
     }
   }
+  // 2. API: Lấy dữ liệu Báo cáo Doanh thu chi tiết (MỚI THÊM)
+  async getRevenueReport(req, res) {
+    try {
+      const { startDate, endDate } = req.query;
+
+      // Kiểm tra xem Frontend có gửi đủ ngày tháng không
+      if (!startDate || !endDate) {
+        return res.status(400).json({
+          success: false,
+          message: "Vui lòng cung cấp đầy đủ từ ngày (startDate) và đến ngày (endDate)."
+        });
+      }
+
+      const reportData = await FinanceService.getRevenueReport(startDate, endDate);
+
+      return res.status(200).json({
+        success: true,
+        message: "Lấy báo cáo doanh thu thành công",
+        data: reportData
+      });
+    } catch (error) {
+      console.error("Lỗi getRevenueReport:", error);
+      return res.status(500).json({
+        success: false,
+        message: "Có lỗi xảy ra khi trích xuất báo cáo doanh thu.",
+        error: error.message
+      });
+    }
+  }
 }
 
 module.exports = new FinanceController();

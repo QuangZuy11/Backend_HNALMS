@@ -147,6 +147,125 @@ class FinanceService {
       topDebts
     };
   }
+  // LẤY BÁO CÁO DOANH THU CHI TIẾT CHO KẾ TOÁN
+  async getRevenueReport(startDate, endDate) {
+    const start = new Date(startDate);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999);
+
+    // 1. Lấy tất cả Hóa đơn Định kỳ (Phòng, Điện, Nước, Dịch vụ)
+    const periodicInvoices = await InvoicePeriodic.find({
+      createdAt: { $gte: start, $lte: end },
+      status: { $ne: "Draft" } // Bỏ qua bản nháp, kế toán chỉ quan tâm cái đã chốt
+    }).populate({ path: 'contractId', select: 'roomId', populate: { path: 'roomId', select: 'name' } });
+
+    // 2. Lấy Hóa đơn Phát sinh (Phạt, Sửa chữa, Trả trước)
+    const incurredInvoices = await InvoiceIncurred.find({
+      createdAt: { $gte: start, $lte: end },
+      status: { $ne: "Draft" }
+    }).populate({ path: 'contractId', select: 'roomId', populate: { path: 'roomId', select: 'name' } });
+
+    // 3. Lấy Phiếu Chi
+    const financialTickets = await FinancialTicket.find({
+      transactionDate: { $gte: start, $lte: end },
+      status: { $in: ["Completed", "Paid", "Approved"] }
+    });
+
+    // 4. XỬ LÝ DỮ LIỆU ĐỂ ĐỔ RA BẢNG (FLATTEN DATA)
+    let ledger = [];
+    let summary = {
+      expectedRevenue: 0,
+      actualCollected: 0,
+      actualExpense: 0,
+      totalDebt: 0
+    };
+
+    const getRoomName = (inv) => {
+        if (inv.contractId && inv.contractId.roomId) return inv.contractId.roomId.name;
+        return "N/A";
+    };
+
+    // --- Bóc tách Định kỳ ---
+    periodicInvoices.forEach(inv => {
+      summary.expectedRevenue += inv.totalAmount;
+      if (inv.status === "Paid") summary.actualCollected += inv.totalAmount;
+      if (inv.status === "Unpaid") summary.totalDebt += inv.totalAmount;
+
+      ledger.push({
+        id: inv._id,
+        code: inv.invoiceCode,
+        date: inv.createdAt,
+        room: getRoomName(inv),
+        transactionType: inv.status === "Paid" ? "THU" : "NỢ",
+        category: "Định kỳ (Phòng, Điện, Nước...)",
+        // [MỚI] Thêm Hình thức thanh toán và Ghi chú
+        paymentMethod: inv.paymentMethod || (inv.status === "Paid" ? "Chuyển khoản" : "-"),
+        description: inv.title || "Thu tiền định kỳ", 
+        inflow: inv.totalAmount,
+        outflow: 0,
+        status: inv.status
+      });
+    });
+
+    // --- Bóc tách Phát sinh ---
+    incurredInvoices.forEach(inv => {
+      summary.expectedRevenue += inv.totalAmount;
+      if (inv.status === "Paid") summary.actualCollected += inv.totalAmount;
+      if (inv.status === "Unpaid") summary.totalDebt += inv.totalAmount;
+
+      let catName = inv.type === "prepaid" ? "Tiền phòng trả trước" : "Thu phát sinh (Phạt/Sửa chữa)";
+
+      ledger.push({
+        id: inv._id,
+        code: inv.invoiceCode,
+        date: inv.createdAt,
+        room: getRoomName(inv),
+        transactionType: inv.status === "Paid" ? "THU" : "NỢ",
+        category: catName,
+        // [MỚI] Thêm Hình thức thanh toán và Ghi chú
+        paymentMethod: inv.paymentMethod || (inv.status === "Paid" ? "Chuyển khoản" : "-"),
+        description: inv.title || "Thu tiền phát sinh",
+        inflow: inv.totalAmount,
+        outflow: 0,
+        status: inv.status
+      });
+    });
+
+    // --- Bóc tách Phiếu Chi ---
+    financialTickets.forEach(ticket => {
+      summary.actualExpense += ticket.amount;
+
+      ledger.push({
+        id: ticket._id,
+        code: "TC-" + ticket._id.toString().slice(-5).toUpperCase(),
+        date: ticket.transactionDate,
+        room: "Tòa nhà (Chung)",
+        transactionType: "CHI",
+        category: "Chi phí vận hành", // Cố định loại category cho phiếu chi
+        // [MỚI] Thêm Hình thức thanh toán và Ghi chú (Lấy title của ticket làm diễn giải)
+        paymentMethod: ticket.paymentMethod || "-",
+        description: ticket.title + (ticket.rejectionReason ? ` (Lý do: ${ticket.rejectionReason})` : ""),
+        inflow: 0,
+        outflow: ticket.amount,
+        status: ticket.status
+      });
+    });
+
+    // Sắp xếp chứng từ theo thời gian mới nhất lên đầu
+    ledger.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    // Tính thêm chỉ số phụ
+    summary.netCashFlow = summary.actualCollected - summary.actualExpense;
+    summary.collectionRate = summary.expectedRevenue > 0 
+      ? ((summary.actualCollected / summary.expectedRevenue) * 100).toFixed(2) 
+      : 0;
+
+    return {
+      summary,
+      ledger
+    };
+  }
 }
 
 module.exports = new FinanceService();
