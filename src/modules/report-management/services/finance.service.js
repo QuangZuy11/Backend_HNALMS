@@ -83,7 +83,7 @@ class FinanceService {
     // [ĐÃ SỬA] Cập nhật mảng trả về cho Frontend
     const revenueBreakdown = [
       { name: "Tiền phòng (Định kỳ)", value: rentRev },
-      { name: "Phòng trả trước (Prepaid)", value: prepaidRentRev }, // [MỚI] Tách riêng
+      { name: "Tiền phòng trả trước", value: prepaidRentRev }, // [MỚI] Tách riêng
       { name: "Tiền điện", value: elecRev },
       { name: "Tiền nước", value: waterRev },
       { name: "Dịch vụ khác", value: serviceRev },
