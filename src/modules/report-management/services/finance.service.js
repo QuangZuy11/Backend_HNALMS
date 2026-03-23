@@ -1,0 +1,136 @@
+const InvoicePeriodic = require("../../invoice-management/models/invoice_periodic.model");
+const InvoiceIncurred = require("../../invoice-management/models/invoice_incurred.model");
+const FinancialTicket = require("../../managing-income-expenses/models/financial_tickets");
+
+class FinanceService {
+  async getDashboardData(month, year) {
+    const targetMonth = parseInt(month) || new Date().getMonth() + 1;
+    const targetYear = parseInt(year) || new Date().getFullYear();
+
+    const startOfMonth = new Date(targetYear, targetMonth - 1, 1);
+    const endOfMonth = new Date(targetYear, targetMonth, 0, 23, 59, 59);
+
+    // ==========================================
+    // 1. QUERY DỮ LIỆU TRONG THÁNG ĐƯỢC CHỌN
+    // ==========================================
+    const periodicInvoices = await InvoicePeriodic.find({ 
+        createdAt: { $gte: startOfMonth, $lte: endOfMonth } 
+    }).populate({ path: 'contractId', select: 'roomId', populate: { path: 'roomId', select: 'name' } });
+
+    const incurredInvoices = await InvoiceIncurred.find({ 
+        createdAt: { $gte: startOfMonth, $lte: endOfMonth } 
+    }).populate({ path: 'contractId', select: 'roomId', populate: { path: 'roomId', select: 'name' } });
+
+    // Lấy phiếu chi (expense) có trạng thái hoàn thành/đã chi
+    const financialTickets = await FinancialTicket.find({ 
+        transactionDate: { $gte: startOfMonth, $lte: endOfMonth },
+        status: { $in: ["Completed", "Paid", "Approved"] } // Tùy chỉnh theo trạng thái thực tế của bạn
+    });
+
+    // ==========================================
+    // 2. TÍNH TOÁN 4 THẺ TỔNG QUAN (SUMMARY CARDS)
+    // ==========================================
+    let totalRevenuePeriodic = 0;
+    let totalRevenueIncurred = 0;
+    let totalDebtPeriodic = 0;
+    let totalDebtIncurred = 0;
+
+    periodicInvoices.forEach(inv => {
+      if (inv.status === "Paid") totalRevenuePeriodic += inv.totalAmount;
+      if (inv.status === "Unpaid") totalDebtPeriodic += inv.totalAmount;
+    });
+
+    incurredInvoices.forEach(inv => {
+      if (inv.status === "Paid") totalRevenueIncurred += inv.totalAmount;
+      if (inv.status === "Unpaid") totalDebtIncurred += inv.totalAmount;
+    });
+
+    const totalRevenue = totalRevenuePeriodic + totalRevenueIncurred;
+    const totalDebt = totalDebtPeriodic + totalDebtIncurred;
+    const totalExpense = financialTickets.reduce((sum, ticket) => sum + ticket.amount, 0);
+    const netProfit = totalRevenue - totalExpense;
+
+    // ==========================================
+    // 3. TÍNH CƠ CẤU DOANH THU (PIE CHART)
+    // ==========================================
+    let rentRev = 0, elecRev = 0, waterRev = 0, serviceRev = 0;
+    periodicInvoices.forEach(inv => {
+      if (inv.status === "Paid") {
+        inv.items.forEach(item => {
+          const name = item.itemName.toLowerCase();
+          if (name.includes("phòng")) rentRev += item.amount;
+          else if (name.includes("điện")) elecRev += item.amount;
+          else if (name.includes("nước")) waterRev += item.amount;
+          else serviceRev += item.amount;
+        });
+      }
+    });
+
+    const revenueBreakdown = [
+      { name: "Tiền phòng", value: rentRev },
+      { name: "Tiền điện", value: elecRev },
+      { name: "Tiền nước", value: waterRev },
+      { name: "Dịch vụ khác", value: serviceRev },
+      { name: "Thu phát sinh", value: totalRevenueIncurred }
+    ].filter(item => item.value > 0); // Chỉ lấy những mục có tiền
+
+    // ==========================================
+    // 4. LẤY BIỂU ĐỒ 6 THÁNG GẦN NHẤT (BAR CHART)
+    // ==========================================
+    const chartData = [];
+    for (let i = 5; i >= 0; i--) {
+      let m = targetMonth - i;
+      let y = targetYear;
+      if (m <= 0) {
+        m += 12;
+        y -= 1;
+      }
+      
+      const sDate = new Date(y, m - 1, 1);
+      const eDate = new Date(y, m, 0, 23, 59, 59);
+
+      const pInv = await InvoicePeriodic.find({ createdAt: { $gte: sDate, $lte: eDate }, status: "Paid" });
+      const iInv = await InvoiceIncurred.find({ createdAt: { $gte: sDate, $lte: eDate }, status: "Paid" });
+      const tix = await FinancialTicket.find({ transactionDate: { $gte: sDate, $lte: eDate }, status: { $in: ["Completed", "Paid", "Approved"] } });
+
+      const rev = pInv.reduce((s, x) => s + x.totalAmount, 0) + iInv.reduce((s, x) => s + x.totalAmount, 0);
+      const exp = tix.reduce((s, x) => s + x.amount, 0);
+
+      chartData.push({
+        month: `T${m}/${y.toString().slice(-2)}`, // Format: T3/26
+        revenue: rev,
+        expense: exp
+      });
+    }
+
+    // ==========================================
+    // 5. DANH SÁCH TOP 5 CÔNG NỢ CAO NHẤT (TABLE)
+    // ==========================================
+    const getRoomName = (inv) => {
+        if (inv.contractId && inv.contractId.roomId) return inv.contractId.roomId.name;
+        return "Không xác định";
+    };
+
+    const topDebts = [...periodicInvoices, ...incurredInvoices]
+      .filter(inv => inv.status === "Unpaid")
+      .sort((a, b) => b.totalAmount - a.totalAmount)
+      .slice(0, 5) // Chỉ lấy top 5
+      .map(inv => ({
+        code: inv.invoiceCode,
+        room: getRoomName(inv),
+        title: inv.title,
+        amount: inv.totalAmount,
+        dueDate: inv.dueDate,
+        type: inv.items ? 'Định kỳ' : 'Phát sinh'
+      }));
+
+    return {
+      summary: { totalRevenue, totalExpense, netProfit, totalDebt },
+      revenueBreakdown,
+      chartData,
+      topDebts
+    };
+  }
+}
+
+module.exports = new FinanceService();
