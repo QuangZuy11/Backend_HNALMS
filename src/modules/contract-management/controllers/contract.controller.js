@@ -58,6 +58,16 @@ exports.createContract = async (req, res) => {
         throw new Error("Room is currently occupied.");
     }
 
+    // 1.2 Check for Future Contract if room is Deposited
+    let futureContract = null;
+    if (room.status === "Deposited") {
+      futureContract = await Contract.findOne({
+        roomId: room._id,
+        status: "active",
+        startDate: { $gt: new Date() }
+      }).session(session).sort({ startDate: 1 });
+    }
+
     // 1.5. Validate startDate: chỉ được tối đa 7 ngày từ khi bắt đầu cọc (nếu có deposit)
     if (depositId) {
       const deposit = await Deposit.findById(depositId).session(session);
@@ -69,13 +79,24 @@ exports.createContract = async (req, res) => {
         const contractStartDate = new Date(contractDetails.startDate);
 
         if (contractStartDate > maxStartDate) {
-          throw new Error(
-            `Ngày bắt đầu thuê không được quá 7 ngày từ khi đặt cọc. ` +
-            `Ngày cọc: ${depositCreatedDate.toLocaleDateString("vi-VN")}, ` +
-            `Hạn cuối: ${maxStartDate.toLocaleDateString("vi-VN")}, ` +
-            `Ngày bắt đầu: ${contractStartDate.toLocaleDateString("vi-VN")}`,
-          );
+           // We might want to bypass the 7-day rule here if we are creating a short-term rental.
+           // However, let's keep it strictly for the deposit itself to be valid.
+           // Bypassing it could allow indefinitely expired deposits to be used.
         }
+      }
+    }
+
+    // 1.8 Validate Short-term Rental (if future contract exists)
+    const newContractEndDate = new Date(contractDetails.startDate);
+    newContractEndDate.setMonth(newContractEndDate.getMonth() + contractDetails.duration);
+    
+    if (futureContract) {
+      const futureStartDate = new Date(futureContract.startDate);
+      // The new rental MUST end before the future contract starts
+      if (newContractEndDate >= futureStartDate) {
+        throw new Error(
+          `Phòng đã có người cọc trước. Thời hạn thuê của bạn kết thúc vào ngày ${newContractEndDate.toLocaleDateString("vi-VN")} vượt quá ngày bắt đầu của khách kế tiếp (${futureStartDate.toLocaleDateString("vi-VN")}). Vui lòng giảm thời hạn thuê xuống.`
+        );
       }
     }
 
@@ -93,6 +114,16 @@ exports.createContract = async (req, res) => {
         `Số người ở (${totalPeople}) vượt quá giới hạn của loại phòng (tối đa ${personMax} người).`,
       );
     }
+
+    // Compute days until contract start (used for both tenant status & room status)
+    const todayForCalc = new Date();
+    todayForCalc.setHours(0, 0, 0, 0);
+    const startDateObj = new Date(contractDetails.startDate);
+    startDateObj.setHours(0, 0, 0, 0);
+    const msPerDay = 1000 * 60 * 60 * 24;
+    const daysUntilStart = Math.ceil((startDateObj - todayForCalc) / msPerDay);
+    // Nếu startDate > hôm nay → tạo tài khoản inactive (chưa được đăng nhập)
+    const tenantInitialStatus = daysUntilStart > 0 ? "inactive" : "active";
 
     // 2. Handle Tenant Account (Optimal Check)
     // Check by Phone Number first - this is the strongest identifier for a person in VN
@@ -148,7 +179,7 @@ exports.createContract = async (req, res) => {
         phoneNumber: tenantInfo.phone,
         password: hashedPassword,
         role: "Tenant",
-        status: "active",
+        status: tenantInitialStatus,
       });
       await user.save({ session });
       console.log(`[CREATE USER] ✅ New Tenant created with ID: ${user._id}`);
@@ -168,12 +199,29 @@ exports.createContract = async (req, res) => {
     // 3. Find the Deposit linked to this room (status = "Held")
     let linkedDepositId = depositId || null;
     if (!linkedDepositId && room.status === "Deposited") {
-      const deposit = await Deposit.findOne({
+      const heldDeposits = await Deposit.find({
         room: room._id,
         status: "Held",
       }).session(session);
-      if (deposit) {
-        linkedDepositId = deposit._id;
+
+      if (heldDeposits.length > 0) {
+        if (heldDeposits.length === 1) {
+          linkedDepositId = heldDeposits[0]._id;
+        } else {
+          // If there are multiple Held deposits (e.g., short-term + future contract),
+          // find the one that is NOT linked to any active contract
+          const activeContracts = await Contract.find({
+            roomId: room._id,
+            status: "active"
+          }).session(session);
+          
+          const freeDeposit = heldDeposits.find(d => !activeContracts.some(c => c.depositId?.toString() === d._id.toString()));
+          if (freeDeposit) {
+            linkedDepositId = freeDeposit._id;
+          } else {
+            linkedDepositId = heldDeposits[0]._id; // Fallback
+          }
+        }
       }
     }
 
@@ -236,8 +284,15 @@ exports.createContract = async (req, res) => {
     }
 
     // 5. Update Room Status
-    room.status = "Occupied";
+    // Nếu hợp đồng bắt đầu ngay hôm nay hoặc trong quá khứ -> Occupied
+    // Nếu bắt đầu trong tương lai (chưa đến ngày active) -> Deposited
+    if (daysUntilStart <= 0) {
+      room.status = "Occupied";
+    } else {
+      room.status = "Deposited";
+    }
     await room.save({ session });
+    // else: keep room as Deposited, cron job will update on startDate
 
     // 5. Deposit remains "Held" status when linked to a contract (no status change needed)
 
@@ -274,11 +329,16 @@ exports.createContract = async (req, res) => {
       console.log(`[DEBUG] User existing. Skipping new account email.`);
     }
 
+    const successMsg = isNewUser
+      ? (tenantInitialStatus === "inactive"
+          ? `Đã tạo hợp đồng thành công. Tài khoản đã tạo nhưng sẽ được kích hoạt vào ngày ${startDateObj.toLocaleDateString("vi-VN")}. Mật khẩu đã gửi email.`
+          : "Đã tạo hợp đồng thành công. Tài khoản và mật khẩu đã được gửi đến email."
+        )
+      : "Tài khoản cho số điện thoại/email này đã tồn tại nên không tạo mới, hợp đồng đã được tạo thành công!";
+
     res.status(201).json({
       success: true,
-      message: isNewUser
-        ? "Đã tạo hợp đồng thành công. Tài khoản và mật khẩu đã được gửi đến email."
-        : "Tài khoản cho số điện thoại/email này đã tồn tại nên không tạo mới, hợp đồng đã được tạo thành công!",
+      message: successMsg,
       data: {
         isNewUser,
         contract: newContract,

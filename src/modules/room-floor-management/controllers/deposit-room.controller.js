@@ -45,7 +45,35 @@ exports.initiateDeposit = async (req, res) => {
         if (!room) {
             return res.status(404).json({ success: false, message: "Không tìm thấy phòng" });
         }
-        if (room.status !== "Available") {
+
+        let allowShortTermDeposit = false;
+        if (room.status === "Deposited") {
+            const Contract = require("../../contract-management/models/contract.model");
+            const Deposit = require("../../contract-management/models/deposit.model");
+            
+            const futureContract = await Contract.findOne({
+                roomId: room._id,
+                status: "active",
+                startDate: { $gt: new Date() }
+            }).sort({ startDate: 1 });
+            
+            if (futureContract) {
+                const shortTermDeposit = await Deposit.findOne({
+                   room: room._id,
+                   status: { $in: ["Pending", "Held"] },
+                   _id: { $ne: futureContract.depositId }
+                });
+
+                if (!shortTermDeposit) {
+                    const daysUntilStart = Math.ceil((new Date(futureContract.startDate) - new Date()) / (1000 * 60 * 60 * 24));
+                    if (daysUntilStart >= 30) {
+                        allowShortTermDeposit = true;
+                    }
+                }
+            }
+        }
+
+        if (room.status !== "Available" && !allowShortTermDeposit) {
             return res.status(400).json({
                 success: false,
                 message: `Phòng hiện không thể đặt cọc (trạng thái: ${room.status})`,
