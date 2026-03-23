@@ -17,42 +17,9 @@ class InvoiceController {
       const result = await invoiceService.generateDraftInvoices(req.body);
       console.log(`[INVOICE CONTROLLER] ✅ Đã tạo ${result.length} hóa đơn nháp`);
       
-      // Gửi thông báo cho tenant khi hóa đơn nháp được tạo
-      if (result && result.length > 0) {
-        console.log(`[INVOICE CONTROLLER] 📬 Bắt đầu gửi notification cho ${result.length} hóa đơn...`);
-        for (const invoice of result) {
-          try {
-            if (invoice && invoice.contractId) {
-              console.log(`[INVOICE CONTROLLER] 📌 Xử lý hóa đơn: ${invoice.invoiceCode}, contractId: ${invoice.contractId}`);
-              const contract = await Contract.findById(invoice.contractId).select('tenantId');
-              if (contract && contract.tenantId) {
-                console.log(`[INVOICE CONTROLLER] 🎯 Gửi notification đến tenant: ${contract.tenantId}`);
-                const notifResult = await notificationService.createInvoiceNotification(
-                  contract.tenantId,
-                  'periodic',
-                  {
-                    invoiceCode: invoice.invoiceCode,
-                    title: invoice.title,
-                    totalAmount: invoice.totalAmount,
-                    dueDate: invoice.dueDate,
-                    items: invoice.items
-                  }
-                );
-                if (notifResult) {
-                  console.log(`[INVOICE CONTROLLER] ✅ Notification đã được lưu vào DB`);
-                } else {
-                  console.warn(`[INVOICE CONTROLLER] ⚠️ Notification không được lưu (null result)`);
-                }
-              } else {
-                console.warn(`[INVOICE CONTROLLER] ⚠️ Không tìm thấy contract hoặc tenantId`);
-              }
-            }
-          } catch (notifError) {
-            console.error(`[INVOICE CONTROLLER] ❌ Lỗi gửi notification cho hóa đơn ${invoice.invoiceCode}:`, notifError.message);
-          }
-        }
-        console.log(`[INVOICE CONTROLLER] ✅ Hoàn thành gửi notification cho tất cả hóa đơn`);
-      }
+      // ⚠️ KHÔNG gửi notification khi tạo draft
+      // Notification sẽ được gửi khi admin phát hành hóa đơn (release)
+      // để tránh gửi thông báo trùng lặp
       
       res.status(201).json({ success: true, message: `Tạo thành công ${result.length} hóa đơn nháp` });
     } catch (error) { 
