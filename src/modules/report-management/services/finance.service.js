@@ -35,13 +35,27 @@ class FinanceService {
     let totalDebtPeriodic = 0;
     let totalDebtIncurred = 0;
 
+    // [MỚI] Khai báo thêm 2 biến để bóc tách hóa đơn phát sinh
+    let prepaidRentRev = 0;     // Tiền phòng trả trước
+    let actualIncurredRev = 0;  // Tiền phạt, sửa chữa thực tế
+
     periodicInvoices.forEach(inv => {
       if (inv.status === "Paid") totalRevenuePeriodic += inv.totalAmount;
       if (inv.status === "Unpaid") totalDebtPeriodic += inv.totalAmount;
     });
 
     incurredInvoices.forEach(inv => {
-      if (inv.status === "Paid") totalRevenueIncurred += inv.totalAmount;
+      if (inv.status === "Paid") {
+          totalRevenueIncurred += inv.totalAmount; // Vẫn cộng vào tổng thu
+          
+          // [MỚI] Bóc tách dữ liệu cho Biểu đồ tròn
+          if (inv.type === "prepaid") {
+              prepaidRentRev += inv.totalAmount;
+          } else {
+              // Các type còn lại (violation, repair) sẽ vào đây
+              actualIncurredRev += inv.totalAmount;
+          }
+      }
       if (inv.status === "Unpaid") totalDebtIncurred += inv.totalAmount;
     });
 
@@ -66,12 +80,14 @@ class FinanceService {
       }
     });
 
+    // [ĐÃ SỬA] Cập nhật mảng trả về cho Frontend
     const revenueBreakdown = [
-      { name: "Tiền phòng", value: rentRev },
+      { name: "Tiền phòng (Định kỳ)", value: rentRev },
+      { name: "Phòng trả trước (Prepaid)", value: prepaidRentRev }, // [MỚI] Tách riêng
       { name: "Tiền điện", value: elecRev },
       { name: "Tiền nước", value: waterRev },
       { name: "Dịch vụ khác", value: serviceRev },
-      { name: "Thu phát sinh", value: totalRevenueIncurred }
+      { name: "Phạt & Sửa chữa", value: actualIncurredRev } // [ĐÃ ĐỔI TÊN] Chỉ còn tiền phạt/sửa chữa
     ].filter(item => item.value > 0); // Chỉ lấy những mục có tiền
 
     // ==========================================
