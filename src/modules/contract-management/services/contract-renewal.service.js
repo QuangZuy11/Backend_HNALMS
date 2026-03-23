@@ -80,13 +80,26 @@ async function checkAndSendRenewalNotifications() {
  */
 async function sendRenewalNotification(contract, config) {
     try {
-        // 1. Check đã gửi chưa
-        const existingLog = await ContractNotificationLog.findOne({
-            contractId: contract._id,
-            reminderType: config.type
-        });
+        // 1. Tạo log TRƯỚC để tránh race condition (findOneAndUpdate với upsert)
+        // Sử dụng updateOne với upsert để đảm bảo chỉ tạo 1 lần (atomic)
+        const logResult = await ContractNotificationLog.updateOne(
+            {
+                contractId: contract._id,
+                reminderType: config.type
+            },
+            {
+                $setOnInsert: {
+                    contractId: contract._id,
+                    tenantId: contract.tenantId._id,
+                    reminderType: config.type,
+                    sentAt: new Date()
+                }
+            },
+            { upsert: true }
+        );
 
-        if (existingLog) {
+        // Nếu document đã tồn tại (matched > 0), không cần gửi lại
+        if (logResult.matchedCount > 0) {
             console.log(`[CONTRACT RENEWAL] ⏭️ Notification ${config.type} đã gửi cho contract ${contract.contractCode}`);
             return false;
         }
@@ -111,16 +124,18 @@ async function sendRenewalNotification(contract, config) {
 
         await notification.save();
 
-        // 3. Lưu log
-        const log = new ContractNotificationLog({
-            contractId: contract._id,
-            tenantId: contract.tenantId._id,
-            notificationId: notification._id,
-            reminderType: config.type,
-            sentAt: new Date()
-        });
-
-        await log.save();
+        // 3. Cập nhật log với notificationId
+        await ContractNotificationLog.updateOne(
+            {
+                contractId: contract._id,
+                reminderType: config.type
+            },
+            {
+                $set: {
+                    notificationId: notification._id
+                }
+            }
+        );
 
         console.log(`[CONTRACT RENEWAL] ✅ Đã gửi notification ${config.type} cho contract ${contract.contractCode} - Tenant: ${contract.tenantId.fullName || contract.tenantId.email}`);
         return true;
