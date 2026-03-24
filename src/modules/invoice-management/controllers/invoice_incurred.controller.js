@@ -18,8 +18,8 @@ class InvoiceIncurredController {
         data: result.invoices,
         pagination: result.pagination,
       });
-    } catch (error) {
-      res.status(500).json({ success: false, message: error.message });
+    } catch (error) { 
+      res.status(500).json({ success: false, message: error.message }); 
     }
   }
 
@@ -27,8 +27,8 @@ class InvoiceIncurredController {
     try {
       const invoice = await invoiceIncurredService.createIncurredInvoice(req.body);
       res.status(201).json({ success: true, data: invoice });
-    } catch (error) {
-      res.status(400).json({ success: false, message: error.message });
+    } catch (error) { 
+      res.status(400).json({ success: false, message: error.message }); 
     }
   }
 
@@ -36,8 +36,8 @@ class InvoiceIncurredController {
     try {
       const invoice = await invoiceIncurredService.releaseInvoice(req.params.id);
       res.status(200).json({ success: true, data: invoice, message: "Phát hành hóa đơn thành công!" });
-    } catch (error) {
-      res.status(400).json({ success: false, message: error.message });
+    } catch (error) { 
+      res.status(400).json({ success: false, message: error.message }); 
     }
   }
 

@@ -78,4 +78,8 @@ ApiRouter.use("/notifications", notificationRoutes);
 const testRoutes = require("./test-routes");
 ApiRouter.use("/test", testRoutes);
 
+// Report routes
+const reportRoutes = require("../../modules/report-management/routes/report.routes");
+ApiRouter.use("/reports", reportRoutes);
+
 module.exports = ApiRouter;
