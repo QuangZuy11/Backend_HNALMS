@@ -147,8 +147,8 @@ class FinanceService {
       topDebts
     };
   }
-  // LẤY BÁO CÁO DOANH THU CHI TIẾT CHO KẾ TOÁN
-  async getRevenueReport(startDate, endDate) {
+
+  async getCashflowReport(startDate, endDate) {
     const start = new Date(startDate);
     start.setHours(0, 0, 0, 0);
     const end = new Date(endDate);
@@ -265,6 +265,103 @@ class FinanceService {
       summary,
       ledger
     };
+  }
+  // LẤY BÁO CÁO KẾT QUẢ KINH DOANH (P&L / REVENUE REPORT)
+  async getRevenueReport(startDate, endDate) {
+    const start = new Date(startDate);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999);
+
+    // 1. Lấy Hóa đơn Định kỳ (Bao gồm cả Paid và Unpaid, miễn không phải Draft)
+    const periodicInvoices = await InvoicePeriodic.find({
+      createdAt: { $gte: start, $lte: end },
+      status: { $ne: "Draft" }
+    }).populate({ path: 'contractId', select: 'roomId', populate: { path: 'roomId', select: 'name' } });
+
+    // 2. Lấy Hóa đơn Phát sinh (LOẠI BỎ PREPAID vì trả trước không tính là doanh thu kỳ này)
+    const incurredInvoices = await InvoiceIncurred.find({
+      createdAt: { $gte: start, $lte: end },
+      status: { $ne: "Draft" },
+      type: { $ne: "prepaid" } // Quan trọng: Bỏ qua tiền trả trước
+    }).populate({ path: 'contractId', select: 'roomId', populate: { path: 'roomId', select: 'name' } });
+
+    // 3. Lấy Phiếu Chi (Chi phí ghi nhận trong kỳ)
+    const financialTickets = await FinancialTicket.find({
+      transactionDate: { $gte: start, $lte: end },
+      status: { $in: ["Completed", "Paid", "Approved"] }
+    });
+
+    let pnlLedger = [];
+    let summary = {
+      recognizedRevenue: 0, // Doanh thu ghi nhận
+      recognizedExpense: 0, // Chi phí ghi nhận
+      netProfit: 0,         // Lợi nhuận gộp
+      profitMargin: 0       // Tỷ suất lợi nhuận (%)
+    };
+
+    const getRoomName = (inv) => {
+        if (inv.contractId && inv.contractId.roomId) return inv.contractId.roomId.name;
+        return "N/A";
+    };
+
+    // --- Ghi nhận Doanh thu Định kỳ ---
+    periodicInvoices.forEach(inv => {
+      summary.recognizedRevenue += inv.totalAmount;
+      pnlLedger.push({
+        id: inv._id,
+        date: inv.createdAt,
+        code: inv.invoiceCode,
+        room: getRoomName(inv),
+        description: inv.title,
+        category: "Doanh thu Định kỳ",
+        revenue: inv.totalAmount,
+        expense: 0,
+        status: inv.status === "Paid" ? "Đã thu tiền" : "Đang ghi công nợ"
+      });
+    });
+
+    // --- Ghi nhận Doanh thu Phát sinh (Chỉ tính Phạt/Sửa chữa) ---
+    incurredInvoices.forEach(inv => {
+      summary.recognizedRevenue += inv.totalAmount;
+      pnlLedger.push({
+        id: inv._id,
+        date: inv.createdAt,
+        code: inv.invoiceCode,
+        room: getRoomName(inv),
+        description: inv.title,
+        category: "Doanh thu Phạt/Sửa chữa",
+        revenue: inv.totalAmount,
+        expense: 0,
+        status: inv.status === "Paid" ? "Đã thu tiền" : "Đang ghi công nợ"
+      });
+    });
+
+    // --- Ghi nhận Chi phí ---
+    financialTickets.forEach(ticket => {
+      summary.recognizedExpense += ticket.amount;
+      pnlLedger.push({
+        id: ticket._id,
+        date: ticket.transactionDate,
+        code: "TC-" + ticket._id.toString().slice(-5).toUpperCase(),
+        room: "Tòa nhà (Chung)",
+        description: ticket.title,
+        category: "Chi phí Vận hành",
+        revenue: 0,
+        expense: ticket.amount,
+        status: "Đã chi"
+      });
+    });
+
+    pnlLedger.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    // Tính lợi nhuận
+    summary.netProfit = summary.recognizedRevenue - summary.recognizedExpense;
+    summary.profitMargin = summary.recognizedRevenue > 0 
+      ? ((summary.netProfit / summary.recognizedRevenue) * 100).toFixed(2) 
+      : 0;
+
+    return { summary, ledger: pnlLedger };
   }
 }
 

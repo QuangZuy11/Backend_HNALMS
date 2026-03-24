@@ -22,7 +22,7 @@ class FinanceController {
     }
   }
   // 2. API: Lấy dữ liệu Báo cáo Doanh thu chi tiết (MỚI THÊM)
-  async getRevenueReport(req, res) {
+  async getCashflowReport(req, res) {
     try {
       const { startDate, endDate } = req.query;
 
@@ -34,20 +34,30 @@ class FinanceController {
         });
       }
 
-      const reportData = await FinanceService.getRevenueReport(startDate, endDate);
+      const reportData = await FinanceService.getCashflowReport(startDate, endDate);
 
       return res.status(200).json({
         success: true,
-        message: "Lấy báo cáo doanh thu thành công",
+        message: "Lấy báo cáo dòng tiền thành công",
         data: reportData
       });
     } catch (error) {
-      console.error("Lỗi getRevenueReport:", error);
+      console.error("Lỗi getCashflowReport:", error);
       return res.status(500).json({
         success: false,
-        message: "Có lỗi xảy ra khi trích xuất báo cáo doanh thu.",
+        message: "Có lỗi xảy ra khi trích xuất báo cáo dòng tiền.",
         error: error.message
       });
+    }
+  }
+
+  async getRevenueReport(req, res) {
+    try {
+      const { startDate, endDate } = req.query;
+      const reportData = await FinanceService.getRevenueReport(startDate, endDate);
+      return res.status(200).json({ success: true, data: reportData });
+    } catch (error) {
+      return res.status(500).json({ success: false, error: error.message });
     }
   }
 }
