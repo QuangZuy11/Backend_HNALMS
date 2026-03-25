@@ -9,13 +9,11 @@ const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs"); // Ensure bcryptjs is installed
 const { checkAndSendRenewalNotifications } = require("../services/contract-renewal.service");
 
-// Helper to generate random string
+// Helper to generate random digit string (numbers only)
 const generateRandomString = (length) => {
-  const chars =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
   let result = "";
   for (let i = 0; i < length; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
+    result += Math.floor(Math.random() * 10).toString();
   }
   return result;
 };
@@ -125,28 +123,26 @@ exports.createContract = async (req, res) => {
     // Nếu startDate > hôm nay → tạo tài khoản inactive (chưa được đăng nhập)
     const tenantInitialStatus = daysUntilStart > 0 ? "inactive" : "active";
 
-    // 2. Handle Tenant Account (Optimal Check)
-    // Check by Phone Number first - this is the strongest identifier for a person in VN
-    let user = await User.findOne({ phoneNumber: tenantInfo.phone }).session(session);
-
+    // 2. Handle Tenant Account
+    // Check by CCCD first (primary identity document in VN)
     let isNewUser = false;
     let passwordRaw = null;
+    let user = null;
 
-    if (user) {
-      // If user exists by phone, we STRICTLY require the provided email to match what's in DB
-      if (user.email !== tenantInfo.email) {
-        throw new Error(`Khách hàng với số điện thoại này đã tồn tại, nhưng email không khớp. Vui lòng sử dụng đúng email cũ của khách hàng này để tiếp tục tạo hợp đồng.`);
+    const existingUserInfo = tenantInfo.cccd
+      ? await UserInfo.findOne({ cccd: tenantInfo.cccd }).session(session)
+      : null;
+
+    if (existingUserInfo) {
+      // CCCD đã tồn tại → reuse account cũ, không tạo mới
+      user = await User.findById(existingUserInfo.userId).session(session);
+      if (!user) {
+        throw new Error(`Tìm thấy CCCD ${tenantInfo.cccd} nhưng tài khoản liên kết không tồn tại. Vui lòng liên hệ quản trị viên.`);
       }
-      console.log(`[CREATE CONTRACT] Existing User found by Phone: ID=${user._id}, phone=${user.phoneNumber}`);
+      isNewUser = false;
+      console.log(`[CREATE CONTRACT] Existing User found by CCCD: ID=${user._id}, cccd=${tenantInfo.cccd}`);
     } else {
-      // No user found by phone. 
-      // Now check if the Email is already in use by someone else
-      const emailInUse = await User.findOne({ email: tenantInfo.email }).session(session);
-      if (emailInUse) {
-        throw new Error(`Email "${tenantInfo.email}" đã tồn tại trong hệ thống nhưng thuộc về một số điện thoại khác. Vui lòng kiểm tra lại thông tin khách hàng.`);
-      }
-
-      // Safe to create new user
+      // CCCD chưa tồn tại → tạo tài khoản mới ngay
       isNewUser = true;
 
       passwordRaw = generateRandomString(8);
