@@ -5,7 +5,7 @@ const MoveOutRequestSchema = new Schema({
   // Foreign Keys
   contractId: {
     type: Schema.Types.ObjectId,
-    ref: 'Contract',
+    ref: 'Contracts',
     required: true,
     unique: true // Mỗi hợp đồng chỉ có 1 yêu cầu trả phòng
   },
@@ -30,10 +30,10 @@ const MoveOutRequestSchema = new Schema({
     maxlength: 500
   },
 
-  // Trạng thái
+  // Trạng thái: Requested → Completed (hoặc Cancelled)
   status: {
     type: String,
-    enum: ['Requested', 'Approved', 'InProcess', 'Completed', 'Cancelled'],
+    enum: ['Requested', 'Completed', 'Cancelled'],
     default: 'Requested'
   },
 
@@ -51,30 +51,13 @@ const MoveOutRequestSchema = new Schema({
     default: false // Mất cọc không
   },
 
-  // Ghi chú từ quản lý
-  managerApprovalDate: {
-    type: Date,
-    default: null
-  },
-  managerApprovalNotes: {
-    type: String,
-    maxlength: 1000
-  },
-
-  // Hóa đơn tất toán
-  finalSettlementInvoiceId: {
-    type: Schema.Types.ObjectId,
-    ref: 'InvoiceFinalSettlement',
-    default: null
-  },
-
   // Tiền cọc hoàn
   depositRefund: {
     type: Number,
     default: 0
   },
 
-  // Ngày hoàn tất
+  // Xác nhận hoàn tất
   completedDate: {
     type: Date,
     default: null
@@ -96,3 +79,4 @@ MoveOutRequestSchema.index({ status: 1 });
 const MoveOutRequest = mongoose.model("MoveOutRequest", MoveOutRequestSchema);
 
 module.exports = MoveOutRequest;
+
