@@ -1,10 +1,13 @@
 const cron = require("node-cron");
 const Contract = require("../models/contract.model");
 const Room = require("../../room-floor-management/models/room.model");
+const User = require("../../authentication/models/user.model");
 
 /**
- * Cron Job: Cập nhật trạng thái phòng từ "Deposited" → "Occupied"
- * Chạy mỗi ngày lúc 00:01 để kiểm tra hợp đồng nào bắt đầu hôm nay
+ * Cron Job: Kích hoạt tài khoản tenant và cập nhật trạng thái phòng
+ * - Tenant account: "inactive" → "active" khi đến ngày bắt đầu hợp đồng
+ * - Room status: "Deposited" → "Occupied" khi đến ngày bắt đầu hợp đồng
+ * Chạy mỗi ngày lúc 00:01
  */
 const contractStartJob = () => {
     cron.schedule("1 0 * * *", async () => {
@@ -12,17 +15,14 @@ const contractStartJob = () => {
             console.log("[CONTRACT START JOB] ⏱️  Running contract start check...");
 
             const today = new Date();
-            today.setHours(0, 0, 0, 0); // Set to 00:00:00 today
+            today.setHours(0, 0, 0, 0);
 
             const endOfDay = new Date(today);
-            endOfDay.setHours(23, 59, 59, 999); // Set to 23:59:59 today
+            endOfDay.setHours(23, 59, 59, 999);
 
-            // Tìm các hợp đồng bắt đầu hôm nay (startDate = hôm nay)
+            // Tìm các hợp đồng bắt đầu hôm nay
             const contracts = await Contract.find({
-                startDate: {
-                    $gte: today,
-                    $lte: endOfDay,
-                },
+                startDate: { $gte: today, $lte: endOfDay },
                 status: "active",
             }).populate("roomId");
 
@@ -33,8 +33,21 @@ const contractStartJob = () => {
 
             console.log(`[CONTRACT START JOB] Found ${contracts.length} contract(s) starting today`);
 
-            // Cập nhật trạng thái phòng từ "Deposited" → "Occupied"
             for (const contract of contracts) {
+                // 1. Kích hoạt tài khoản tenant (inactive → active)
+                if (contract.tenantId) {
+                    const tenant = await User.findById(contract.tenantId);
+                    if (tenant && tenant.status === "inactive") {
+                        tenant.status = "active";
+                        await tenant.save();
+                        console.log(
+                            `[CONTRACT START JOB] ✅ Tenant account activated: ${tenant.username} ` +
+                            `(Contract: ${contract.contractCode})`
+                        );
+                    }
+                }
+
+                // 2. Cập nhật trạng thái phòng Deposited → Occupied
                 const room = contract.roomId;
                 if (!room) {
                     console.warn(`[CONTRACT START JOB] ⚠️ Room not found for contract ${contract._id}`);
@@ -49,9 +62,9 @@ const contractStartJob = () => {
                         `(Contract: ${contract.contractCode})`
                     );
                 } else {
-                    console.warn(
-                        `[CONTRACT START JOB] ⚠️ Room ${room.name} has unexpected status: ${room.status} ` +
-                        `(Expected: Deposited). Contract: ${contract.contractCode}`
+                    console.log(
+                        `[CONTRACT START JOB] ℹ️ Room ${room.name} status: ${room.status} ` +
+                        `(no change needed). Contract: ${contract.contractCode}`
                     );
                 }
             }
