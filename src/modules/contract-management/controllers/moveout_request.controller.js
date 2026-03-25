@@ -214,43 +214,8 @@ class MoveOutRequestController {
   }
 
   /**
-   * Quản lý phê duyệt yêu cầu trả phòng
+   * Quản lý xác nhận hoàn tất trả phòng
    * Body: {
-   *   managerApprovalNotes: string (optional)
-   * }
-   */
-  async approveMoveOutRequest(req, res) {
-    try {
-      console.log(`[MOVEOUT CONTROLLER] ✅ Quản lý phê duyệt yêu cầu...`);
-
-      const { moveOutRequestId } = req.params;
-      const { managerApprovalNotes = "" } = req.body;
-
-      const result = await moveOutRequestService.approveMoveOutRequest(
-        moveOutRequestId,
-        managerApprovalNotes
-      );
-
-      console.log(`[MOVEOUT CONTROLLER] ✅ Phê duyệt thành công`);
-
-      res.status(200).json({
-        success: true,
-        message: "Yêu cầu trả phòng đã được phê duyệt",
-        data: result
-      });
-    } catch (error) {
-      console.error(`[MOVEOUT CONTROLLER] ❌ Lỗi:`, error.message);
-      res.status(400).json({
-        success: false,
-        message: error.message
-      });
-    }
-  }
-
-  /**
-   * Quản lý xác nhận hoàn tất trả phòng (sau khi tính hóa đơn tất toán)
-   * Body: {
-   *   finalSettlementInvoiceId: string,
    *   managerCompletionNotes: string (optional)
    * }
    */
@@ -259,18 +224,10 @@ class MoveOutRequestController {
       console.log(`[MOVEOUT CONTROLLER] 🏁 Quản lý hoàn tất trả phòng...`);
 
       const { moveOutRequestId } = req.params;
-      const { finalSettlementInvoiceId, managerCompletionNotes = "" } = req.body;
-
-      if (!finalSettlementInvoiceId) {
-        return res.status(400).json({
-          success: false,
-          message: "Thiếu finalSettlementInvoiceId"
-        });
-      }
+      const { managerCompletionNotes = "" } = req.body;
 
       const result = await moveOutRequestService.completeMoveOut(
         moveOutRequestId,
-        finalSettlementInvoiceId,
         managerCompletionNotes
       );
 
