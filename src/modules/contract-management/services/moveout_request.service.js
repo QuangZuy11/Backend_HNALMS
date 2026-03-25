@@ -1,7 +1,8 @@
 const MoveOutRequest = require("../models/moveout_request.model");
 const Contract = require("../models/contract.model");
 const User = require("../../authentication/models/user.model");
-const notificationService = require("../../notification-management/services/notification.service");
+const UserInfo = require("../../authentication/models/userInfor.model");
+const Notification = require("../../notification-management/models/notification.model");
 
 class MoveOutRequestService {
   /**
@@ -36,14 +37,11 @@ class MoveOutRequestService {
         throw new Error("Bạn không có quyền tạo yêu cầu trả phòng cho hợp đồng này");
       }
 
-      // 3. Kiểm tra nếu đã có yêu cầu trả phòng chưa hoàn tất
-      const existingRequest = await MoveOutRequest.findOne({
-        contractId,
-        status: { $in: ["Requested", "Approved", "InProcess"] }
-      });
+      // 3. Kiểm tra nếu đã có yêu cầu trả phòng (mỗi hợp đồng chỉ được 1 yêu cầu duy nhất)
+      const existingRequest = await MoveOutRequest.findOne({ contractId });
 
       if (existingRequest) {
-        throw new Error("Yêu cầu trả phòng đã được tạo trước đó và chưa hoàn tất");
+        throw new Error("Hợp đồng này đã có yêu cầu trả phòng trước đó. Mỗi hợp đồng chỉ được tạo một yêu cầu trả phòng.");
       }
 
       // 4. Kiểm tra unhappy case
@@ -88,15 +86,31 @@ class MoveOutRequestService {
 
       if (managers.length > 0) {
         try {
-          const title = `📋 Yêu cầu trả phòng từ ${contract.tenantId.fullName}`;
-          const content = `Phòng: ${contract.roomId.name}\nNgày trả phòng dự kiến: ${new Date(expectedMoveOutDate).toLocaleDateString('vi-VN')}\nLý do: ${reason || 'Không có'}\n\nVui lòng kiểm tra và phê duyệt yêu cầu này.`;
+          // Lấy fullName từ UserInfo để hiển thị trong thông báo
+          const userInfo = await UserInfo.findOne({ userId: tenantId }).select('fullname');
+          const tenantFullName = userInfo?.fullname || contract.tenantId?.email || 'Tenant';
 
-          await notificationService.createSystemNotificationForRequest(tenantId, 'moveout', {
-            description: title,
-            roomName: contract.roomId.name,
-            reason: reason
+          const title = `📋 Yêu cầu trả phòng từ ${tenantFullName}`;
+          const content = `Phòng: ${contract.roomId?.name || 'N/A'}
+Ngày trả phòng dự kiến: ${new Date(expectedMoveOutDate).toLocaleDateString('vi-VN')}
+Lý do: ${reason || 'Không có'}
+
+Vui lòng kiểm tra và xử lý yêu cầu này.`;
+
+          const notification = new Notification({
+            title,
+            content,
+            type: 'system',
+            status: 'sent',
+            created_by: null,
+            recipients: managers.map(m => ({
+              recipient_id: m._id,
+              recipient_role: 'manager',
+              is_read: false,
+              read_at: null
+            }))
           });
-
+          await notification.save();
           console.log(`[MOVEOUT SERVICE] ✅ Thông báo đã gửi cho ${managers.length} quản lý`);
         } catch (notifError) {
           console.error(`[MOVEOUT SERVICE] ⚠️ Lỗi gửi thông báo:`, notifError.message);
@@ -164,16 +178,43 @@ class MoveOutRequestService {
         query.status = status;
       }
 
+      // Ensure Room model is registered for nested populate
+      require('../../room-floor-management/models/room.model');
+
       const moveOutRequests = await MoveOutRequest.find(query)
-        .populate('tenantId', 'fullName email phoneNumber')
+        .populate({
+          path: 'contractId',
+          select: 'roomId startDate endDate contractCode status depositId',
+          populate: { path: 'roomId', select: 'name roomCode floorId' }
+        })
+        .populate('tenantId', 'email phoneNumber username')
         .sort({ requestDate: -1 })
         .skip(skip)
         .limit(limit);
 
       const total = await MoveOutRequest.countDocuments(query);
 
+      // Lấy fullname từ UserInfo cho từng tenant
+      const tenantIds = moveOutRequests
+        .filter(r => r.tenantId && r.tenantId._id)
+        .map(r => r.tenantId._id);
+
+      const userInfoList = await UserInfo.find({ userId: { $in: tenantIds } }).select('userId fullname');
+      const userInfoMap = {};
+      userInfoList.forEach(ui => {
+        userInfoMap[ui.userId.toString()] = ui.fullname;
+      });
+
+      const enrichedRequests = moveOutRequests.map(r => {
+        const obj = r.toObject();
+        if (obj.tenantId && obj.tenantId._id) {
+          obj.tenantId.fullName = userInfoMap[obj.tenantId._id.toString()] || '';
+        }
+        return obj;
+      });
+
       return {
-        moveOutRequests,
+        moveOutRequests: enrichedRequests,
         pagination: {
           currentPage: page,
           totalPages: Math.ceil(total / limit),
@@ -186,124 +227,66 @@ class MoveOutRequestService {
     }
   }
 
-  /**
-   * Quản lý phê duyệt yêu cầu trả phòng
-   */
-  async approveMoveOutRequest(moveOutRequestId, managerNotes = "") {
-    try {
-      console.log(`[MOVEOUT SERVICE] 📝 Quản lý phê duyệt yêu cầu trả phòng: ${moveOutRequestId}`);
-
-      const moveOutRequest = await MoveOutRequest.findById(moveOutRequestId)
-        .populate('tenantId', 'email fullName');
-
-      if (!moveOutRequest) {
-        throw new Error("Không tìm thấy yêu cầu trả phòng");
-      }
-
-      if (moveOutRequest.status !== "Requested") {
-        throw new Error(`Yêu cầu không ở trạng thái 'Requested' (trạng thái hiện tại: ${moveOutRequest.status})`);
-      }
-
-      // Cập nhật trạng thái
-      moveOutRequest.status = "Approved";
-      moveOutRequest.managerApprovalDate = new Date();
-      moveOutRequest.managerApprovalNotes = managerNotes;
-
-      await moveOutRequest.save();
-
-      console.log(`[MOVEOUT SERVICE] ✅ Yêu cầu trả phòng đã được phê duyệt`);
-
-      // Gửi thông báo cho tenant
-      try {
-        const expectedDate = new Date(moveOutRequest.expectedMoveOutDate).toLocaleDateString('vi-VN');
-        const title = `✅ Yêu cầu trả phòng đã được phê duyệt`;
-        const content = `Quản lý đã phê duyệt yêu cầu trả phòng của bạn.\n\nNgày bàn giao phòng: ${expectedDate}\n\nVui lòng bàn giao phòng cho Quản Lý vào ngày này.\n\nGhi chú: ${managerNotes || 'Không có'}`;
-
-        // Tạo thông báo hệ thống cho tenant
-        const notification = new (require('../../notification-management/models/notification.model'))({
-          title,
-          content,
-          type: 'system',
-          status: 'sent',
-          recipients: [{
-            recipient_id: moveOutRequest.tenantId._id,
-            recipient_role: 'tenant',
-            is_read: false
-          }]
-        });
-
-        await notification.save();
-        console.log(`[MOVEOUT SERVICE] ✅ Thông báo phê duyệt đã gửi cho tenant`);
-      } catch (notifError) {
-        console.warn(`[MOVEOUT SERVICE] ⚠️ Lỗi gửi thông báo:`, notifError.message);
-      }
-
-      return moveOutRequest;
-    } catch (error) {
-      console.error(`[MOVEOUT SERVICE] ❌ Lỗi phê duyệt yêu cầu:`, error.message);
-      throw error;
-    }
-  }
 
   /**
-   * Quản lý xác nhận hoàn tất trả phòng (sau khi tính hóa đơn tất toán)
+   * Quản lý xác nhận hoàn tất trả phòng
    */
-  async completeMoveOut(moveOutRequestId, finalSettlementInvoiceId, managerCompletionNotes = "") {
+  async completeMoveOut(moveOutRequestId, managerCompletionNotes = "") {
     try {
       console.log(`[MOVEOUT SERVICE] 🏁 Hoàn tất trả phòng: ${moveOutRequestId}`);
 
-      const moveOutRequest = await MoveOutRequest.findById(moveOutRequestId)
-        .populate('tenantId', 'email fullName username');
+      const moveOutRequest = await MoveOutRequest.findById(moveOutRequestId);
 
       if (!moveOutRequest) {
         throw new Error("Không tìm thấy yêu cầu trả phòng");
       }
 
-      if (moveOutRequest.status !== "InProcess" && moveOutRequest.status !== "Approved") {
-        throw new Error(`Yêu cầu không ở trạng thái có thể hoàn tất (trạng thái hiện tại: ${moveOutRequest.status})`);
+      if (!['Requested'].includes(moveOutRequest.status)) {
+        throw new Error(`Chỉ có thể xác nhận hoàn tất khi yêu cầu đang ở trạng thái 'Requested' (trạng thái hiện tại: ${moveOutRequest.status})`);
       }
 
-      // Cập nhật
+      // 1. Cập nhật moveOutRequest
       moveOutRequest.status = "Completed";
       moveOutRequest.completedDate = new Date();
-      moveOutRequest.finalSettlementInvoiceId = finalSettlementInvoiceId;
       moveOutRequest.managerCompletionNotes = managerCompletionNotes;
-
       await moveOutRequest.save();
 
       console.log(`[MOVEOUT SERVICE] ✅ Trả phòng đã hoàn tất`);
 
-      // Cập nhật trạng thái hợp đồng
+      // 2. Đóng hợp đồng
       const contract = await Contract.findById(moveOutRequest.contractId);
-      contract.status = "terminated";
-      await contract.save();
+      if (contract) {
+        contract.status = "terminated";
+        await contract.save();
+        console.log(`[MOVEOUT SERVICE] ✅ Hợp đồng đã được đóng (terminated)`);
+      }
 
-      console.log(`[MOVEOUT SERVICE] ✅ Hợp đồng đã được đóng (terminated)`);
+      // 3. Vô hiệu hóa tài khoản tenant
+      const tenant = await User.findById(moveOutRequest.tenantId);
+      if (tenant) {
+        tenant.status = "inactive";
+        await tenant.save();
+        console.log(`[MOVEOUT SERVICE] ✅ Tài khoản tenant đã được vô hiệu hóa`);
+      }
 
-      // Vô hiệu hóa tài khoản tenant
-      const tenant = moveOutRequest.tenantId;
-      tenant.status = "inactive";
-      await tenant.save();
-
-      console.log(`[MOVEOUT SERVICE] ✅ Tài khoản tenant đã được vô hiệu hóa`);
-
-      // Gửi thông báo cho tenant
+      // 4. Gửi thông báo cho tenant
       try {
-        const title = `🎉 Trả phòng đã hoàn tất`;
+        const title = `🎉 Trả phòng hoàn tất`;
         const content = `Quản lý đã xác nhận hoàn tất quá trình trả phòng.\n\nGhi chú: ${managerCompletionNotes || 'Không có'}\n\nCảm ơn bạn đã sử dụng dịch vụ của chúng tôi!`;
 
-        const notification = new (require('../../notification-management/models/notification.model'))({
+        const notification = new Notification({
           title,
           content,
           type: 'system',
           status: 'sent',
+          created_by: null,
           recipients: [{
-            recipient_id: tenant._id,
+            recipient_id: moveOutRequest.tenantId,
             recipient_role: 'tenant',
-            is_read: false
+            is_read: false,
+            read_at: null
           }]
         });
-
         await notification.save();
         console.log(`[MOVEOUT SERVICE] ✅ Thông báo hoàn tất đã gửi cho tenant`);
       } catch (notifError) {
@@ -330,8 +313,8 @@ class MoveOutRequestService {
         throw new Error("Không tìm thấy yêu cầu trả phòng");
       }
 
-      if (!["Requested", "Approved"].includes(moveOutRequest.status)) {
-        throw new Error(`Chỉ có thể hủy yêu cầu ở trạng thái 'Requested' hoặc 'Approved'`);
+      if (moveOutRequest.status !== 'Requested') {
+        throw new Error(`Chỉ có thể hủy yêu cầu đang ở trạng thái 'Requested' (trạng thái hiện tại: ${moveOutRequest.status})`);
       }
 
       moveOutRequest.status = "Cancelled";
