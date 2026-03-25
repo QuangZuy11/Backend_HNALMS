@@ -83,7 +83,7 @@ class FinanceService {
     // [ĐÃ SỬA] Cập nhật mảng trả về cho Frontend
     const revenueBreakdown = [
       { name: "Tiền phòng (Định kỳ)", value: rentRev },
-      { name: "Phòng trả trước (Prepaid)", value: prepaidRentRev }, // [MỚI] Tách riêng
+      { name: "Tiền phòng trả trước", value: prepaidRentRev }, // [MỚI] Tách riêng
       { name: "Tiền điện", value: elecRev },
       { name: "Tiền nước", value: waterRev },
       { name: "Dịch vụ khác", value: serviceRev },
@@ -146,6 +146,222 @@ class FinanceService {
       chartData,
       topDebts
     };
+  }
+
+  async getCashflowReport(startDate, endDate) {
+    const start = new Date(startDate);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999);
+
+    // 1. Lấy tất cả Hóa đơn Định kỳ (Phòng, Điện, Nước, Dịch vụ)
+    const periodicInvoices = await InvoicePeriodic.find({
+      createdAt: { $gte: start, $lte: end },
+      status: { $ne: "Draft" } // Bỏ qua bản nháp, kế toán chỉ quan tâm cái đã chốt
+    }).populate({ path: 'contractId', select: 'roomId', populate: { path: 'roomId', select: 'name' } });
+
+    // 2. Lấy Hóa đơn Phát sinh (Phạt, Sửa chữa, Trả trước)
+    const incurredInvoices = await InvoiceIncurred.find({
+      createdAt: { $gte: start, $lte: end },
+      status: { $ne: "Draft" }
+    }).populate({ path: 'contractId', select: 'roomId', populate: { path: 'roomId', select: 'name' } });
+
+    // 3. Lấy Phiếu Chi
+    const financialTickets = await FinancialTicket.find({
+      transactionDate: { $gte: start, $lte: end },
+      status: { $in: ["Completed", "Paid", "Approved"] }
+    });
+
+    // 4. XỬ LÝ DỮ LIỆU ĐỂ ĐỔ RA BẢNG (FLATTEN DATA)
+    let ledger = [];
+    let summary = {
+      expectedRevenue: 0,
+      actualCollected: 0,
+      actualExpense: 0,
+      totalDebt: 0
+    };
+
+    const getRoomName = (inv) => {
+        if (inv.contractId && inv.contractId.roomId) return inv.contractId.roomId.name;
+        return "N/A";
+    };
+
+    // --- Bóc tách Định kỳ ---
+    periodicInvoices.forEach(inv => {
+      summary.expectedRevenue += inv.totalAmount;
+      if (inv.status === "Paid") summary.actualCollected += inv.totalAmount;
+      if (inv.status === "Unpaid") summary.totalDebt += inv.totalAmount;
+
+      ledger.push({
+        id: inv._id,
+        code: inv.invoiceCode,
+        date: inv.createdAt,
+        room: getRoomName(inv),
+        transactionType: inv.status === "Paid" ? "THU" : "NỢ",
+        category: "Định kỳ (Phòng, Điện, Nước...)",
+        // [MỚI] Thêm Hình thức thanh toán và Ghi chú
+        paymentMethod: inv.paymentMethod || (inv.status === "Paid" ? "Chuyển khoản" : "-"),
+        description: inv.title || "Thu tiền định kỳ", 
+        inflow: inv.totalAmount,
+        outflow: 0,
+        status: inv.status
+      });
+    });
+
+    // --- Bóc tách Phát sinh ---
+    incurredInvoices.forEach(inv => {
+      summary.expectedRevenue += inv.totalAmount;
+      if (inv.status === "Paid") summary.actualCollected += inv.totalAmount;
+      if (inv.status === "Unpaid") summary.totalDebt += inv.totalAmount;
+
+      let catName = inv.type === "prepaid" ? "Tiền phòng trả trước" : "Thu phát sinh (Phạt/Sửa chữa)";
+
+      ledger.push({
+        id: inv._id,
+        code: inv.invoiceCode,
+        date: inv.createdAt,
+        room: getRoomName(inv),
+        transactionType: inv.status === "Paid" ? "THU" : "NỢ",
+        category: catName,
+        // [MỚI] Thêm Hình thức thanh toán và Ghi chú
+        paymentMethod: inv.paymentMethod || (inv.status === "Paid" ? "Chuyển khoản" : "-"),
+        description: inv.title || "Thu tiền phát sinh",
+        inflow: inv.totalAmount,
+        outflow: 0,
+        status: inv.status
+      });
+    });
+
+    // --- Bóc tách Phiếu Chi ---
+    financialTickets.forEach(ticket => {
+      summary.actualExpense += ticket.amount;
+
+      ledger.push({
+        id: ticket._id,
+        code: "TC-" + ticket._id.toString().slice(-5).toUpperCase(),
+        date: ticket.transactionDate,
+        room: "Tòa nhà (Chung)",
+        transactionType: "CHI",
+        category: "Chi phí vận hành", // Cố định loại category cho phiếu chi
+        // [MỚI] Thêm Hình thức thanh toán và Ghi chú (Lấy title của ticket làm diễn giải)
+        paymentMethod: ticket.paymentMethod || "-",
+        description: ticket.title + (ticket.rejectionReason ? ` (Lý do: ${ticket.rejectionReason})` : ""),
+        inflow: 0,
+        outflow: ticket.amount,
+        status: ticket.status
+      });
+    });
+
+    // Sắp xếp chứng từ theo thời gian mới nhất lên đầu
+    ledger.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    // Tính thêm chỉ số phụ
+    summary.netCashFlow = summary.actualCollected - summary.actualExpense;
+    summary.collectionRate = summary.expectedRevenue > 0 
+      ? ((summary.actualCollected / summary.expectedRevenue) * 100).toFixed(2) 
+      : 0;
+
+    return {
+      summary,
+      ledger
+    };
+  }
+  // LẤY BÁO CÁO KẾT QUẢ KINH DOANH (P&L / REVENUE REPORT)
+  async getRevenueReport(startDate, endDate) {
+    const start = new Date(startDate);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999);
+
+    // 1. Lấy Hóa đơn Định kỳ (Bao gồm cả Paid và Unpaid, miễn không phải Draft)
+    const periodicInvoices = await InvoicePeriodic.find({
+      createdAt: { $gte: start, $lte: end },
+      status: { $ne: "Draft" }
+    }).populate({ path: 'contractId', select: 'roomId', populate: { path: 'roomId', select: 'name' } });
+
+    // 2. Lấy Hóa đơn Phát sinh (LOẠI BỎ PREPAID vì trả trước không tính là doanh thu kỳ này)
+    const incurredInvoices = await InvoiceIncurred.find({
+      createdAt: { $gte: start, $lte: end },
+      status: { $ne: "Draft" },
+      type: { $ne: "prepaid" } // Quan trọng: Bỏ qua tiền trả trước
+    }).populate({ path: 'contractId', select: 'roomId', populate: { path: 'roomId', select: 'name' } });
+
+    // 3. Lấy Phiếu Chi (Chi phí ghi nhận trong kỳ)
+    const financialTickets = await FinancialTicket.find({
+      transactionDate: { $gte: start, $lte: end },
+      status: { $in: ["Completed", "Paid", "Approved"] }
+    });
+
+    let pnlLedger = [];
+    let summary = {
+      recognizedRevenue: 0, // Doanh thu ghi nhận
+      recognizedExpense: 0, // Chi phí ghi nhận
+      netProfit: 0,         // Lợi nhuận gộp
+      profitMargin: 0       // Tỷ suất lợi nhuận (%)
+    };
+
+    const getRoomName = (inv) => {
+        if (inv.contractId && inv.contractId.roomId) return inv.contractId.roomId.name;
+        return "N/A";
+    };
+
+    // --- Ghi nhận Doanh thu Định kỳ ---
+    periodicInvoices.forEach(inv => {
+      summary.recognizedRevenue += inv.totalAmount;
+      pnlLedger.push({
+        id: inv._id,
+        date: inv.createdAt,
+        code: inv.invoiceCode,
+        room: getRoomName(inv),
+        description: inv.title,
+        category: "Doanh thu Định kỳ",
+        revenue: inv.totalAmount,
+        expense: 0,
+        status: inv.status === "Paid" ? "Đã thu tiền" : "Đang ghi công nợ"
+      });
+    });
+
+    // --- Ghi nhận Doanh thu Phát sinh (Chỉ tính Phạt/Sửa chữa) ---
+    incurredInvoices.forEach(inv => {
+      summary.recognizedRevenue += inv.totalAmount;
+      pnlLedger.push({
+        id: inv._id,
+        date: inv.createdAt,
+        code: inv.invoiceCode,
+        room: getRoomName(inv),
+        description: inv.title,
+        category: "Doanh thu Phạt/Sửa chữa",
+        revenue: inv.totalAmount,
+        expense: 0,
+        status: inv.status === "Paid" ? "Đã thu tiền" : "Đang ghi công nợ"
+      });
+    });
+
+    // --- Ghi nhận Chi phí ---
+    financialTickets.forEach(ticket => {
+      summary.recognizedExpense += ticket.amount;
+      pnlLedger.push({
+        id: ticket._id,
+        date: ticket.transactionDate,
+        code: "TC-" + ticket._id.toString().slice(-5).toUpperCase(),
+        room: "Tòa nhà (Chung)",
+        description: ticket.title,
+        category: "Chi phí Vận hành",
+        revenue: 0,
+        expense: ticket.amount,
+        status: "Đã chi"
+      });
+    });
+
+    pnlLedger.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    // Tính lợi nhuận
+    summary.netProfit = summary.recognizedRevenue - summary.recognizedExpense;
+    summary.profitMargin = summary.recognizedRevenue > 0 
+      ? ((summary.netProfit / summary.recognizedRevenue) * 100).toFixed(2) 
+      : 0;
+
+    return { summary, ledger: pnlLedger };
   }
 }
 
