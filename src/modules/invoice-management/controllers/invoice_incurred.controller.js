@@ -30,7 +30,7 @@ class InvoiceIncurredController {
       console.log(`[INVOICE INCURRED CONTROLLER] 🔄 Bắt đầu tạo hóa đơn phát sinh...`);
       const invoice = await invoiceIncurredService.createIncurredInvoice(req.body);
       console.log(`[INVOICE INCURRED CONTROLLER] ✅ Đã tạo hóa đơn: ${invoice.invoiceCode}`);
-      
+
       // Gửi thông báo cho tenant khi hóa đơn phát sinh được tạo
       if (invoice && invoice.contractId) {
         try {
@@ -62,7 +62,7 @@ class InvoiceIncurredController {
           console.error(`[INVOICE INCURRED CONTROLLER] ❌ Lỗi gửi notification:`, notifError.message);
         }
       }
-      
+
       res.status(201).json({ success: true, data: invoice });
     } catch (error) {
       console.error(`[INVOICE INCURRED CONTROLLER] ❌ Lỗi tạo hóa đơn:`, error.message);
@@ -75,7 +75,7 @@ class InvoiceIncurredController {
       console.log(`[INVOICE INCURRED CONTROLLER] 🔄 Phát hành hóa đơn: ${req.params.id}`);
       const invoice = await invoiceIncurredService.releaseInvoice(req.params.id);
       console.log(`[INVOICE INCURRED CONTROLLER] ✅ Phát hành thành công, invoiceCode: ${invoice.invoiceCode}`);
-      
+
       // Gửi thông báo cho tenant khi hóa đơn phát sinh được phát hành
       if (invoice && invoice.contractId) {
         try {
@@ -107,7 +107,7 @@ class InvoiceIncurredController {
           console.error(`[INVOICE INCURRED CONTROLLER] ❌ Lỗi gửi notification:`, notifError.message);
         }
       }
-      
+
       res.status(200).json({ success: true, data: invoice, message: "Phát hành hóa đơn thành công!" });
     } catch (error) {
       console.error(`[INVOICE INCURRED CONTROLLER] ❌ Lỗi phát hành hóa đơn:`, error.message);
