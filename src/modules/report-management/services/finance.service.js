@@ -317,7 +317,7 @@ class FinanceService {
         category: "Doanh thu Định kỳ",
         revenue: inv.totalAmount,
         expense: 0,
-        status: inv.status === "Paid" ? "Đã thu tiền" : "Đang ghi công nợ"
+        status: inv.status === "Paid" ? "Đã thu tiền" : "Đang nợ"
       });
     });
 
@@ -333,7 +333,7 @@ class FinanceService {
         category: "Doanh thu Phạt/Sửa chữa",
         revenue: inv.totalAmount,
         expense: 0,
-        status: inv.status === "Paid" ? "Đã thu tiền" : "Đang ghi công nợ"
+        status: inv.status === "Paid" ? "Đã thu tiền" : "Đang nợ"
       });
     });
 
