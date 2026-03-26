@@ -34,7 +34,6 @@ exports.getMaintenanceByMonth = async ({ startMonth, endMonth } = {}) => {
       createdDate: { $gte: monthStart, $lt: monthEnd },
     }).lean();
 
-    const total = requests.length;
     const repairs = requests.filter((r) => r.type === "Sửa chữa").length;
     const maintenance = requests.filter((r) => r.type === "Bảo trì").length;
     const pending = requests.filter((r) => r.status === "Pending").length;
@@ -45,7 +44,7 @@ exports.getMaintenanceByMonth = async ({ startMonth, endMonth } = {}) => {
 
     results.push({
       month: monthStr,
-      total,
+      total: repairs + maintenance,
       repairs,
       maintenance,
       pending,
@@ -88,7 +87,6 @@ exports.getSnapshotByMonth = async (month) => {
   }).lean();
   console.log("[getSnapshotByMonth] found:", requests.length, "requests");
 
-  const total = requests.length;
   const repairs = requests.filter((r) => r.type === "Sửa chữa").length;
   const maintenance = requests.filter((r) => r.type === "Bảo trì").length;
   const pending = requests.filter((r) => r.status === "Pending").length;
@@ -98,7 +96,7 @@ exports.getSnapshotByMonth = async (month) => {
   const paid = requests.filter((r) => r.status === "Paid").length;
 
   return {
-    total,
+    total: repairs + maintenance,
     repairs,
     maintenance,
     pending,
