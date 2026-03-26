@@ -32,15 +32,9 @@ router.get("/my/:contractId", authenticate, moveOutRequestController.getMyMoveOu
 // Auth: Manager
 router.get("/list", authenticate, moveOutRequestController.getAllMoveOutRequests);
 
-// Quản lý phê duyệt yêu cầu trả phòng
-// PUT /api/move-outs/:moveOutRequestId/approve
-// Body: { managerApprovalNotes }
-// Auth: Manager
-router.put("/:moveOutRequestId/approve", authenticate, moveOutRequestController.approveMoveOutRequest);
-
-// Quản lý xác nhận hoàn tất trả phòng (sau tính hóa đơn thanh lý)
+// Quản lý xác nhận hoàn tất trả phòng
 // PUT /api/move-outs/:moveOutRequestId/complete
-// Body: { finalSettlementInvoiceId, managerCompletionNotes }
+// Body: { managerCompletionNotes }
 // Auth: Manager
 router.put("/:moveOutRequestId/complete", authenticate, moveOutRequestController.completeMoveOut);
 
