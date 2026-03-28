@@ -122,6 +122,8 @@ exports.createContract = async (req, res) => {
     const daysUntilStart = Math.ceil((startDateObj - todayForCalc) / msPerDay);
     // Nếu startDate > hôm nay → tạo tài khoản inactive (chưa được đăng nhập)
     const tenantInitialStatus = daysUntilStart > 0 ? "inactive" : "active";
+    // Hợp đồng đã kích hoạt chưa (dựa vào startDate)
+    const contractIsActivated = daysUntilStart <= 0;
 
     // 2. Handle Tenant Account
     // Check by CCCD first (primary identity document in VN)
@@ -210,7 +212,7 @@ exports.createContract = async (req, res) => {
             roomId: room._id,
             status: "active"
           }).session(session);
-          
+
           const freeDeposit = heldDeposits.find(d => !activeContracts.some(c => c.depositId?.toString() === d._id.toString()));
           if (freeDeposit) {
             linkedDepositId = freeDeposit._id;
@@ -218,6 +220,21 @@ exports.createContract = async (req, res) => {
             linkedDepositId = heldDeposits[0]._id; // Fallback
           }
         }
+      }
+    }
+
+    // 3.5. Update linked deposit's activationStatus
+    // - Nếu hợp đồng đã active (startDate <= today): activationStatus = true
+    // - Nếu hợp đồng chưa active (startDate > today): activationStatus = null (chờ ngày kích hoạt)
+    if (linkedDepositId) {
+      const linkedDeposit = await Deposit.findById(linkedDepositId).session(session);
+      if (linkedDeposit) {
+        if (contractIsActivated) {
+          linkedDeposit.activationStatus = true;
+        } else {
+          linkedDeposit.activationStatus = null; // Chưa active, chờ đến ngày
+        }
+        await linkedDeposit.save({ session });
       }
     }
 
@@ -236,6 +253,7 @@ exports.createContract = async (req, res) => {
       rentPaidUntil: rentPaidUntil || contractDetails.rentPaidUntil || null,
       duration: contractDetails.duration,
       status: "active",
+      isActivated: contractIsActivated,
       images: req.body.images || [],
     });
 

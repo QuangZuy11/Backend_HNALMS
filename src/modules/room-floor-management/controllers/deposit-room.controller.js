@@ -1,5 +1,6 @@
 const Room = require("../models/room.model");
 const Deposit = require("../../contract-management/models/deposit.model");
+const Contract = require("../../contract-management/models/contract.model");
 const Payment = require("../../invoice-management/models/payment.model");
 const { sendEmail } = require("../../notification-management/services/email.service");
 const { EMAIL_TEMPLATES } = require("../../../shared/config/email");
@@ -46,34 +47,77 @@ exports.initiateDeposit = async (req, res) => {
             return res.status(404).json({ success: false, message: "Không tìm thấy phòng" });
         }
 
+        let allowDeposit = false;
         let allowShortTermDeposit = false;
-        if (room.status === "Deposited") {
-            const Contract = require("../../contract-management/models/contract.model");
-            const Deposit = require("../../contract-management/models/deposit.model");
-            
-            const futureContract = await Contract.findOne({
+
+        // Lấy tất cả deposit đang Held của phòng này
+        const existingHeldDeposits = await Deposit.find({
+            room: room._id,
+            status: "Held",
+        });
+
+        if (room.status === "Available") {
+            // Phòng trống hoàn toàn → cho phép đặt cọc
+            allowDeposit = true;
+        } else if (room.status === "Deposited") {
+            // Phòng đang deposited → kiểm tra các hợp đồng
+            const futureContracts = await Contract.find({
                 roomId: room._id,
                 status: "active",
-                startDate: { $gt: new Date() }
+                isActivated: false,
+                startDate: { $gt: new Date() },
             }).sort({ startDate: 1 });
-            
-            if (futureContract) {
-                const shortTermDeposit = await Deposit.findOne({
-                   room: room._id,
-                   status: { $in: ["Pending", "Held"] },
-                   _id: { $ne: futureContract.depositId }
-                });
 
-                if (!shortTermDeposit) {
-                    const daysUntilStart = Math.ceil((new Date(futureContract.startDate) - new Date()) / (1000 * 60 * 60 * 24));
-                    if (daysUntilStart >= 30) {
-                        allowShortTermDeposit = true;
+            if (futureContracts.length > 0) {
+                // Lấy hợp đồng sắp tới gần nhất
+                const nearestFuture = futureContracts[0];
+                const daysUntilStart = Math.ceil(
+                    (new Date(nearestFuture.startDate) - new Date()) / (1000 * 60 * 60 * 24)
+                );
+
+                if (daysUntilStart < 30) {
+                    // Còn < 30 ngày → KHÔNG cho cọc nữa
+                    return res.status(400).json({
+                        success: false,
+                        message: `Không thể đặt cọc: Hợp đồng mới sẽ bắt đầu vào ngày ${new Date(nearestFuture.startDate).toLocaleDateString("vi-VN")} (còn ${daysUntilStart} ngày). Thời hạn tối thiểu để đặt cọc mới là 30 ngày.`,
+                    });
+                }
+
+                // >= 30 ngày → cho phép cọc ngắn hạn
+                // Reset các deposit cũ chưa active về activationStatus = false
+                for (const dep of existingHeldDeposits) {
+                    if (dep.activationStatus !== true) {
+                        dep.activationStatus = false;
+                        await dep.save();
+                        console.log(`[INITIATE DEPOSIT] Reset deposit ${dep.transactionCode} → activationStatus=false`);
                     }
                 }
+                allowShortTermDeposit = true;
+            } else {
+                // Không có future contract đang chờ nhưng room = Deposited
+                // Có thể là contract đã active rồi → không cho cọc
+                const activeContracts = await Contract.findOne({
+                    roomId: room._id,
+                    status: "active",
+                    isActivated: true,
+                });
+                if (activeContracts) {
+                    return res.status(400).json({
+                        success: false,
+                        message: "Phòng đang có người thuê, không thể đặt cọc.",
+                    });
+                }
+                // Trường hợp hy hữu: Deposited nhưng không có contract nào
+                // Reset tất cả deposit cũ, cho phép cọc mới
+                for (const dep of existingHeldDeposits) {
+                    dep.activationStatus = false;
+                    await dep.save();
+                }
+                allowDeposit = true;
             }
         }
 
-        if (room.status !== "Available" && !allowShortTermDeposit) {
+        if (room.status !== "Available" && !allowDeposit && !allowShortTermDeposit) {
             return res.status(400).json({
                 success: false,
                 message: `Phòng hiện không thể đặt cọc (trạng thái: ${room.status})`,
@@ -92,7 +136,7 @@ exports.initiateDeposit = async (req, res) => {
         // --- Tính thời gian hết hạn (5 phút từ bây giờ) ---
         const expireAt = new Date(Date.now() + 5 * 60 * 1000); // 5 phút
 
-        // --- Lưu Deposit vào DB với status "Pending" ---
+        // --- Lưu Deposit vào DB với status "Pending", activationStatus = null (chờ kích hoạt) ---
         const deposit = new Deposit({
             name,
             phone,
@@ -102,14 +146,13 @@ exports.initiateDeposit = async (req, res) => {
             status: "Pending",
             transactionCode,
             expireAt,
+            activationStatus: null, // Chưa active, sẽ được set khi contract kích hoạt
         });
         await deposit.save();
 
         // --- Tạo QR Code URL theo chuẩn VietQR ---
-        // Cú pháp: https://img.vietqr.io/image/{BANK_BIN}-{ACCOUNT_NUMBER}-qr_only.jpg
-        //           ?amount={amount}&addInfo={transactionCode}&accountName={name}
-        const bankBin = process.env.BANK_BIN;           // VD: "970418" (BIDV)
-        const bankAccount = process.env.BANK_ACCOUNT;   // VD: "12345678901"
+        const bankBin = process.env.BANK_BIN;
+        const bankAccount = process.env.BANK_ACCOUNT;
         const bankAccountName = encodeURIComponent(
             process.env.BANK_ACCOUNT_NAME || "HOANG NAM ALMS"
         );

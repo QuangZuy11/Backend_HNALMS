@@ -40,6 +40,14 @@ const depositSchema = new Schema(
       enum: ["Pending", "Held", "Refunded", "Forfeited", "Expired"],
       default: "Pending",
     },
+    // Trạng thái kích hoạt (áp dụng khi deposit đã thanh toán = Held)
+    // null = chưa active (chờ ngày active của hợp đồng)
+    // true = đã active (hợp đồng đã active hoặc ngày active đã đến)
+    // false = deposit bị reset (khi có deposit mới cho cùng phòng, deposit cũ bị reset)
+    activationStatus: {
+      type: Boolean,
+      default: null,
+    },
     expireAt: {
       type: Date,
       default: null,

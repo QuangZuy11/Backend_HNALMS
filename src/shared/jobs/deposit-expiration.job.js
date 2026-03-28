@@ -4,12 +4,15 @@ const Room = require("../../modules/room-floor-management/models/room.model");
 // =============================================
 // CRON JOB: Xử lý deposit hết hạn
 // 1. Pending + hết 5 phút → XÓA deposit (không tạo Payment)
-// 2. Held + quá 7 ngày → chuyển Expired, Room → Available
+// 2. Held + quá 7 ngày:
+//    - Không có contract liên kết → Expired, Room → Available
+//    - Có contract liên kết nhưng chưa activate (activationStatus=null) → Reset timer (không expire)
+//    - activationStatus = false (contract bị xóa/chưa ký) → Expired
 // Chạy mỗi 1 phút
 // =============================================
 
 const INTERVAL_MS = 60 * 1000; // 1 phút
-const HOLD_PERIOD_DAYS = 7; // Thời gian giữ cọc tối đa
+const HOLD_PERIOD_DAYS = 7; // Thời gian giữ cọc tối đa (chỉ áp dụng khi không có contract chờ activate)
 
 const processExpiredDeposits = async () => {
     try {
@@ -35,14 +38,30 @@ const processExpiredDeposits = async () => {
         });
 
         for (const deposit of heldExpired) {
-            // Cập nhật status → Expired
+            // Lấy thông tin contract liên kết
+            const Contract = require("../../modules/contract-management/models/contract.model");
+            const linkedContract = await Contract.findOne({ depositId: deposit._id });
+
+            if (linkedContract) {
+                // Có contract liên kết: kiểm tra trạng thái activation
+                if (linkedContract.status === "active" && linkedContract.isActivated === false) {
+                    // Contract đang chờ ngày activate → Reset timer, không expire
+                    deposit.expireAt = new Date(now.getTime() + HOLD_PERIOD_DAYS * 24 * 60 * 60 * 1000);
+                    await deposit.save();
+                    console.log(`[CRON] 🔄 Deposit ${deposit.transactionCode} → Timer reset (contract pending activation)`);
+                    continue;
+                }
+                // Contract đã active (isActivated=true) hoặc đã terminated/expired → xử lý expire
+            }
+
+            // Không có contract HOẶC contract đã terminated/expired → Expired
             deposit.status = "Expired";
             await deposit.save();
 
-            // Cập nhật Room → Available
+            // Cập nhật Room → Available (chỉ khi không có contract active nào đang giữ phòng)
             await Room.findByIdAndUpdate(deposit.room, { status: "Available" });
 
-            console.log(`[CRON] ⏰ Deposit ${deposit.transactionCode} → Expired (over 7 days)`);
+            console.log(`[CRON] ⏰ Deposit ${deposit.transactionCode} → Expired (over 7 days, no active contract)`);
         }
     } catch (error) {
         console.error("[CRON] ❌ Lỗi xử lý deposit:", error.message);

@@ -1,4 +1,5 @@
 const Deposit = require("../models/deposit.model");
+const Contract = require("../models/contract.model");
 const Room = require("../../room-floor-management/models/room.model");
 const {
   sendEmail,
@@ -9,9 +10,9 @@ const getAllDeposits = async (req, res) => {
     const deposits = await Deposit.find()
       .populate({
         path: "room",
-        select: "name type price maxPersons", // Select relevant room fields
+        select: "name type price maxPersons",
       })
-      .sort({ createdDate: -1 });
+      .sort({ createdAt: -1 });
 
     res.status(200).json({
       success: true,
@@ -49,49 +50,79 @@ const createDeposit = async (req, res) => {
       });
     }
 
-    // Check if room already has an active deposit
-    const existingDeposit = await Deposit.findOne({
+    // Lấy tất cả deposit đang Held của phòng này
+    const existingHeldDeposits = await Deposit.find({
       room: room,
       status: "Held",
     });
 
-    // Bổ sung: Nếu phòng đang 'Deposited' NHƯNG có hợp đồng tương lai > 30 ngày, 
-    // thì VẪN CHO PHÉP người mới cọc (để họ vào lấp chỗ trống ngắn hạn).
-    const Contract = require("../models/contract.model");
+    let allowDeposit = false;
     let allowShortTermDeposit = false;
-    
-    if (roomExists.status === "Deposited" && existingDeposit) {
-      const futureContract = await Contract.findOne({
+
+    if (roomExists.status === "Available") {
+      // Phòng trống hoàn toàn → cho phép đặt cọc
+      allowDeposit = true;
+    } else if (roomExists.status === "Deposited") {
+      // Phòng đang deposited → kiểm tra các hợp đồng
+      const futureContracts = await Contract.find({
         roomId: room,
         status: "active",
-        startDate: { $gt: new Date() }
+        isActivated: false,
+        startDate: { $gt: new Date() },
       }).sort({ startDate: 1 });
 
-      if (futureContract) {
-         const daysUntilStart = Math.ceil((new Date(futureContract.startDate) - new Date()) / (1000 * 60 * 60 * 24));
-         if (daysUntilStart >= 30) {
-            // Chỉ cho phép nếu không có khoản cọc nào đang "lửng lơ" (chưa kí hợp đồng)
-            const heldDeposits = await Deposit.find({ room: room, status: "Held" });
-            const activeContracts = await Contract.find({ roomId: room, status: "active" });
-            
-            const boundDepositIds = activeContracts.map(c => c.depositId?.toString()).filter(Boolean);
-            const floatingDeposits = heldDeposits.filter(d => !boundDepositIds.includes(d._id.toString()));
+      if (futureContracts.length > 0) {
+        const nearestFuture = futureContracts[0];
+        const daysUntilStart = Math.ceil(
+          (new Date(nearestFuture.startDate) - new Date()) / (1000 * 60 * 60 * 24)
+        );
 
-            if (floatingDeposits.length === 0) {
-               allowShortTermDeposit = true;
-            }
-         }
+        if (daysUntilStart < 30) {
+          return res.status(400).json({
+            success: false,
+            message: `Không thể đặt cọc: Hợp đồng mới sẽ bắt đầu vào ngày ${new Date(nearestFuture.startDate).toLocaleDateString("vi-VN")} (còn ${daysUntilStart} ngày). Thời hạn tối thiểu để đặt cọc mới là 30 ngày.`,
+          });
+        }
+
+        // >= 30 ngày → cho phép cọc ngắn hạn
+        // Reset các deposit cũ chưa active về activationStatus = false
+        for (const dep of existingHeldDeposits) {
+          if (dep.activationStatus !== true) {
+            dep.activationStatus = false;
+            await dep.save();
+          }
+        }
+        allowShortTermDeposit = true;
+      } else {
+        // Không có future contract đang chờ
+        const activeContracts = await Contract.findOne({
+          roomId: room,
+          status: "active",
+          isActivated: true,
+        });
+        if (activeContracts) {
+          return res.status(400).json({
+            success: false,
+            message: "Phòng đang có người thuê, không thể đặt cọc.",
+          });
+        }
+        // Trường hợp hy hữu: Deposited nhưng không có contract nào
+        for (const dep of existingHeldDeposits) {
+          dep.activationStatus = false;
+          await dep.save();
+        }
+        allowDeposit = true;
       }
     }
 
-    if (existingDeposit && !allowShortTermDeposit) {
+    if (roomExists.status !== "Available" && !allowDeposit && !allowShortTermDeposit) {
       return res.status(400).json({
         success: false,
-        message: "This room already has an active deposit",
+        message: `Phòng hiện không thể đặt cọc (trạng thái: ${roomExists.status})`,
       });
     }
 
-    // Create new deposit
+    // Create new deposit - activationStatus = null (chờ contract kích hoạt)
     const newDeposit = new Deposit({
       name,
       phone,
@@ -99,7 +130,7 @@ const createDeposit = async (req, res) => {
       room,
       amount,
       status: "Held",
-      createdDate: new Date(),
+      activationStatus: null,
     });
 
     await newDeposit.save();
@@ -159,7 +190,6 @@ const createDeposit = async (req, res) => {
       await sendEmail(email, subject, html);
     } catch (mailErr) {
       console.error("Gửi email xác nhận cọc thất bại:", mailErr);
-      // Không trả lỗi cho client, chỉ log
     }
 
     res.status(201).json({

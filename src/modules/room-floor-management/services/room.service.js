@@ -151,10 +151,11 @@ exports.getAllRooms = async (filters) => {
     };
   });
 
-  // Find future contracts for Deposited rooms (startDate > today)
+  // Find future contracts for Deposited rooms (startDate > today AND not yet activated)
   // Used to show "Có người thuê từ DD/MM/YYYY" label on floor map
   const futureContracts = await Contract.find({
     status: "active",
+    isActivated: false,
     startDate: { $gt: now },
     roomId: { $in: roomIds },
   })
@@ -279,6 +280,7 @@ exports.getRoomDetail = async (roomId) => {
     const futureContract = await Contract.findOne({
       roomId: room._id,
       status: "active",
+      isActivated: false,
       startDate: { $gt: new Date() }
     }).select("startDate depositId").lean().sort({ startDate: 1 });
 

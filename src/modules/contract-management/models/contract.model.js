@@ -56,6 +56,13 @@ const contractSchema = new Schema(
       enum: ["active", "expired", "terminated", "pending"],
       default: "active",
     },
+    // Hợp đồng đã được kích hoạt chưa (khi startDate <= today)
+    // false = chưa kích hoạt (ngày bắt đầu trong tương lai)
+    // true = đã kích hoạt (ngày bắt đầu đã đến hoặc trong quá khứ)
+    isActivated: {
+      type: Boolean,
+      default: false,
+    },
     // Terms & Conditions (Optional snapshot or ref)
     terms: {
       content: String, // Or link to a static terms file
