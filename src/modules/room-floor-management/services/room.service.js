@@ -151,9 +151,65 @@ exports.getAllRooms = async (filters) => {
     };
   });
 
+  // Find future contracts for Deposited rooms (startDate > today)
+  // Used to show "Có người thuê từ DD/MM/YYYY" label on floor map
+  const futureContracts = await Contract.find({
+    status: "active",
+    startDate: { $gt: now },
+    roomId: { $in: roomIds },
+  })
+    .select("roomId startDate endDate depositId")
+    .lean();
+
+  // Build map: roomId -> { startDate, endDate } for Deposited rooms with future contracts
+  const futureContractMap = {};
+  futureContracts.forEach((c) => {
+    futureContractMap[c.roomId.toString()] = {
+      startDate: c.startDate,
+      endDate: c.endDate,
+      depositId: c.depositId?.toString(),
+    };
+  });
+
+  // Find all "Held" deposits for these rooms to detect floating deposits
+  const heldDeposits = await Deposit.find({
+    room: { $in: roomIds },
+    status: "Held",
+  })
+    .select("room _id")
+    .lean();
+
+  // Find all active contracts to know which deposits are bound
+  const allActiveContractsForDeposits = await Contract.find({
+    status: "active",
+    roomId: { $in: roomIds },
+  })
+    .select("roomId depositId")
+    .lean();
+
+  // Build map: depositId -> true (bound deposits)
+  const boundDepositIds = new Set();
+  allActiveContractsForDeposits.forEach((c) => {
+    if (c.depositId) {
+      boundDepositIds.add(c.depositId.toString());
+    }
+  });
+
+  // Build map: roomId -> hasFloatingDeposit (deposit not bound to any active contract)
+  const floatingDepositMap = {};
+  heldDeposits.forEach((d) => {
+    const roomKey = d.room.toString();
+    if (!boundDepositIds.has(d._id.toString())) {
+      // This deposit is floating (not bound to any active contract)
+      floatingDepositMap[roomKey] = true;
+    }
+  });
+
   // Attach date info to rooms:
   // - Expiring soon: contractEndDate only (shows "Trống từ DD/MM")
   // - Long-term occupied: contractStartDate + contractEndDate
+  // - Deposited with future contract: contractStartDate (shows "Có người thuê từ DD/MM/YYYY")
+  // - hasFloatingDeposit: true if room has a deposit not yet linked to any active contract
   const enrichedRooms = rooms.map((r) => {
     const obj = r.toObject();
     const roomKey = r._id.toString();
@@ -167,13 +223,25 @@ exports.getAllRooms = async (filters) => {
         // Long-term: attach both dates
         obj.contractStartDate = active.startDate;
         obj.contractEndDate = active.endDate;
+      } else {
+        // Check for future contract (Deposited room)
+        const future = futureContractMap[roomKey];
+        if (future) {
+          obj.contractStartDate = future.startDate;
+          obj.contractEndDate = future.endDate;
+        }
       }
     }
+
+    // Mark if room has a floating deposit (deposit waiting to sign contract)
+    obj.hasFloatingDeposit = !!floatingDepositMap[roomKey];
+
     return obj;
   });
 
   return enrichedRooms;
 };
+
 
 exports.getRoomDetail = async (roomId) => {
   try {
@@ -206,6 +274,40 @@ exports.getRoomDetail = async (roomId) => {
       );
     }
     roomData.assets = roomAssets;
+
+    // Fetch future contract if any (for Deposited -> short term rental support)
+    const futureContract = await Contract.findOne({
+      roomId: room._id,
+      status: "active",
+      startDate: { $gt: new Date() }
+    }).select("startDate depositId").lean().sort({ startDate: 1 });
+
+    if (futureContract) {
+       roomData.futureContractStartDate = futureContract.startDate;
+    }
+
+    // Check for floating deposit (deposit not linked to any active contract)
+    const heldDeposits = await Deposit.find({
+      room: room._id,
+      status: "Held",
+    }).select("_id").lean();
+
+    const activeContracts = await Contract.find({
+      roomId: room._id,
+      status: "active",
+    }).select("depositId").lean();
+
+    const boundDepositIds = new Set(
+      activeContracts
+        .filter((c) => c.depositId)
+        .map((c) => c.depositId.toString())
+    );
+
+    const hasFloatingDeposit = heldDeposits.some(
+      (d) => !boundDepositIds.has(d._id.toString())
+    );
+    roomData.hasFloatingDeposit = hasFloatingDeposit;
+
     return roomData;
   } catch (error) {
     console.error("🔥 Error in getRoomDetail:", error);

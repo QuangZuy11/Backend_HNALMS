@@ -49,7 +49,7 @@ const contractSchema = new Schema(
     duration: {
       type: Number,
       required: true,
-      min: 6, // Business Rule: Min 6 months
+      min: 1, // Allow short-term contracts (min 1 month for rooms with future contracts)
     },
     status: {
       type: String,

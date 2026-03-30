@@ -28,7 +28,7 @@ class InvoiceIncurredService {
   async getNextViolationCode() {
     return buildViolationCode();
   }
-
+  
   // 1. LẤY DANH SÁCH HÓA ĐƠN PHÁT SINH
   async getInvoices({ status, page = 1, limit = 10, type, from, to } = {}) {
     const parsedPage = Number(page) || 1;
