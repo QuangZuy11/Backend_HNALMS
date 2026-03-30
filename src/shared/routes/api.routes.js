@@ -54,10 +54,12 @@ ApiRouter.use("/upload", uploadRoutes);
 
 const contractRoutes = require("../../modules/contract-management/routes/contract.routes");
 const depositRoutes = require("../../modules/contract-management/routes/deposit.routes");
+const moveOutRoutes = require("../../modules/contract-management/routes/moveout_request.routes");
 const accountRoutes = require("../../modules/account-management/routes/account.routes");
 
 ApiRouter.use("/contracts", contractRoutes);
 ApiRouter.use("/deposits", depositRoutes);
+ApiRouter.use("/move-outs", moveOutRoutes);
 ApiRouter.use("/accounts", accountRoutes);
 ApiRouter.use("/devices", deviceRoutes);
 ApiRouter.use("/invoices", invoiceRoutes);
@@ -77,6 +79,10 @@ ApiRouter.use("/notifications", notificationRoutes);
 // Test routes ( không cần auth)
 const testRoutes = require("./test-routes");
 ApiRouter.use("/test", testRoutes);
+
+// Report routes
+const reportRoutes = require("../../modules/report-management/routes/report.routes");
+ApiRouter.use("/reports", reportRoutes);
 
 const financeRoute = require('../../modules/report-management/routes/finance.routes');
 ApiRouter.use("/finance", financeRoute);

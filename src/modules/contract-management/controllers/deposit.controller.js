@@ -54,7 +54,37 @@ const createDeposit = async (req, res) => {
       room: room,
       status: "Held",
     });
-    if (existingDeposit) {
+
+    // Bổ sung: Nếu phòng đang 'Deposited' NHƯNG có hợp đồng tương lai > 30 ngày, 
+    // thì VẪN CHO PHÉP người mới cọc (để họ vào lấp chỗ trống ngắn hạn).
+    const Contract = require("../models/contract.model");
+    let allowShortTermDeposit = false;
+    
+    if (roomExists.status === "Deposited" && existingDeposit) {
+      const futureContract = await Contract.findOne({
+        roomId: room,
+        status: "active",
+        startDate: { $gt: new Date() }
+      }).sort({ startDate: 1 });
+
+      if (futureContract) {
+         const daysUntilStart = Math.ceil((new Date(futureContract.startDate) - new Date()) / (1000 * 60 * 60 * 24));
+         if (daysUntilStart >= 30) {
+            // Chỉ cho phép nếu không có khoản cọc nào đang "lửng lơ" (chưa kí hợp đồng)
+            const heldDeposits = await Deposit.find({ room: room, status: "Held" });
+            const activeContracts = await Contract.find({ roomId: room, status: "active" });
+            
+            const boundDepositIds = activeContracts.map(c => c.depositId?.toString()).filter(Boolean);
+            const floatingDeposits = heldDeposits.filter(d => !boundDepositIds.includes(d._id.toString()));
+
+            if (floatingDeposits.length === 0) {
+               allowShortTermDeposit = true;
+            }
+         }
+      }
+    }
+
+    if (existingDeposit && !allowShortTermDeposit) {
       return res.status(400).json({
         success: false,
         message: "This room already has an active deposit",
