@@ -6,6 +6,7 @@ const User = require("../../authentication/models/user.model");
 
 /**
  * Cron Job: Kích hoạt tài khoản tenant, trạng thái hợp đồng và cọc
+ * - Contract.status: "inactive" → "active" khi đến ngày bắt đầu
  * - Contract.isActivated: false → true khi đến ngày bắt đầu
  * - Tenant account: "inactive" → "active" khi đến ngày bắt đầu hợp đồng
  * - Deposit.activationStatus: null → true khi đến ngày
@@ -24,9 +25,10 @@ const contractStartJob = () => {
             endOfDay.setHours(23, 59, 59, 999);
 
             // Tìm các hợp đồng chưa được kích hoạt, bắt đầu từ hôm nay trở về trước
+            // Bao gồm cả status="inactive" (>30 ngày) và status="active" (1-30 ngày)
             const contracts = await Contract.find({
                 startDate: { $lte: endOfDay },
-                status: "active",
+                status: { $in: ["active", "inactive"] },
                 isActivated: false,
             }).populate("roomId");
 
@@ -38,8 +40,11 @@ const contractStartJob = () => {
             console.log(`[CONTRACT START JOB] Found ${contracts.length} contract(s) to activate`);
 
             for (const contract of contracts) {
-                // 1. Kích hoạt hợp đồng
+                // 1. Kích hoạt hợp đồng: status="inactive"→"active", isActivated=false→true
                 contract.isActivated = true;
+                if (contract.status === "inactive") {
+                    contract.status = "active";
+                }
                 await contract.save();
                 console.log(
                     `[CONTRACT START JOB] ✅ Contract activated: ${contract.contractCode}`

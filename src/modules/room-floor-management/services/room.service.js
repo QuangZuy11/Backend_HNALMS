@@ -98,11 +98,15 @@ exports.updateRoom = async (roomId, updates) => {
 
 exports.getAllRooms = async (filters) => {
   const { floorId, roomTypeId, status, isActive } = filters;
+
+  // Xác định role: nếu req.user không có → guest
+  const isGuest = !filters._userRole || filters._userRole === "guest";
+  const isOwnerOrAdmin = ["owner", "admin", "manager"].includes(filters._userRole);
+
   let query = {};
   if (floorId) query.floorId = floorId;
   if (roomTypeId) query.roomTypeId = roomTypeId;
   if (status) query.status = status;
-  // Only filter by isActive if explicitly set to false, otherwise show all
   if (isActive === false) query.isActive = false;
 
   const rooms = await Room.find(query)
@@ -152,23 +156,25 @@ exports.getAllRooms = async (filters) => {
   });
 
   // Find future contracts for Deposited rooms (startDate > today AND not yet activated)
-  // Used to show "Có người thuê từ DD/MM/YYYY" label on floor map
+  // - Owner/Admin: thấy cả status="inactive" (>30 ngày) và "active" (1-30 ngày)
+  // - Guest: chỉ thấy status="active" (1-30 ngày), contract inactive (>30 ngày) coi như phòng trống
   const futureContracts = await Contract.find({
-    status: "active",
+    status: isOwnerOrAdmin ? { $in: ["active", "inactive"] } : "active",
     isActivated: false,
     startDate: { $gt: now },
     roomId: { $in: roomIds },
   })
-    .select("roomId startDate endDate depositId")
+    .select("roomId startDate endDate depositId status")
     .lean();
 
-  // Build map: roomId -> { startDate, endDate } for Deposited rooms with future contracts
+  // Build map: roomId -> { startDate, endDate, status } for Deposited rooms with future contracts
   const futureContractMap = {};
   futureContracts.forEach((c) => {
     futureContractMap[c.roomId.toString()] = {
       startDate: c.startDate,
       endDate: c.endDate,
       depositId: c.depositId?.toString(),
+      status: c.status,
     };
   });
 
@@ -181,11 +187,13 @@ exports.getAllRooms = async (filters) => {
     .lean();
 
   // Find all active contracts to know which deposits are bound
+  // Owner/Admin: chỉ status="active"
+  // Guest: cả "active" và "inactive" (để check floating deposit)
   const allActiveContractsForDeposits = await Contract.find({
-    status: "active",
+    status: isOwnerOrAdmin ? "active" : { $in: ["active", "inactive"] },
     roomId: { $in: roomIds },
   })
-    .select("roomId depositId")
+    .select("roomId depositId status")
     .lean();
 
   // Build map: depositId -> true (bound deposits)
@@ -196,13 +204,28 @@ exports.getAllRooms = async (filters) => {
     }
   });
 
-  // Build map: roomId -> hasFloatingDeposit (deposit not bound to any active contract)
+  // Build map: roomId -> hasFloatingDeposit (deposit not bound to any active/inactive contract for guests)
+  // - Owner/Admin: deposit chỉ floating nếu không bind bất kỳ contract nào
+  // - Guest: deposit bind vào contract "inactive" (>30 ngày) cũng coi là floating (phòng hiện là trống)
   const floatingDepositMap = {};
   heldDeposits.forEach((d) => {
     const roomKey = d.room.toString();
     if (!boundDepositIds.has(d._id.toString())) {
-      // This deposit is floating (not bound to any active contract)
       floatingDepositMap[roomKey] = true;
+    } else if (isGuest) {
+      // Deposit bound nhưng contract là inactive -> guest vẫn thấy phòng trống
+      const boundContract = allActiveContractsForDeposits.find(
+        (c) => c.depositId?.toString() === d._id.toString()
+      );
+      if (boundContract) {
+        // Check if this contract is inactive (startDate > 30 days)
+        const contractDetail = futureContracts.find(
+          (fc) => fc._id?.toString() === boundContract._id?.toString()
+        );
+        if (contractDetail && contractDetail.status === "inactive") {
+          floatingDepositMap[roomKey] = true;
+        }
+      }
     }
   });
 
@@ -228,8 +251,16 @@ exports.getAllRooms = async (filters) => {
         // Check for future contract (Deposited room)
         const future = futureContractMap[roomKey];
         if (future) {
-          obj.contractStartDate = future.startDate;
-          obj.contractEndDate = future.endDate;
+          // Guest: không hiển thị contract có status="inactive" (>30 ngày), coi như trống
+          if (isGuest && future.status === "inactive") {
+            // Phòng trống từ hôm nay (hoặc gần đây)
+            obj.contractStartDate = null;
+            obj.contractEndDate = null;
+            obj.hasFutureInactiveContract = true; // flag để frontend hiển thị label riêng
+          } else {
+            obj.contractStartDate = future.startDate;
+            obj.contractEndDate = future.endDate;
+          }
         }
       }
     }

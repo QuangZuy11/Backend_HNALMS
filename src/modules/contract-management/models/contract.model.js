@@ -53,7 +53,7 @@ const contractSchema = new Schema(
     },
     status: {
       type: String,
-      enum: ["active", "expired", "terminated", "pending"],
+      enum: ["active", "inactive", "expired", "terminated"],
       default: "active",
     },
     // Hợp đồng đã được kích hoạt chưa (khi startDate <= today)

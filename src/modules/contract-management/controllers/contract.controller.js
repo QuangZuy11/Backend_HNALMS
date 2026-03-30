@@ -120,10 +120,13 @@ exports.createContract = async (req, res) => {
     startDateObj.setHours(0, 0, 0, 0);
     const msPerDay = 1000 * 60 * 60 * 24;
     const daysUntilStart = Math.ceil((startDateObj - todayForCalc) / msPerDay);
-    // Nếu startDate > hôm nay → tạo tài khoản inactive (chưa được đăng nhập)
-    const tenantInitialStatus = daysUntilStart > 0 ? "inactive" : "active";
-    // Hợp đồng đã kích hoạt chưa (dựa vào startDate)
-    const contractIsActivated = daysUntilStart <= 0;
+
+    // Nếu startDate > 30 ngày → hợp đồng inactive, user inactive, chưa activate
+    // Nếu startDate <= 30 ngày (đã đến hoặc < 30 ngày nữa) → hợp đồng active, user active, đã activate
+    const isFutureLong = daysUntilStart > 30;
+    const tenantInitialStatus = isFutureLong ? "inactive" : "active";
+    const contractIsActivated = !isFutureLong;
+    const contractInitialStatus = isFutureLong ? "inactive" : "active";
 
     // 2. Handle Tenant Account
     // Check by CCCD first (primary identity document in VN)
@@ -252,7 +255,7 @@ exports.createContract = async (req, res) => {
       endDate: endDate,
       rentPaidUntil: rentPaidUntil || contractDetails.rentPaidUntil || null,
       duration: contractDetails.duration,
-      status: "active",
+      status: contractInitialStatus,
       isActivated: contractIsActivated,
       images: req.body.images || [],
     });

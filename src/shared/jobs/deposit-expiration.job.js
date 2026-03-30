@@ -6,7 +6,7 @@ const Room = require("../../modules/room-floor-management/models/room.model");
 // 1. Pending + hết 5 phút → XÓA deposit (không tạo Payment)
 // 2. Held + quá 7 ngày:
 //    - Không có contract liên kết → Expired, Room → Available
-//    - Có contract liên kết nhưng chưa activate (activationStatus=null) → Reset timer (không expire)
+//    - Có contract liên kết nhưng chưa activate (status="inactive"|"active" && isActivated=false) → Reset timer (không expire)
 //    - activationStatus = false (contract bị xóa/chưa ký) → Expired
 // Chạy mỗi 1 phút
 // =============================================
@@ -44,7 +44,9 @@ const processExpiredDeposits = async () => {
 
             if (linkedContract) {
                 // Có contract liên kết: kiểm tra trạng thái activation
-                if (linkedContract.status === "active" && linkedContract.isActivated === false) {
+                // status="inactive" (>30 ngày) hoặc "active" (1-30 ngày) đều chưa activate → reset timer
+                if (linkedContract.isActivated === false &&
+                    (linkedContract.status === "active" || linkedContract.status === "inactive")) {
                     // Contract đang chờ ngày activate → Reset timer, không expire
                     deposit.expireAt = new Date(now.getTime() + HOLD_PERIOD_DAYS * 24 * 60 * 60 * 1000);
                     await deposit.save();

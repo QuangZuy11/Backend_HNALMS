@@ -7,22 +7,19 @@ const { EMAIL_TEMPLATES } = require("../../../shared/config/email");
 
 // =============================================
 // HELPER: Sinh mã giao dịch duy nhất
-// Format: Coc [TenPhong] [DDMMYYYY]
-// VD: "Coc P310 02032026"
+// Format: Coc [TenPhong] [8 random digits]
+// VD: "Coc P114 73920156"
+// Dùng random thay vì ngày để tránh trùng khi cọc nhiều lần cùng phòng trong 1 ngày
 // =============================================
 const generateTransactionCode = (roomName) => {
-    const now = new Date();
-    const day = String(now.getDate()).padStart(2, '0');
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const year = now.getFullYear();
-    const dateStr = `${day}${month}${year}`; // DDMMYYYY
+    const randomStr = String(Math.floor(10000000 + Math.random() * 90000000)); // 8 số ngẫu nhiên
 
-    // Sanitize room name: bỏ dấu, bỏ "Phòng " 
+    // Sanitize room name: bỏ dấu, bỏ "Phòng "
     const roomShort = roomName
         .replace(/Phòng\s*/gi, 'P')
         .replace(/[^a-zA-Z0-9]/g, '');
 
-    return `Coc ${roomShort} ${dateStr}`;
+    return `Coc ${roomShort} ${randomStr}`;
 };
 
 // =============================================
@@ -255,8 +252,8 @@ exports.sepayWebhook = async (req, res) => {
         } = req.body;
 
         // --- 3. Tìm Deposit bằng transactionCode trong nội dung CK ---
-        // Format: "Coc P310 02032026"
-        // Regex: Coc + tên phòng + ngày (8 số)
+        // Format: "Coc P310 73920156" (8 random digits, không còn theo ngày)
+        // Regex: Coc + tên phòng + 8 số ngẫu nhiên
         const matchCode = content.match(/Coc\s+\S+\s+\d{8}/i);
         if (!matchCode) {
             console.warn("[SEPAY WEBHOOK] ⚠️ Không tìm thấy mã giao dịch trong nội dung:", content);

@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 const uploadImg = require("../middlewares/uploadimg");
 const uploadExcel = require("../middlewares/uploadexcel");
-const { authenticate, authorize, isTenant } = require("../../authentication/middlewares/index");
+const { authenticate, authorize, isTenant, optionalAuth } = require("../../authentication/middlewares/index");
 // Import Controllers
 const roomController = require("../controllers/room.controller");
 const floorController = require("../controllers/floor.controller");
@@ -35,7 +35,7 @@ router.get("/room/my-room", authenticate, roomController.getMyRoom);
 // ==================================================================
 
 // --- Room ---
-router.get("/rooms", roomController.getRooms); // GET /rooms
+router.get("/rooms", optionalAuth, roomController.getRooms); // GET /rooms
 router.post("/rooms", roomController.createRoom); // POST /rooms
 
 // --- Floor ---
