@@ -13,16 +13,14 @@ router.get("/contract/:contractId/info", authenticate, moveOutRequestController.
 
 // Tenant tạo yêu cầu trả phòng
 // POST /api/move-outs
-// Body: { contractId, expectedMoveOutDate, reason }
+// Body: { contractId, expectedMoveOutDate, reason, confirmContinue? }
 router.post("/", authenticate, moveOutRequestController.createMoveOutRequest);
 
 // Tenant lấy yêu cầu trả phòng của mình
 // GET /api/move-outs/my/:contractId
 router.get("/my/:contractId", authenticate, moveOutRequestController.getMyMoveOutRequest);
 
-// Tenant tạo payment ticket (thanh toán online)
-// POST /api/move-outs/:moveOutRequestId/pay-online
-router.post("/:moveOutRequestId/pay-online", authenticate, moveOutRequestController.createOnlinePaymentTicket);
+
 
 // ============================================================================
 // MANAGER ROUTES
@@ -42,7 +40,11 @@ router.get("/:moveOutRequestId", authenticate, moveOutRequestController.getMoveO
 router.post("/:moveOutRequestId/release-invoice", authenticate, moveOutRequestController.releaseFinalInvoice);
 router.put("/:moveOutRequestId/release-invoice", authenticate, moveOutRequestController.releaseFinalInvoice);
 
-// [STEP 5] Manager hoàn tất trả phòng → terminate contract + inactive tenant
+// [STEP 3] Manager kiểm tra trạng thái thanh toán của tenant
+// GET /api/move-outs/:moveOutRequestId/check-payment-status
+router.get("/:moveOutRequestId/check-payment-status", authenticate, moveOutRequestController.checkPaymentStatus);
+
+// [STEP 4] Manager hoàn tất trả phòng → terminate contract + inactive tenant
 // PUT /api/move-outs/:moveOutRequestId/complete
 // Body: { managerCompletionNotes }
 router.put("/:moveOutRequestId/complete", authenticate, moveOutRequestController.completeMoveOut);
@@ -51,11 +53,6 @@ router.put("/:moveOutRequestId/complete", authenticate, moveOutRequestController
 // ACCOUNTANT ROUTES
 // ============================================================================
 
-// [STEP 4b] Kế toán xác nhận thanh toán offline
-// PUT /api/move-outs/:moveOutRequestId/confirm-payment
-// Body: { accountantNotes }
-router.put("/:moveOutRequestId/confirm-payment", authenticate, moveOutRequestController.confirmPaymentOffline);
-
 // ============================================================================
 // SYSTEM / SHARED ROUTES
 // ============================================================================
@@ -63,10 +60,5 @@ router.put("/:moveOutRequestId/confirm-payment", authenticate, moveOutRequestCon
 // So sánh tiền cọc vs hóa đơn cuối
 // GET /api/move-outs/:moveOutRequestId/deposit-vs-invoice
 router.get("/:moveOutRequestId/deposit-vs-invoice", authenticate, moveOutRequestController.getDepositVsInvoice);
-
-// Callback sau khi thanh toán online thành công (VNPay webhook hoặc FE gọi sau redirect)
-// PUT /api/move-outs/:moveOutRequestId/payment-success
-// Body: { transactionCode }
-router.put("/:moveOutRequestId/payment-success", authenticate, moveOutRequestController.handleOnlinePaymentSuccess);
 
 module.exports = router;
