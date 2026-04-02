@@ -11,14 +11,16 @@ const User = require("../../authentication/models/user.model");
 const UserInfo = require("../../authentication/models/userInfor.model");
 const Notification = require("../../notification-management/models/notification.model");
 const Service = require("../../service-management/models/service.model");
+const FinancialTicket = require("../../managing-income-expenses/models/financial_tickets");
 
 const MOVEOUT_POLICY = {
   MIN_NOTICE_DAYS: 30,
-  MIN_STAY_MONTHS: 3
+  MIN_STAY_MONTHS: 6
 };
 
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 const VN_TIME_ZONE = "Asia/Ho_Chi_Minh";
+const DEPOSIT_OFFSET_ITEM_NAME = "Cấn trừ tiền cọc";
 
 class MoveOutRequestService {
   _parseDateInput(dateInput) {
@@ -132,6 +134,460 @@ class MoveOutRequestService {
     return Math.max(months, 0);
   }
 
+  _isDepositUsableForSettlement(status, options = {}) {
+    const { isLinkedToContract = false } = options;
+
+    if (status === "Held" || status === "Refunded") {
+      return true;
+    }
+
+    // Dữ liệu cũ có thể bị cron chuyển Expired/Pending dù cọc đã gắn hợp đồng.
+    // Với cọc đã liên kết hợp đồng, vẫn cho phép dùng để tất toán khi trả phòng.
+    if (isLinkedToContract && (status === "Expired" || status === "Pending")) {
+      return true;
+    }
+
+    return false;
+  }
+
+  _getAppliedDepositOffset(finalInvoice) {
+    if (!Array.isArray(finalInvoice?.items)) {
+      return 0;
+    }
+
+    return finalInvoice.items.reduce((sum, item) => {
+      const name = String(item?.itemName || "").trim().toLowerCase();
+      const amount = Number(item?.amount) || 0;
+
+      if (name.startsWith(DEPOSIT_OFFSET_ITEM_NAME.toLowerCase()) && amount < 0) {
+        return sum + Math.abs(amount);
+      }
+
+      return sum;
+    }, 0);
+  }
+
+  async _findDepositForContract(contract) {
+    if (!contract) {
+      return null;
+    }
+
+    // Ưu tiên lấy theo depositId đã liên kết với hợp đồng.
+    if (contract.depositId) {
+      const byId = await Deposit.findById(contract.depositId).select("_id amount status room createdAt");
+      if (byId) {
+        return byId;
+      }
+    }
+
+    // Fallback cho dữ liệu cũ chưa gắn depositId vào contract.
+    if (contract.roomId) {
+      const preferredStatuses = ["Held", "Refunded", "Forfeited", "Pending"];
+      const byRoom = await Deposit.findOne({
+        room: contract.roomId,
+        status: { $in: preferredStatuses }
+      })
+        .select("_id amount status room createdAt")
+        .sort({ createdAt: -1 });
+
+      if (byRoom) {
+        return byRoom;
+      }
+
+      const anyByRoom = await Deposit.findOne({ room: contract.roomId })
+        .select("_id amount status room createdAt")
+        .sort({ createdAt: -1 });
+
+      if (anyByRoom) {
+        return anyByRoom;
+      }
+    }
+
+    return null;
+  }
+
+  _buildTodayPaymentVoucherPrefix() {
+    const now = new Date();
+    const dd = String(now.getDate()).padStart(2, "0");
+    const mm = String(now.getMonth() + 1).padStart(2, "0");
+    const yyyy = now.getFullYear();
+    return `PAY-${dd}${mm}${yyyy}-`;
+  }
+
+  async _getNextMoveOutRefundVoucher() {
+    const prefix = this._buildTodayPaymentVoucherPrefix();
+
+    const latest = await FinancialTicket.findOne({
+      paymentVoucher: { $regex: `^${prefix}\\d{4}$` }
+    })
+      .select("paymentVoucher")
+      .sort({ paymentVoucher: -1 })
+      .lean();
+
+    let nextNumber = 1;
+    if (latest?.paymentVoucher) {
+      const suffix = latest.paymentVoucher.slice(prefix.length);
+      const parsed = parseInt(suffix, 10);
+      if (!Number.isNaN(parsed)) {
+        nextNumber = parsed + 1;
+      }
+    }
+
+    for (let i = 0; i < 100; i += 1) {
+      if (nextNumber > 9999) {
+        throw new Error("Đã vượt quá giới hạn mã phiếu chi trong ngày (9999)");
+      }
+
+      const candidate = `${prefix}${String(nextNumber).padStart(4, "0")}`;
+      // eslint-disable-next-line no-await-in-loop
+      const exists = await FinancialTicket.exists({ paymentVoucher: candidate });
+      if (!exists) {
+        return candidate;
+      }
+
+      nextNumber += 1;
+    }
+
+    throw new Error("Không thể tạo mã phiếu chi mới, vui lòng thử lại");
+  }
+
+  async _calculateDepositSettlement(moveOutRequest, contract, finalInvoice) {
+    let depositAmount = 0;
+    let depositId = null;
+    let depositStatus = null;
+    let usableDepositAmount = 0;
+    const linkedDepositId = contract?.depositId ? String(contract.depositId) : null;
+    let isLinkedToContract = false;
+
+    const deposit = await this._findDepositForContract(contract);
+    if (deposit) {
+      depositStatus = deposit.status;
+      depositId = deposit._id;
+      isLinkedToContract = Boolean(
+        linkedDepositId && depositId && String(depositId) === linkedDepositId
+      );
+      // Luôn trả dữ liệu tiền cọc để frontend hiển thị.
+      depositAmount = Number(deposit.amount) || 0;
+      // Chỉ dùng các trạng thái hợp lệ để cấn trừ nghiệp vụ.
+      if (this._isDepositUsableForSettlement(deposit.status, { isLinkedToContract })) {
+        usableDepositAmount = depositAmount;
+      }
+    }
+
+    const netInvoiceAmount = Number(finalInvoice?.totalAmount) || 0;
+    const appliedDepositOffset = this._getAppliedDepositOffset(finalInvoice);
+    const invoiceAmount = netInvoiceAmount + appliedDepositOffset;
+    const isDepositForfeited = Boolean(moveOutRequest?.isDepositForfeited);
+    const effectiveUsableDeposit = isDepositForfeited ? 0 : usableDepositAmount;
+    const recommendedDepositOffset = Math.min(effectiveUsableDeposit, invoiceAmount);
+    const remainingToPay = Math.max(invoiceAmount - recommendedDepositOffset, 0);
+    const refundToTenant = Math.max(effectiveUsableDeposit - invoiceAmount, 0);
+    const depositCoversInvoice = remainingToPay === 0;
+
+    return {
+      depositId,
+      depositStatus,
+      isLinkedToContract,
+      depositAmount,
+      usableDepositAmount,
+      invoiceAmount,
+      netInvoiceAmount,
+      appliedDepositOffset,
+      recommendedDepositOffset,
+      depositCoversInvoice,
+      remainingToPay,
+      refundToTenant,
+      isDepositForfeited
+    };
+  }
+
+  async _applyDepositOffsetIfNeeded(moveOutRequest, contract, finalInvoice) {
+    let settlement = await this._calculateDepositSettlement(moveOutRequest, contract, finalInvoice);
+    const offsetToApply = Math.max(
+      settlement.recommendedDepositOffset - settlement.appliedDepositOffset,
+      0
+    );
+
+    if (offsetToApply <= 0) {
+      return settlement;
+    }
+
+    finalInvoice.items = Array.isArray(finalInvoice.items) ? finalInvoice.items : [];
+    finalInvoice.items.push({
+      itemName: `${DEPOSIT_OFFSET_ITEM_NAME} (${offsetToApply.toLocaleString('vi-VN')} VND)`,
+      usage: 1,
+      unitPrice: -offsetToApply,
+      amount: -offsetToApply,
+      isIndex: false
+    });
+    finalInvoice.totalAmount = Math.max((Number(finalInvoice.totalAmount) || 0) - offsetToApply, 0);
+    finalInvoice.status = finalInvoice.totalAmount <= 0 ? "Paid" : "Unpaid";
+    await finalInvoice.save();
+
+    settlement = await this._calculateDepositSettlement(moveOutRequest, contract, finalInvoice);
+    return settlement;
+  }
+
+  async _persistFinalInvoiceDraft(contractId, finalInvoiceDraft) {
+    const existingFinal = await InvoicePeriodic.findOne({
+      invoiceCode: finalInvoiceDraft.invoiceCode,
+      contractId
+    });
+
+    if (existingFinal) {
+      if (existingFinal.status === 'Paid') {
+        throw new Error('Hóa đơn tháng này đã được thanh toán, không thể cập nhật lại dữ liệu trả phòng.');
+      }
+
+      existingFinal.title = finalInvoiceDraft.title;
+      existingFinal.items = finalInvoiceDraft.items;
+      existingFinal.totalAmount = finalInvoiceDraft.totalAmount;
+      existingFinal.dueDate = finalInvoiceDraft.dueDate;
+      existingFinal.status = finalInvoiceDraft.status || 'Unpaid';
+
+      await existingFinal.save();
+      console.log(`[MOVEOUT] ✅ Hóa đơn cuối đã cập nhật: ${existingFinal._id} | Tổng: ${existingFinal.totalAmount}`);
+      return existingFinal;
+    }
+
+    const finalInvoice = new InvoicePeriodic({
+      invoiceCode: finalInvoiceDraft.invoiceCode,
+      contractId,
+      title: finalInvoiceDraft.title,
+      items: finalInvoiceDraft.items,
+      totalAmount: finalInvoiceDraft.totalAmount,
+      dueDate: finalInvoiceDraft.dueDate,
+      status: finalInvoiceDraft.status || 'Unpaid'
+    });
+
+    await finalInvoice.save();
+    console.log(`[MOVEOUT] ✅ Hóa đơn cuối đã lưu: ${finalInvoice._id} | Tổng: ${finalInvoice.totalAmount}`);
+    return finalInvoice;
+  }
+
+  async syncDepositStatusByRefundTicket(ticket, nextTicketStatus) {
+    if (!ticket?.referenceId) {
+      return;
+    }
+
+    const title = String(ticket.title || "").trim();
+    if (!/^Hoàn cọc trả phòng/i.test(title)) {
+      return;
+    }
+
+    const moveOutRequest = await MoveOutRequest.findById(ticket.referenceId)
+      .select("_id contractId isDepositForfeited status paymentDate")
+      .lean();
+    if (!moveOutRequest?.contractId) {
+      return;
+    }
+
+    const contract = await Contract.findById(moveOutRequest.contractId)
+      .select("depositId roomId")
+      .lean();
+    if (!contract) {
+      return;
+    }
+
+    if (nextTicketStatus === "Paid") {
+      const updates = {};
+      const canTransitionToPaid = ["Requested", "InvoiceReleased"].includes(moveOutRequest.status);
+
+      if (canTransitionToPaid) {
+        updates.status = "Paid";
+      }
+      if (!moveOutRequest.paymentDate && (canTransitionToPaid || moveOutRequest.status === "Paid")) {
+        updates.paymentDate = new Date();
+      }
+
+      if (Object.keys(updates).length > 0) {
+        await MoveOutRequest.findByIdAndUpdate(moveOutRequest._id, updates);
+      }
+
+      if (moveOutRequest.isDepositForfeited) {
+        const deposit = await this._findDepositForContract(contract);
+        if (deposit?._id) {
+          await Deposit.findByIdAndUpdate(deposit._id, {
+            status: "Forfeited",
+            refundDate: null,
+            forfeitedDate: new Date(),
+          });
+        }
+      }
+    }
+  }
+
+  async syncMoveOutByFinalInvoicePaid(finalInvoiceId) {
+    if (!finalInvoiceId) {
+      return null;
+    }
+
+    const moveOutRequest = await MoveOutRequest.findOne({ finalInvoiceId })
+      .select("_id contractId status paymentDate isDepositForfeited");
+    if (!moveOutRequest) {
+      console.warn(`[MOVEOUT] ⚠️ Không tìm thấy move-out liên kết với finalInvoiceId: ${finalInvoiceId}`);
+      return null;
+    }
+
+    const updates = {};
+    const canTransitionToPaid = ["Requested", "InvoiceReleased"].includes(moveOutRequest.status);
+
+    if (canTransitionToPaid) {
+      updates.status = "Paid";
+    }
+    if (!moveOutRequest.paymentDate && (canTransitionToPaid || moveOutRequest.status === "Paid")) {
+      updates.paymentDate = new Date();
+    }
+
+    if (Object.keys(updates).length > 0) {
+      await MoveOutRequest.findByIdAndUpdate(moveOutRequest._id, updates);
+    }
+
+    if (moveOutRequest.isDepositForfeited) {
+      const contract = await Contract.findById(moveOutRequest.contractId)
+        .select("depositId roomId")
+        .lean();
+
+      if (contract) {
+        const deposit = await this._findDepositForContract(contract);
+        if (deposit?._id) {
+          await Deposit.findByIdAndUpdate(deposit._id, {
+            status: "Forfeited",
+            refundDate: null,
+            forfeitedDate: new Date(),
+          });
+        }
+      }
+    }
+
+    return {
+      moveOutRequestId: moveOutRequest._id,
+      status: updates.status || moveOutRequest.status,
+      isDepositForfeited: moveOutRequest.isDepositForfeited,
+    };
+  }
+
+  async _syncMoveOutByRequestId(moveOutRequestId) {
+    if (!moveOutRequestId) {
+      return null;
+    }
+
+    const moveOutRequest = await MoveOutRequest.findById(moveOutRequestId)
+      .select("_id finalInvoiceId status");
+    if (!moveOutRequest?.finalInvoiceId) {
+      const paidRefundTicket = await FinancialTicket.findOne({
+        referenceId: moveOutRequestId,
+        status: "Paid",
+        title: { $regex: /^Hoàn cọc trả phòng/i }
+      })
+        .select("_id referenceId title status")
+        .sort({ createdAt: -1 })
+        .lean();
+
+      if (!paidRefundTicket) {
+        return moveOutRequest;
+      }
+
+      await this.syncDepositStatusByRefundTicket(paidRefundTicket, "Paid");
+      return await MoveOutRequest.findById(moveOutRequestId);
+    }
+
+    const finalInvoice = await InvoicePeriodic.findById(moveOutRequest.finalInvoiceId)
+      .select("_id status")
+      .lean();
+
+    if (finalInvoice?.status !== "Paid") {
+      return moveOutRequest;
+    }
+
+    await this.syncMoveOutByFinalInvoicePaid(finalInvoice._id);
+    return await MoveOutRequest.findById(moveOutRequestId);
+  }
+
+  async _syncPendingMoveOutsWithPaidInvoices() {
+    const candidates = await MoveOutRequest.find({
+      status: { $in: ["Requested", "InvoiceReleased"] },
+      finalInvoiceId: { $ne: null },
+    })
+      .select("finalInvoiceId")
+      .lean();
+
+    if (candidates.length === 0) {
+      return 0;
+    }
+
+    const invoiceIds = [
+      ...new Set(
+        candidates
+          .map((item) => item.finalInvoiceId && String(item.finalInvoiceId))
+          .filter(Boolean)
+      )
+    ];
+
+    if (invoiceIds.length === 0) {
+      return 0;
+    }
+
+    const paidInvoices = await InvoicePeriodic.find({
+      _id: { $in: invoiceIds },
+      status: "Paid",
+    })
+      .select("_id")
+      .lean();
+
+    if (paidInvoices.length === 0) {
+      return 0;
+    }
+
+    for (const invoice of paidInvoices) {
+      await this.syncMoveOutByFinalInvoicePaid(invoice._id);
+    }
+
+    return paidInvoices.length;
+  }
+
+  async _syncPendingMoveOutsWithPaidRefundTickets() {
+    const candidates = await MoveOutRequest.find({
+      status: { $in: ["Requested", "InvoiceReleased"] },
+      finalInvoiceId: null,
+    })
+      .select("_id")
+      .lean();
+
+    if (candidates.length === 0) {
+      return 0;
+    }
+
+    const requestIds = candidates.map((item) => item._id);
+
+    const paidTickets = await FinancialTicket.find({
+      referenceId: { $in: requestIds },
+      status: "Paid",
+      title: { $regex: /^Hoàn cọc trả phòng/i }
+    })
+      .select("_id referenceId title status")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    if (paidTickets.length === 0) {
+      return 0;
+    }
+
+    const latestTicketByRequestId = new Map();
+    for (const ticket of paidTickets) {
+      const requestId = String(ticket.referenceId);
+      if (!latestTicketByRequestId.has(requestId)) {
+        latestTicketByRequestId.set(requestId, ticket);
+      }
+    }
+
+    for (const ticket of latestTicketByRequestId.values()) {
+      await this.syncDepositStatusByRefundTicket(ticket, "Paid");
+    }
+
+    return latestTicketByRequestId.size;
+  }
+
   // ============================================================
   //  STEP 1 – Tenant tạo yêu cầu trả phòng
   // ============================================================
@@ -140,7 +596,7 @@ class MoveOutRequestService {
    * Rule (từ flowchart):
   *  - expectedMoveOutDate phải < contract.endDate
   *  - Đủ điều kiện hoàn cọc nếu:
-  *      + Thời gian thuê tính từ startDate đến hiện tại >= 3 tháng (quy đổi tối thiểu 90 ngày)
+  *      + Thời gian thuê tính từ startDate đến hiện tại >= 6 tháng (quy đổi tối thiểu 180 ngày)
   *      + expectedMoveOutDate phải trước endDate tối thiểu 30 ngày
    */
   async createMoveOutRequest(contractId, tenantId, expectedMoveOutDate, reason, confirmContinue = false) {
@@ -201,7 +657,7 @@ class MoveOutRequestService {
 
     const minStayDays = MOVEOUT_POLICY.MIN_STAY_MONTHS * 30;
     const hasEnoughStayDays = stayDaysToToday >= minStayDays;
-    const isUnderMinStay = !hasEnoughStayDays; // thuê chưa đủ 3 tháng
+    const isUnderMinStay = !hasEnoughStayDays; // thuê chưa đủ 6 tháng
 
     // Không hoàn cọc nếu vi phạm một trong hai điều kiện.
     const isDepositForfeited = isEarlyNotice || isUnderMinStay;
@@ -217,7 +673,7 @@ class MoveOutRequestService {
     if (isUnderMinStay) {
       warnings.push({
         type: "under_min_stay",
-        message: `Bạn sẽ không được hoàn cọc vì thời gian ở tính đến hiện tại là ${stayDaysToToday} ngày, chưa đủ tối thiểu ${minStayDays} ngày (3 tháng). Bạn có chắc chắn không?`
+        message: `Bạn sẽ không được hoàn cọc vì thời gian ở tính đến hiện tại là ${stayDaysToToday} ngày, chưa đủ tối thiểu ${minStayDays} ngày (6 tháng). Bạn có chắc chắn không?`
       });
     }
 
@@ -303,29 +759,179 @@ class MoveOutRequestService {
       console.log(`[MOVEOUT] ℹ️ Sẽ dùng MeterReading gần nhất để tính điện/nước`);
     }
 
-    // Tự tạo hóa đơn cuối vào invoice_periodics
-    const finalInvoice = await this._createFinalInvoiceForContract(
+    const contract = await Contract.findById(moveOutRequest.contractId)
+      .select("_id contractCode roomId depositId")
+      .populate("roomId", "name");
+    if (!contract) throw new Error("Không tìm thấy hợp đồng");
+
+    // Tính chi phí chốt trước để quyết định có cần phát hành hóa đơn hay không.
+    const finalInvoiceDraft = await this._createFinalInvoiceForContract(
       moveOutRequest.contractId,
       parsedElectricIndex,
-      parsedWaterIndex
+      parsedWaterIndex,
+      { persist: false }
     );
+
+    let settlement = await this._calculateDepositSettlement(moveOutRequest, contract, finalInvoiceDraft);
+    let finalInvoice = null;
+    let refundTicket = null;
+
+    // Trường hợp cọc dư: không phát hành hóa đơn cuối, chỉ tạo phiếu chi hoàn cọc.
+    if (settlement.refundToTenant > 0) {
+      refundTicket = await FinancialTicket.findOne({
+        referenceId: moveOutRequest._id,
+        title: { $regex: /^Hoàn cọc trả phòng/i }
+      })
+        .select("_id amount status paymentVoucher transactionDate")
+        .sort({ createdAt: -1 });
+
+      if (!refundTicket) {
+        const paymentVoucher = await this._getNextMoveOutRefundVoucher();
+        refundTicket = await FinancialTicket.create({
+          amount: settlement.refundToTenant,
+          title: `Hoàn cọc trả phòng - HĐ ${contract.contractCode || moveOutRequest.contractId}`,
+          referenceId: moveOutRequest._id,
+          status: "Approved",
+          transactionDate: new Date(),
+          accountantPaidAt: null,
+          paymentVoucher
+        });
+      }
+
+      const isRefundTicketPaid = refundTicket?.status === "Paid";
+
+      moveOutRequest.finalInvoiceId = null;
+      moveOutRequest.managerInvoiceNotes = managerInvoiceNotes;
+      moveOutRequest.depositRefundAmount = settlement.refundToTenant;
+      moveOutRequest.status = isRefundTicketPaid ? "Paid" : "InvoiceReleased";
+      moveOutRequest.paymentDate = isRefundTicketPaid
+        ? (moveOutRequest.paymentDate || new Date())
+        : null;
+      await moveOutRequest.save();
+
+      settlement = {
+        ...settlement,
+        netInvoiceAmount: 0,
+        appliedDepositOffset: settlement.recommendedDepositOffset,
+        remainingToPay: 0,
+        depositCoversInvoice: true
+      };
+
+      const grossInvoiceText = settlement.invoiceAmount.toLocaleString('vi-VN');
+      const refundText = settlement.refundToTenant.toLocaleString('vi-VN');
+      const voucherText = refundTicket?.paymentVoucher ? `\nMã phiếu chi hoàn cọc: ${refundTicket.paymentVoucher}` : "";
+
+      await this._notifyTenant(
+        moveOutRequest.tenantId,
+        `📄 Kết quả tất toán trả phòng`,
+        `Quản lý đã kiểm tra phòng ${contract?.roomId?.name || ''}.\nChi phí chốt: ${grossInvoiceText} VND\nKhoản này đã được cấn trừ toàn bộ từ tiền cọc nên không phát hành hóa đơn cuối.\nSố tiền cọc còn dư dự kiến hoàn: ${refundText} VND.${voucherText}`
+      );
+
+      console.log(`[MOVEOUT] ✅ Không phát hành hóa đơn cuối do cọc dư | Hoàn cọc: ${settlement.refundToTenant}`);
+      return {
+        moveOutRequest,
+        finalInvoice: null,
+        settlement,
+        refundTicket: refundTicket
+          ? {
+              id: refundTicket._id,
+              amount: refundTicket.amount,
+              status: refundTicket.status,
+              paymentVoucher: refundTicket.paymentVoucher,
+              transactionDate: refundTicket.transactionDate
+            }
+          : null
+      };
+    }
+
+    // Các trường hợp còn lại vẫn phát hành hóa đơn cuối.
+    finalInvoice = await this._persistFinalInvoiceDraft(moveOutRequest.contractId, finalInvoiceDraft);
+
+    // Cấn trừ tiền cọc ngay khi phát hành hóa đơn để xác định số tiền cần thanh toán thêm.
+    settlement = await this._applyDepositOffsetIfNeeded(moveOutRequest, contract, finalInvoice);
+
+    // Nếu cọc dư sau khi cấn trừ hóa đơn cuối thì tự động tạo phiếu chi hoàn cọc.
+    if (settlement.refundToTenant > 0) {
+      refundTicket = await FinancialTicket.findOne({
+        referenceId: moveOutRequest._id,
+        title: { $regex: /^Hoàn cọc trả phòng/i }
+      })
+        .select("_id amount status paymentVoucher transactionDate")
+        .sort({ createdAt: -1 });
+
+      if (!refundTicket) {
+        const paymentVoucher = await this._getNextMoveOutRefundVoucher();
+        refundTicket = await FinancialTicket.create({
+          amount: settlement.refundToTenant,
+          title: `Hoàn cọc trả phòng - HĐ ${contract.contractCode || moveOutRequest.contractId}`,
+          referenceId: moveOutRequest._id,
+          status: "Approved",
+          transactionDate: new Date(),
+          accountantPaidAt: null,
+          paymentVoucher
+        });
+      }
+    }
+
+    const isAutoPaid = finalInvoice.status === "Paid";
 
     // Cập nhật request
     moveOutRequest.finalInvoiceId = finalInvoice._id;
     moveOutRequest.managerInvoiceNotes = managerInvoiceNotes;
-    moveOutRequest.status = "InvoiceReleased";
+    moveOutRequest.depositRefundAmount = settlement.refundToTenant;
+    moveOutRequest.status = isAutoPaid ? "Paid" : "InvoiceReleased";
+    moveOutRequest.paymentDate = isAutoPaid ? new Date() : null;
     await moveOutRequest.save();
 
+    const targetDepositId = contract?.depositId || settlement.depositId;
+    if (isAutoPaid && targetDepositId) {
+      if (moveOutRequest.isDepositForfeited) {
+        await Deposit.findByIdAndUpdate(targetDepositId, {
+          status: "Forfeited",
+          refundDate: null,
+          forfeitedDate: new Date()
+        });
+      } else if (settlement.refundToTenant <= 0) {
+        await Deposit.findByIdAndUpdate(targetDepositId, {
+          status: "Refunded",
+          refundDate: new Date(),
+          forfeitedDate: null
+        });
+      }
+    }
+
     // Notify tenant
-    const contract = await Contract.findById(moveOutRequest.contractId).populate('roomId', 'name');
+    const grossInvoiceText = settlement.invoiceAmount.toLocaleString('vi-VN');
+    const depositOffsetText = settlement.recommendedDepositOffset.toLocaleString('vi-VN');
+    const remainingToPayText = settlement.remainingToPay.toLocaleString('vi-VN');
+    const refundText = settlement.refundToTenant.toLocaleString('vi-VN');
+    const voucherText = refundTicket?.paymentVoucher ? `\nMã phiếu chi hoàn cọc: ${refundTicket.paymentVoucher}` : "";
+
+    const noticeContent = settlement.remainingToPay > 0
+      ? `Quản lý đã kiểm tra phòng ${contract?.roomId?.name || ''} và phát hành hóa đơn cuối.\nTổng chi phí chốt: ${grossInvoiceText} VND\nĐã cấn trừ tiền cọc: ${depositOffsetText} VND\nCòn cần thanh toán thêm: ${remainingToPayText} VND\n\nVui lòng thanh toán phần còn thiếu để hoàn tất thủ tục trả phòng.`
+      : `Quản lý đã kiểm tra phòng ${contract?.roomId?.name || ''} và phát hành hóa đơn cuối.\nTổng chi phí chốt: ${grossInvoiceText} VND\nĐã cấn trừ tiền cọc: ${depositOffsetText} VND\nBạn không cần thanh toán thêm hóa đơn cuối.${settlement.refundToTenant > 0 ? `\nSố tiền cọc còn dư dự kiến hoàn: ${refundText} VND.${voucherText}` : ''}`;
+
     await this._notifyTenant(
       moveOutRequest.tenantId,
       `📄 Hóa đơn cuối đã được phát hành`,
-      `Quản lý đã kiểm tra phòng ${contract?.roomId?.name || ''} và phát hành hóa đơn cuối.\nTổng tiền: ${finalInvoice.totalAmount.toLocaleString('vi-VN')} VND\n\nVui lòng thanh toán để hoàn tất thủ tục trả phòng.`
+      noticeContent
     );
 
-    console.log(`[MOVEOUT] ✅ Hóa đơn cuối đã tạo và liên kết: ${finalInvoice._id}`);
-    return { moveOutRequest, finalInvoice };
+    console.log(`[MOVEOUT] ✅ Hóa đơn cuối đã tạo và liên kết: ${finalInvoice._id} | Còn cần thanh toán: ${settlement.remainingToPay}`);
+    return {
+      moveOutRequest,
+      finalInvoice,
+      settlement,
+      refundTicket: refundTicket
+        ? {
+            id: refundTicket._id,
+            amount: refundTicket.amount,
+            status: refundTicket.status,
+            paymentVoucher: refundTicket.paymentVoucher,
+            transactionDate: refundTicket.transactionDate
+          }
+        : null
+    };
   }
 
   // ============================================================
@@ -357,8 +963,9 @@ class MoveOutRequestService {
    * @param {Number} waterIndex - Chỉ số nước manager nhập (optional)
    * @returns {InvoicePeriodic} Hóa đơn cuối
    */
-  async _createFinalInvoiceForContract(contractId, electricIndex, waterIndex) {
+  async _createFinalInvoiceForContract(contractId, electricIndex, waterIndex, options = {}) {
     console.log(`[MOVEOUT] 📋 Tạo hóa đơn cuối cho contract: ${contractId}`);
+    const { persist = true } = options;
 
     const contract = await Contract.findById(contractId)
       .populate({ path: 'roomId', populate: { path: 'roomTypeId' } });
@@ -378,7 +985,9 @@ class MoveOutRequestService {
     const invoiceTitle = `Hóa đơn tiền thuê & dịch vụ tháng ${month}/${year}`;
 
     // Nếu đã có hóa đơn cùng kỳ cho hợp đồng này thì cập nhật lại item theo dữ liệu chốt mới.
-    const existingFinal = await InvoicePeriodic.findOne({ invoiceCode, contractId: contract._id });
+    const existingFinal = persist
+      ? await InvoicePeriodic.findOne({ invoiceCode, contractId: contract._id })
+      : null;
 
     let parsedPrice = room.roomTypeId?.currentPrice || 0;
     parsedPrice = typeof parsedPrice === 'object' && parsedPrice.$numberDecimal
@@ -715,6 +1324,18 @@ class MoveOutRequestService {
       console.log(`[MOVEOUT] ℹ️ Không có BookService cho contract này`);
     }
 
+    if (!persist) {
+      return {
+        invoiceCode,
+        contractId: contract._id,
+        title: invoiceTitle,
+        items: invoiceItems,
+        totalAmount,
+        dueDate,
+        status: 'Unpaid'
+      };
+    }
+
     // ---- Lưu vào invoice_periodics với status Unpaid (phát hành ngay) ----
     if (existingFinal) {
       if (existingFinal.status === 'Paid') {
@@ -753,138 +1374,135 @@ class MoveOutRequestService {
   async getDepositVsInvoice(moveOutRequestId) {
     console.log(`[MOVEOUT] 🔍 So sánh cọc vs hóa đơn: ${moveOutRequestId}`);
 
+    await this._syncMoveOutByRequestId(moveOutRequestId);
     const moveOutRequest = await MoveOutRequest.findById(moveOutRequestId);
     if (!moveOutRequest) throw new Error("Không tìm thấy yêu cầu trả phòng");
-    if (!moveOutRequest.finalInvoiceId)
-      throw new Error("Hóa đơn cuối chưa được phát hành");
 
     const contract = await Contract.findById(moveOutRequest.contractId);
     if (!contract) throw new Error("Không tìm thấy hợp đồng");
 
-    const finalInvoice = await InvoicePeriodic.findById(moveOutRequest.finalInvoiceId);
-    if (!finalInvoice) throw new Error("Không tìm thấy hóa đơn cuối");
+    const refundTicket = await FinancialTicket.findOne({
+      referenceId: moveOutRequest._id,
+      title: { $regex: /^Hoàn cọc trả phòng/i }
+    })
+      .select("_id amount status paymentVoucher transactionDate")
+      .sort({ createdAt: -1 })
+      .lean();
 
-    // Lấy tiền cọc
-    let depositAmount = 0;
-    let depositId = null;
-    if (contract.depositId) {
-      const deposit = await Deposit.findById(contract.depositId);
-      if (deposit && deposit.status === 'Held') {
-        depositAmount = deposit.amount;
+    if (!moveOutRequest.finalInvoiceId) {
+      const deposit = await this._findDepositForContract(contract);
+      const linkedDepositId = contract?.depositId ? String(contract.depositId) : null;
+
+      let depositId = null;
+      let depositStatus = null;
+      let depositAmount = 0;
+      let usableDepositAmount = 0;
+      let isLinkedToContract = false;
+
+      if (deposit) {
         depositId = deposit._id;
+        depositStatus = deposit.status;
+        depositAmount = Number(deposit.amount) || 0;
+        isLinkedToContract = Boolean(
+          linkedDepositId && depositId && String(depositId) === linkedDepositId
+        );
+        if (this._isDepositUsableForSettlement(deposit.status, { isLinkedToContract })) {
+          usableDepositAmount = depositAmount;
+        }
       }
+
+      const isDepositForfeited = Boolean(moveOutRequest?.isDepositForfeited);
+      const effectiveUsableDeposit = isDepositForfeited ? 0 : usableDepositAmount;
+      const refundToTenant = Math.max(Number(moveOutRequest.depositRefundAmount) || 0, 0);
+      const invoiceAmount = Math.max(effectiveUsableDeposit - refundToTenant, 0);
+
+      return {
+        depositId,
+        depositStatus,
+        isLinkedToContract,
+        depositAmount,
+        usableDepositAmount,
+        invoiceAmount,
+        netInvoiceAmount: 0,
+        appliedDepositOffset: invoiceAmount,
+        recommendedDepositOffset: invoiceAmount,
+        depositCoversInvoice: true,
+        remainingToPay: 0,
+        refundToTenant,
+        isDepositForfeited,
+        refundTicket
+      };
     }
-
-    const invoiceAmount = finalInvoice.totalAmount;
-    const depositCoversInvoice = depositAmount >= invoiceAmount;
-    const remainingToPay = depositCoversInvoice ? 0 : invoiceAmount - depositAmount;
-    const refundToTenant = depositCoversInvoice ? depositAmount - invoiceAmount : 0;
-    const isDepositForfeited = moveOutRequest.isDepositForfeited;
-
-    return {
-      depositId,
-      depositAmount,
-      invoiceAmount,
-      depositCoversInvoice,
-      remainingToPay,
-      // Nếu cọc bị forfeited: không hoàn phần thừa
-      refundToTenant: isDepositForfeited ? 0 : refundToTenant,
-      isDepositForfeited
-    };
-  }
-
-  // ============================================================
-  //  STEP 4 – Manager kiểm tra trạng thái thanh toán
-  // ============================================================
-  /**
-   * Manager kiểm tra xem tenant đã thanh toán thành công hay chưa
-   * Nếu hóa đơn status = 'Paid' → có thể hoàn tất trả phòng
-   */
-  async checkPaymentStatus(moveOutRequestId) {
-    console.log(`[MOVEOUT] 🔍 Manager kiểm tra trạng thái thanh toán: ${moveOutRequestId}`);
-
-    const moveOutRequest = await MoveOutRequest.findById(moveOutRequestId);
-    if (!moveOutRequest) throw new Error("Không tìm thấy yêu cầu trả phòng");
-    if (moveOutRequest.status !== "InvoiceReleased")
-      throw new Error(`Chỉ có thể kiểm tra thanh toán khi status là InvoiceReleased (hiện tại: ${moveOutRequest.status})`);
 
     const finalInvoice = await InvoicePeriodic.findById(moveOutRequest.finalInvoiceId);
     if (!finalInvoice) throw new Error("Không tìm thấy hóa đơn cuối");
 
-    const isPaid = finalInvoice.status === 'Paid';
-
-    if (isPaid) {
-      // Tenant đã thanh toán thành công → cập nhật trạng thái
-      moveOutRequest.status = "Paid";
-      moveOutRequest.paymentDate = new Date();
-      await moveOutRequest.save();
-
-      // Xử lý cọc
-      const contract = await Contract.findById(moveOutRequest.contractId);
-      if (contract?.depositId) {
-        const depositStatus = moveOutRequest.isDepositForfeited ? "Forfeited" : "Refunded";
-        await Deposit.findByIdAndUpdate(contract.depositId, {
-          status: depositStatus,
-          refundDate: moveOutRequest.isDepositForfeited ? null : new Date(),
-          forfeitedDate: moveOutRequest.isDepositForfeited ? new Date() : null
-        });
-      }
-
-      console.log(`[MOVEOUT] ✅ Tenant đã thanh toán thành công`);
-    } else {
-      console.log(`[MOVEOUT] ⏳ Tenant chưa thanh toán`);
-    }
+    const settlement = await this._applyDepositOffsetIfNeeded(moveOutRequest, contract, finalInvoice);
 
     return {
-      moveOutRequestId,
-      invoiceStatus: finalInvoice.status,
-      isPaid,
-      invoiceAmount: finalInvoice.totalAmount,
-      message: isPaid ? "Tenant đã thanh toán. Manager có thể hoàn tất trả phòng." : "Tenant chưa thanh toán. Vui lòng chờ hoặc liên hệ tenant."
+      ...settlement,
+      refundTicket
     };
   }
 
-  // ============================================================
-  //  STEP 5 – Manager hoàn tất trả phòng → Terminate contract
-  // ============================================================
   async completeMoveOut(moveOutRequestId, managerCompletionNotes = "") {
     console.log(`[MOVEOUT] 🏁 Manager hoàn tất trả phòng: ${moveOutRequestId}`);
 
+    await this._syncMoveOutByRequestId(moveOutRequestId);
     const moveOutRequest = await MoveOutRequest.findById(moveOutRequestId);
-    if (!moveOutRequest) throw new Error("Không tìm thấy yêu cầu trả phòng");
-    if (moveOutRequest.status !== "Paid")
-      throw new Error(`Chỉ hoàn tất được khi trạng thái là Paid (hiện tại: ${moveOutRequest.status})`);
+    if (!moveOutRequest) {
+      throw new Error("Không tìm thấy yêu cầu trả phòng");
+    }
 
-    // 1. Hoàn tất request
+    if (moveOutRequest.status !== "Paid") {
+      throw new Error(`Chỉ có thể hoàn tất trả phòng khi trạng thái là Paid (hiện tại: ${moveOutRequest.status})`);
+    }
+
+    const contract = await Contract.findById(moveOutRequest.contractId)
+      .select("_id status depositId roomId");
+    if (!contract) {
+      throw new Error("Không tìm thấy hợp đồng");
+    }
+
+    const deposit = await this._findDepositForContract(contract);
+    if (deposit?._id) {
+      if (moveOutRequest.isDepositForfeited) {
+        await Deposit.findByIdAndUpdate(deposit._id, {
+          status: "Forfeited",
+          refundDate: null,
+          forfeitedDate: new Date(),
+        });
+      } else {
+        await Deposit.findByIdAndUpdate(deposit._id, {
+          status: "Refunded",
+          refundDate: new Date(),
+          forfeitedDate: null,
+        });
+      }
+    }
+
+    if (contract.status !== "terminated") {
+      contract.status = "terminated";
+      await contract.save();
+    }
+
+    const tenant = await User.findById(moveOutRequest.tenantId).select("_id status");
+    if (tenant && tenant.status !== "inactive") {
+      tenant.status = "inactive";
+      await tenant.save();
+    }
+
     moveOutRequest.status = "Completed";
     moveOutRequest.completedDate = new Date();
     moveOutRequest.managerCompletionNotes = managerCompletionNotes;
     await moveOutRequest.save();
 
-    // 2. Terminate contract
-    const contract = await Contract.findById(moveOutRequest.contractId);
-    if (contract) {
-      contract.status = "terminated";
-      await contract.save();
-      console.log(`[MOVEOUT] ✅ Hợp đồng đã terminate`);
-    }
-
-    // 3. Vô hiệu hóa tài khoản tenant
-    const tenant = await User.findById(moveOutRequest.tenantId);
-    if (tenant) {
-      tenant.status = "inactive";
-      await tenant.save();
-      console.log(`[MOVEOUT] ✅ Tài khoản tenant đã inactive`);
-    }
-
-    // 4. Notify tenant
     await this._notifyTenant(
       moveOutRequest.tenantId,
-      `🎉 Trả phòng hoàn tất`,
-      `Quản lý đã xác nhận hoàn tất quá trình trả phòng.\nGhi chú: ${managerCompletionNotes || 'Không có'}\n\nCảm ơn bạn đã sử dụng dịch vụ!`
+      `✅ Trả phòng đã hoàn tất`,
+      `Quản lý đã xác nhận hoàn tất quy trình trả phòng.${managerCompletionNotes ? `\nGhi chú: ${managerCompletionNotes}` : ""}`
     );
 
-    console.log(`[MOVEOUT] ✅ Hoàn tất trả phòng thành công`);
     return moveOutRequest;
   }
 
@@ -892,6 +1510,8 @@ class MoveOutRequestService {
   //  READ – Lấy danh sách / chi tiết
   // ============================================================
   async getMoveOutRequestById(moveOutRequestId) {
+    await this._syncMoveOutByRequestId(moveOutRequestId);
+
     const req = await MoveOutRequest.findById(moveOutRequestId)
       .populate('finalInvoiceId', 'invoiceCode totalAmount status dueDate')
       .populate({
@@ -906,17 +1526,26 @@ class MoveOutRequestService {
 
   async getMoveOutRequestByContractId(contractId) {
     console.log(`[MOVEOUT] Kiểm tra request cho contract: ${contractId}`);
-    const req = await MoveOutRequest.findOne({ contractId })
-      .populate('finalInvoiceId', 'invoiceCode totalAmount status dueDate');
-    if (!req) {
+
+    const reqRef = await MoveOutRequest.findOne({ contractId }).select("_id");
+    if (!reqRef) {
       console.log(`[MOVEOUT] Không có request cho contract: ${contractId}`);
       return null;
     }
+
+    await this._syncMoveOutByRequestId(reqRef._id);
+
+    const req = await MoveOutRequest.findById(reqRef._id)
+      .populate('finalInvoiceId', 'invoiceCode totalAmount status dueDate');
+
     console.log(`[MOVEOUT] ✅ Tìm thấy: ${req._id}`);
     return req;
   }
 
   async getAllMoveOutRequests(status, page = 1, limit = 20) {
+    await this._syncPendingMoveOutsWithPaidInvoices();
+    await this._syncPendingMoveOutsWithPaidRefundTickets();
+
     const skip = (page - 1) * limit;
     const query = {};
     if (status) query.status = status;
