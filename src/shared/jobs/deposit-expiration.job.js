@@ -1,10 +1,11 @@
 const Deposit = require("../../modules/contract-management/models/deposit.model");
+const Contract = require("../../modules/contract-management/models/contract.model");
 const Room = require("../../modules/room-floor-management/models/room.model");
 
 // =============================================
 // CRON JOB: Xử lý deposit hết hạn
 // 1. Pending + hết 5 phút → XÓA deposit (không tạo Payment)
-// 2. Held + quá 7 ngày → chuyển Expired, Room → Available
+// 2. Held + quá 7 ngày và chưa gán hợp đồng → chuyển Expired, Room → Available
 // Chạy mỗi 1 phút
 // =============================================
 
@@ -27,14 +28,25 @@ const processExpiredDeposits = async () => {
             console.log(`[CRON] 🗑️ Deposit ${deposit.transactionCode} → Deleted (timeout 5 min)`);
         }
 
-        // ========== 2. Xử lý Held quá 7 ngày ==========
+        // ========== 2. Xử lý Held quá 7 ngày (chưa gán hợp đồng) ==========
         const sevenDaysAgo = new Date(now.getTime() - HOLD_PERIOD_DAYS * 24 * 60 * 60 * 1000);
         const heldExpired = await Deposit.find({
             status: "Held",
             createdAt: { $lt: sevenDaysAgo }, // Dùng createdAt (timestamps)
         });
 
+        const heldDepositIds = heldExpired.map((deposit) => deposit._id);
+        const linkedDepositIds = await Contract.distinct("depositId", {
+            depositId: { $in: heldDepositIds },
+        });
+        const linkedDepositIdSet = new Set(linkedDepositIds.map((id) => String(id)));
+
         for (const deposit of heldExpired) {
+            // Cọc đã được gán vào hợp đồng thì không được chuyển Expired.
+            if (linkedDepositIdSet.has(String(deposit._id))) {
+                continue;
+            }
+
             // Cập nhật status → Expired
             deposit.status = "Expired";
             await deposit.save();

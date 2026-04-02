@@ -44,11 +44,11 @@ const MoveOutRequestSchema = new Schema({
   // === Kiểm tra điều kiện hoàn cọc ===
   isEarlyNotice: {
     type: Boolean,
-    default: false // requestDate < expectedMoveOutDate - 30 ngày → false = báo gấp
+    default: false // true khi ngày trả phòng cách ngày kết thúc hợp đồng dưới 30 ngày
   },
   isUnderMinStay: {
     type: Boolean,
-    default: false // Thời gian thuê < 6 tháng
+    default: false // true khi thời gian thuê < 3 tháng
   },
   isDepositForfeited: {
     type: Boolean,
