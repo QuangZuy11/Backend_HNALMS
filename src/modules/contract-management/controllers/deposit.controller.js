@@ -12,6 +12,10 @@ const getAllDeposits = async (req, res) => {
         path: "room",
         select: "name type price maxPersons",
       })
+      .populate({
+        path: "contractId",
+        select: "contractCode startDate endDate status tenantId",
+      })
       .sort({ createdAt: -1 });
 
     res.status(200).json({

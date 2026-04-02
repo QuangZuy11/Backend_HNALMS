@@ -60,6 +60,13 @@ const depositSchema = new Schema(
       type: Date,
       default: null,
     },
+    // Liên kết trực tiếp với contract (null khi chưa có contract, set khi contract được tạo)
+    contractId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Contracts",
+      default: null,
+      sparse: true, // cho phép nhiều null vì nhiều deposit chưa có contract
+    },
   },
   {
     timestamps: true,

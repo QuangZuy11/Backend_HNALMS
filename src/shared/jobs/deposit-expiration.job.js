@@ -38,9 +38,12 @@ const processExpiredDeposits = async () => {
         });
 
         for (const deposit of heldExpired) {
-            // Lấy thông tin contract liên kết
-            const Contract = require("../../modules/contract-management/models/contract.model");
-            const linkedContract = await Contract.findOne({ depositId: deposit._id });
+            // Lấy thông tin contract liên kết (dùng contractId mới)
+            let linkedContract = null;
+            if (deposit.contractId) {
+                const Contract = require("../../modules/contract-management/models/contract.model");
+                linkedContract = await Contract.findById(deposit.contractId);
+            }
 
             if (linkedContract) {
                 // Có contract liên kết: kiểm tra trạng thái activation
