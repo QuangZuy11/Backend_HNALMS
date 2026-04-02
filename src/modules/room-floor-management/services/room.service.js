@@ -373,19 +373,20 @@ exports.getRoomDetail = async (roomId) => {
 
     const boundDepositIds = new Set(
       allContracts
-        .filter((c) => c.depositId && c.status === "active")
+        .filter((c) => c.depositId)
         .map((c) => c.depositId.toString())
     );
 
     // Deposit bound vào inactive contract KHÔNG tính là floating — phòng available
     const hasFloatingDeposit = heldDeposits.some(
       (d) => {
-        if (!boundDepositIds.has(d._id.toString())) return true;
-        // Deposit bound nhưng contract là inactive -> không coi là floating
-        const boundContract = allContracts.find(
-          (c) => c.depositId?.toString() === d._id.toString()
-        );
-        return boundContract && boundContract.status !== "active";
+        if (!boundDepositIds.has(d._id.toString())) {
+            // Deposit không bind bất kỳ contract nào -> floating
+            return true;
+        }
+        // Deposit bound nhưng contract là inactive -> KHÔNG coi là floating
+        // Vì !hasFloatingDeposit sẽ được xử lý riêng (phòng vẫn trống)
+        return false;
       }
     );
     roomData.hasFloatingDeposit = hasFloatingDeposit;
