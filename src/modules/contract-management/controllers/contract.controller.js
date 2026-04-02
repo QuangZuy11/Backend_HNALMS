@@ -120,8 +120,13 @@ exports.createContract = async (req, res) => {
     startDateObj.setHours(0, 0, 0, 0);
     const msPerDay = 1000 * 60 * 60 * 24;
     const daysUntilStart = Math.ceil((startDateObj - todayForCalc) / msPerDay);
-    // Nếu startDate > hôm nay → tạo tài khoản inactive (chưa được đăng nhập)
-    const tenantInitialStatus = daysUntilStart > 0 ? "inactive" : "active";
+
+    // Nếu startDate > 30 ngày → hợp đồng inactive, user inactive, chưa activate
+    // Nếu startDate <= 30 ngày (đã đến hoặc < 30 ngày nữa) → hợp đồng active, user active, đã activate
+    const isFutureLong = daysUntilStart > 30;
+    const tenantInitialStatus = isFutureLong ? "inactive" : "active";
+    const contractIsActivated = !isFutureLong;
+    const contractInitialStatus = isFutureLong ? "inactive" : "active";
 
     // 2. Handle Tenant Account
     // Check by CCCD first (primary identity document in VN)
@@ -193,31 +198,69 @@ exports.createContract = async (req, res) => {
     }
 
     // 3. Find the Deposit linked to this room (status = "Held")
+    // Priority: activationStatus=null (new, for future contract) > activationStatus=false (reset old deposit) > activationStatus=true (already active)
+    // Skip deposits already linked to any existing contract (to prevent mixing deposits between contracts)
     let linkedDepositId = depositId || null;
     if (!linkedDepositId && room.status === "Deposited") {
+      // Get all contracts for this room (any status) to find which deposits are already taken
+      const allRoomContracts = await Contract.find({
+        roomId: room._id,
+      }).session(session);
+
+      const takenDepositIds = allRoomContracts
+        .filter(c => c.depositId)
+        .map(c => c.depositId.toString());
+
       const heldDeposits = await Deposit.find({
         room: room._id,
         status: "Held",
       }).session(session);
 
       if (heldDeposits.length > 0) {
-        if (heldDeposits.length === 1) {
-          linkedDepositId = heldDeposits[0]._id;
+        // Step 1: Find deposit NOT linked to any existing contract AND with activationStatus=null (newest, for future contract)
+        const newFreeDeposit = heldDeposits.find(
+          d => !takenDepositIds.includes(d._id.toString()) && d.activationStatus === null
+        );
+
+        if (newFreeDeposit) {
+          linkedDepositId = newFreeDeposit._id;
         } else {
-          // If there are multiple Held deposits (e.g., short-term + future contract),
-          // find the one that is NOT linked to any active contract
-          const activeContracts = await Contract.find({
-            roomId: room._id,
-            status: "active"
-          }).session(session);
-          
-          const freeDeposit = heldDeposits.find(d => !activeContracts.some(c => c.depositId?.toString() === d._id.toString()));
-          if (freeDeposit) {
-            linkedDepositId = freeDeposit._id;
+          // Step 2: Find deposit NOT linked to any existing contract AND with activationStatus=false (reset old)
+          const resetFreeDeposit = heldDeposits.find(
+            d => !takenDepositIds.includes(d._id.toString()) && d.activationStatus === false
+          );
+
+          if (resetFreeDeposit) {
+            linkedDepositId = resetFreeDeposit._id;
           } else {
-            linkedDepositId = heldDeposits[0]._id; // Fallback
+            // Step 3: Find deposit NOT linked to any existing contract (any status)
+            const anyFreeDeposit = heldDeposits.find(
+              d => !takenDepositIds.includes(d._id.toString())
+            );
+
+            if (anyFreeDeposit) {
+              linkedDepositId = anyFreeDeposit._id;
+            } else {
+              // Fallback: all deposits are taken → user must explicitly select a deposit
+              linkedDepositId = null;
+            }
           }
         }
+      }
+    }
+
+    // 3.5. Update linked deposit's activationStatus
+    // - Nếu hợp đồng đã active (startDate <= today): activationStatus = true
+    // - Nếu hợp đồng chưa active (startDate > today): activationStatus = null (chờ ngày kích hoạt)
+    if (linkedDepositId) {
+      const linkedDeposit = await Deposit.findById(linkedDepositId).session(session);
+      if (linkedDeposit) {
+        if (contractIsActivated) {
+          linkedDeposit.activationStatus = true;
+        } else {
+          linkedDeposit.activationStatus = null; // Chưa active, chờ đến ngày
+        }
+        await linkedDeposit.save({ session });
       }
     }
 
@@ -235,13 +278,23 @@ exports.createContract = async (req, res) => {
       endDate: endDate,
       rentPaidUntil: rentPaidUntil || contractDetails.rentPaidUntil || null,
       duration: contractDetails.duration,
-      status: "active",
+      status: contractInitialStatus,
+      isActivated: contractIsActivated,
       images: req.body.images || [],
     });
 
     await newContract.save({ session });
 
-    // 4. Create BookService record (1 document per contract, array of services)
+    // 4.1. Update linked deposit's contractId (liên kết deposit → contract)
+    if (linkedDepositId) {
+      await Deposit.findByIdAndUpdate(
+        linkedDepositId,
+        { contractId: newContract._id },
+        { session }
+      );
+    }
+
+    // 4.2. Create BookService record (1 document per contract, array of services)
     if (bookServices && bookServices.length > 0) {
       const contractStartDate = new Date(contractDetails.startDate);
       const bookServiceRecord = new BookService({

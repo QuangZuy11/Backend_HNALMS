@@ -40,6 +40,14 @@ const depositSchema = new Schema(
       enum: ["Pending", "Held", "Refunded", "Forfeited", "Expired"],
       default: "Pending",
     },
+    // Trạng thái kích hoạt (áp dụng khi deposit đã thanh toán = Held)
+    // null = chưa active (chờ ngày active của hợp đồng)
+    // true = đã active (hợp đồng đã active hoặc ngày active đã đến)
+    // false = deposit bị reset (khi có deposit mới cho cùng phòng, deposit cũ bị reset)
+    activationStatus: {
+      type: Boolean,
+      default: null,
+    },
     expireAt: {
       type: Date,
       default: null,
@@ -51,6 +59,13 @@ const depositSchema = new Schema(
     forfeitedDate: {
       type: Date,
       default: null,
+    },
+    // Liên kết trực tiếp với contract (null khi chưa có contract, set khi contract được tạo)
+    contractId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Contracts",
+      default: null,
+      sparse: true, // cho phép nhiều null vì nhiều deposit chưa có contract
     },
   },
   {
