@@ -40,13 +40,10 @@ router.get("/:moveOutRequestId", authenticate, moveOutRequestController.getMoveO
 router.post("/:moveOutRequestId/release-invoice", authenticate, moveOutRequestController.releaseFinalInvoice);
 router.put("/:moveOutRequestId/release-invoice", authenticate, moveOutRequestController.releaseFinalInvoice);
 
-// [STEP 3] Manager kiểm tra trạng thái thanh toán của tenant
-// GET /api/move-outs/:moveOutRequestId/check-payment-status
-router.get("/:moveOutRequestId/check-payment-status", authenticate, moveOutRequestController.checkPaymentStatus);
-
-// [STEP 4] Manager hoàn tất trả phòng → terminate contract + inactive tenant
-// PUT /api/move-outs/:moveOutRequestId/complete
+// [STEP 3] Manager xác nhận hoàn tất trả phòng
+// PATCH/PUT /api/move-outs/:moveOutRequestId/complete
 // Body: { managerCompletionNotes }
+router.patch("/:moveOutRequestId/complete", authenticate, moveOutRequestController.completeMoveOut);
 router.put("/:moveOutRequestId/complete", authenticate, moveOutRequestController.completeMoveOut);
 
 // ============================================================================
