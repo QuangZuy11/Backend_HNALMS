@@ -164,7 +164,8 @@ exports.getAllRooms = async (filters) => {
     roomId: { $in: roomIds },
   })
     .select("roomId startDate endDate depositId status")
-    .lean();
+    .lean()
+    .sort({ startDate: 1 });
 
   // Build futureContractMap (active)
   const futureContractMap = {};
@@ -186,7 +187,8 @@ exports.getAllRooms = async (filters) => {
     roomId: { $in: roomIds },
   })
     .select("roomId startDate endDate depositId")
-    .lean();
+    .lean()
+    .sort({ startDate: 1 });
 
   // Merge inactive contracts INTO futureContractMap
   inactiveContracts.forEach((c) => {
