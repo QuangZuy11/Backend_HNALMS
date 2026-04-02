@@ -8,7 +8,6 @@ class DeviceService {
       throw new Error("Giá thiết bị phải lớn hơn 0");
     }
 
-    // [MỚI] Kiểm tra trùng tên khi tạo lẻ
     const nameTrim = data.name.trim();
     const existing = await Device.findOne({ name: { $regex: new RegExp(`^${nameTrim}$`, "i") } });
     if (existing) {
@@ -29,7 +28,6 @@ class DeviceService {
       throw new Error("Giá thiết bị phải lớn hơn 0");
     }
 
-    // [MỚI] Kiểm tra trùng tên khi sửa (trừ chính nó)
     if (data.name) {
       const nameTrim = data.name.trim();
       const existing = await Device.findOne({ 
@@ -80,26 +78,40 @@ class DeviceService {
     return xlsx.write(workbook, { type: "buffer", bookType: "xlsx" });
   }
 
-  // Import Excel với logic CHECK TRÙNG
   async importExcel(fileBuffer) {
     const workbook = xlsx.read(fileBuffer, { type: "buffer" });
     const sheetName = workbook.SheetNames[0];
     const worksheet = workbook.Sheets[sheetName];
     const jsonData = xlsx.utils.sheet_to_json(worksheet, { header: 1 });
 
+    // 1. Kiểm tra file có dữ liệu không (ít nhất phải có 2 dòng: 1 header + 1 data)
+    if (!jsonData || jsonData.length < 2) {
+      throw new Error("File Excel không có dữ liệu để Import.");
+    }
+
+    // ==============================================================
+    // [MỚI] 2. BỨC TƯỜNG LỬA: KIỂM TRA ĐÚNG FILE MẪU THIẾT BỊ KHÔNG
+    // ==============================================================
+    const headerRow = jsonData[0] || [];
+    const firstColumnHeader = (headerRow[0] || "").toString().trim();
+    
+    // Nếu cột đầu tiên không chứa chữ "Tên thiết bị", chắc chắn là nhầm file!
+    if (!firstColumnHeader.toLowerCase().includes("tên thiết bị")) {
+      throw new Error("Sai định dạng file! Vui lòng tải đúng file mẫu của Quản lý Thiết bị.");
+    }
+    // ==============================================================
+
     const devicesToInsert = [];
     const errors = [];
     
-    // 1. Lấy danh sách tất cả tên thiết bị đang có trong DB để so sánh (tăng tốc độ xử lý)
     const allExistingDevices = await Device.find({}, "name");
     const existingNamesInDB = new Set(allExistingDevices.map(d => d.name.toLowerCase().trim()));
-    
-    // 2. Tạo một Set để theo dõi các tên trùng lặp ngay bên trong file Excel đang import
     const namesInCurrentExcel = new Set();
 
     for (let i = 1; i < jsonData.length; i++) {
       const row = jsonData[i];
-      if (!row || row.length === 0) continue;
+      // Nếu dòng trống hoàn toàn thì bỏ qua
+      if (!row || row.length === 0 || Object.keys(row).length === 0) continue;
 
       const rawName = (row[0] || "").toString().trim();
       const deviceData = {
@@ -108,11 +120,10 @@ class DeviceService {
         model: row[2] || "",
         category: row[3] || "",
         price: Number(row[4]) || 0,
-        description: (row[5] || "").toString().slice(0, 100), // Cắt 100 ký tự đúng yêu cầu
+        description: (row[5] || "").toString().slice(0, 100),
         unit: "Cái"
       };
 
-      // Check bỏ trống tên
       if (!deviceData.name) {
         errors.push(`Dòng ${i + 1}: Thiếu tên thiết bị`);
         continue;
@@ -120,19 +131,16 @@ class DeviceService {
 
       const lowerName = deviceData.name.toLowerCase();
 
-      // Check trùng với Database
       if (existingNamesInDB.has(lowerName)) {
         errors.push(`Dòng ${i + 1}: Tên "${deviceData.name}" đã tồn tại trong hệ thống`);
         continue;
       }
 
-      // Check trùng ngay trong file Excel hiện tại
       if (namesInCurrentExcel.has(lowerName)) {
         errors.push(`Dòng ${i + 1}: Tên "${deviceData.name}" bị lặp lại trong file Excel`);
         continue;
       }
 
-      // Nếu hợp lệ thì đưa vào danh sách chờ và lưu lại tên để check dòng sau
       namesInCurrentExcel.add(lowerName);
       devicesToInsert.push(deviceData);
     }
