@@ -61,7 +61,7 @@ class MoveOutRequestController {
       if (moveOutRequest.isUnderMinStay) {
         warnings.push({
           type: "under_min_stay",
-          message: "Bạn đã xác nhận thời gian ở tính đến hiện tại chưa đủ tối thiểu 3 tháng (90 ngày). Tiền cọc hoàn sẽ được tính = 0 trong hóa đơn thanh lý."
+          message: "Bạn đã xác nhận thời gian ở tính đến hiện tại chưa đủ tối thiểu 6 tháng (180 ngày). Tiền cọc hoàn sẽ được tính = 0 trong hóa đơn thanh lý."
         });
       }
 
@@ -203,13 +203,45 @@ class MoveOutRequestController {
         moveOutRequestId, managerInvoiceNotes, elecIdx, waterIdx
       );
 
+      const message = result?.finalInvoice
+        ? "Hóa đơn cuối đã được phát hành. Tenant sẽ được thông báo."
+        : "Không phát hành hóa đơn cuối do cọc dư. Đã tạo phiếu chi hoàn cọc cho tenant.";
+
       return res.status(200).json({
         success: true,
-        message: "Hóa đơn cuối đã được phát hành. Tenant sẽ được thông báo.",
+        message,
         data: result
       });
     } catch (error) {
       console.error(`[MOVEOUT CTRL] ❌ Lỗi phát hành hóa đơn:`, error.message);
+      return res.status(400).json({ success: false, message: error.message });
+    }
+  }
+
+  // ============================================================
+  //  MANAGER – Hoàn tất trả phòng
+  // ============================================================
+  /**
+   * PATCH/PUT /api/move-outs/:moveOutRequestId/complete
+   * Body: { managerCompletionNotes }
+   */
+  async completeMoveOut(req, res) {
+    try {
+      const { moveOutRequestId } = req.params;
+      const { managerCompletionNotes = "" } = req.body;
+
+      const data = await moveOutRequestService.completeMoveOut(
+        moveOutRequestId,
+        managerCompletionNotes
+      );
+
+      return res.status(200).json({
+        success: true,
+        message: "Hoàn tất trả phòng thành công.",
+        data,
+      });
+    } catch (error) {
+      console.error(`[MOVEOUT CTRL] ❌ Lỗi hoàn tất trả phòng:`, error.message);
       return res.status(400).json({ success: false, message: error.message });
     }
   }
@@ -227,58 +259,6 @@ class MoveOutRequestController {
       return res.status(200).json({ success: true, data: result });
     } catch (error) {
       console.error(`[MOVEOUT CTRL] ❌ Lỗi so sánh cọc/hóa đơn:`, error.message);
-      return res.status(400).json({ success: false, message: error.message });
-    }
-  }
-
-  // ============================================================
-  //  MANAGER – Kiểm tra trạng thái thanh toán
-  // ============================================================
-  /**
-   * GET /api/move-outs/:moveOutRequestId/check-payment-status
-   */
-  async checkPaymentStatus(req, res) {
-    try {
-      console.log(`[MOVEOUT CTRL] Manager kiểm tra trạng thái thanh toán`);
-      const { moveOutRequestId } = req.params;
-
-      const result = await moveOutRequestService.checkPaymentStatus(moveOutRequestId);
-
-      return res.status(200).json({
-        success: true,
-        message: result.isPaid ? "Tenant đã thanh toán." : "Tenant chưa thanh toán.",
-        data: result
-      });
-    } catch (error) {
-      console.error(`[MOVEOUT CTRL] ❌ Lỗi kiểm tra thanh toán:`, error.message);
-      return res.status(400).json({ success: false, message: error.message });
-    }
-  }
-
-  // ============================================================
-  //  MANAGER – Hoàn tất trả phòng (sau khi đã Paid)
-  // ============================================================
-  /**
-   * PUT /api/move-outs/:moveOutRequestId/complete
-   * Body: { managerCompletionNotes }
-   */
-  async completeMoveOut(req, res) {
-    try {
-      console.log(`[MOVEOUT CTRL] Manager hoàn tất trả phòng`);
-      const { moveOutRequestId } = req.params;
-      const { managerCompletionNotes = "" } = req.body;
-
-      const result = await moveOutRequestService.completeMoveOut(
-        moveOutRequestId, managerCompletionNotes
-      );
-
-      return res.status(200).json({
-        success: true,
-        message: "Trả phòng hoàn tất. Hợp đồng đã terminated, tài khoản tenant đã inactive.",
-        data: result
-      });
-    } catch (error) {
-      console.error(`[MOVEOUT CTRL] ❌ Lỗi hoàn tất:`, error.message);
       return res.status(400).json({ success: false, message: error.message });
     }
   }
