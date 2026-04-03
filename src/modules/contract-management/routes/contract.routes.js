@@ -24,6 +24,13 @@ router.post("/create", contractController.createContract);
 // Route to get all contracts
 router.get("/", contractController.getAllContracts);
 router.get("/my-contracts", authenticate, contractController.getMyContracts);
+router.get(
+  "/renewal/preview/:contractId",
+  authenticate,
+  contractController.getRenewalPreview
+);
+router.post("/renewal/confirm", authenticate, contractController.confirmRenewal);
+router.post("/renewal/decline", authenticate, contractController.declineRenewal);
 router.get("/:id", contractController.getContractById);
 router.put("/:id", contractController.updateContract);
 
