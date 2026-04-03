@@ -63,6 +63,15 @@ const contractSchema = new Schema(
       type: Boolean,
       default: false,
     },
+    /**
+     * Trạng thái từ chối gia hạn.
+     * true = tenant đã bấm từ chối, phòng mở cho Guest cọc sớm.
+     * Hợp đồng vẫn active đến endDate.
+     */
+    renewalDeclined: {
+      type: Boolean,
+      default: false,
+    },
     // Terms & Conditions (Optional snapshot or ref)
     terms: {
       content: String, // Or link to a static terms file

@@ -393,6 +393,23 @@ exports.getRoomDetail = async (roomId) => {
     );
     roomData.hasFloatingDeposit = hasFloatingDeposit;
 
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    // Người thuê đã từ chối gia hạn nhưng hợp đồng vẫn active đến endDate
+    // → hiển thị "Có thể cọc ngay bây giờ" cho Guest
+    const tenantDeclinedContract = await Contract.findOne({
+      roomId: room._id,
+      status: "active",
+      renewalDeclined: { $ne: false },
+      endDate: { $gte: todayStart },
+    })
+      .select("endDate contractCode")
+      .lean();
+    roomData.guestCanDepositNow = Boolean(tenantDeclinedContract);
+    if (tenantDeclinedContract) {
+      roomData.currentTenantContractEndsAt = tenantDeclinedContract.endDate;
+    }
+
     return roomData;
   } catch (error) {
     console.error("🔥 Error in getRoomDetail:", error);
