@@ -7,7 +7,12 @@ const Deposit = require("../models/deposit.model");
 const InvoiceIncurred = require("../../invoice-management/models/invoice_incurred.model");
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs"); // Ensure bcryptjs is installed
-const { checkAndSendRenewalNotifications } = require("../services/contract-renewal.service");
+const {
+  checkAndSendRenewalNotifications,
+  getRenewalPreviewForTenant,
+  confirmContractRenewal,
+  declineContractRenewal,
+} = require("../services/contract-renewal.service");
 
 // Helper to generate random digit string (numbers only)
 const generateRandomString = (length) => {
@@ -703,123 +708,97 @@ exports.updateContract = async (req, res) => {
   }
 };
 
-// Update Contract (duration, coResidents, optional services, images)
-exports.updateContract = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
+exports.getRenewalPreview = async (req, res) => {
   try {
-    const { id } = req.params;
-    const { duration, coResidents, optionalServices, images } = req.body;
-
-    // 1. Find and validate contract
-    const contract = await Contract.findById(id)
-      .populate({ path: "roomId", populate: { path: "roomTypeId" } })
-      .session(session);
-    if (!contract) throw new Error("Không tìm thấy hợp đồng.");
-    if (contract.status !== "active")
-      throw new Error("Chỉ có thể sửa hợp đồng đang hiệu lực.");
-
-    // 2. Update duration & endDate if changed
-    if (duration && duration !== contract.duration) {
-      if (duration < 6) throw new Error("Thời hạn thuê tối thiểu 6 tháng.");
-      const newEndDate = new Date(contract.startDate);
-      newEndDate.setMonth(newEndDate.getMonth() + Number(duration));
-      contract.duration = Number(duration);
-      contract.endDate = newEndDate;
+    const tenantId = req.user?.userId;
+    if (!tenantId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+      });
     }
+    const { contractId } = req.params;
+    const data = await getRenewalPreviewForTenant(contractId, tenantId);
+    res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error("Get Renewal Preview Error:", error);
+    const msg = error.message || "";
+    let status = 400;
+    if (msg.includes("Không tìm thấy")) status = 404;
+    else if (msg.includes("quyền")) status = 403;
+    res.status(status).json({
+      success: false,
+      message: error.message || "Server Error",
+    });
+  }
+};
 
-    // 3. Update co-residents if provided
-    if (coResidents !== undefined) {
-      const personMax = contract.roomId?.roomTypeId?.personMax || 1;
-      const totalPeople = (coResidents ? coResidents.length : 0) + 1;
-      if (totalPeople > personMax) {
-        throw new Error(
-          `Số người ở (${totalPeople}) vượt quá giới hạn (tối đa ${personMax} người).`,
-        );
-      }
-      contract.coResidents = coResidents;
+exports.confirmRenewal = async (req, res) => {
+  try {
+    const tenantId = req.user?.userId;
+    if (!tenantId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+      });
     }
-
-    // 4. Update images if provided
-    if (images !== undefined) {
-      if (!images || images.length === 0)
-        throw new Error("Phải có ít nhất 1 ảnh hợp đồng.");
-      contract.images = images;
+    const { contractId, extensionMonths } = req.body;
+    if (!contractId) {
+      return res.status(400).json({
+        success: false,
+        message: "Thiếu contractId",
+      });
     }
-
-    await contract.save({ session });
-
-    // 5. Update optional services in BookService record
-    if (optionalServices !== undefined) {
-      const bookServiceRecord = await BookService.findOne({
-        contractId: contract._id,
-      }).session(session);
-
-      if (bookServiceRecord) {
-        // Keep all fixed_monthly services, replace only quantity_based ones
-        const Service = require("../../service-management/models/service.model");
-        const allServices = await Service.find({ isActive: true }).session(
-          session,
-        );
-
-        const getCategory = (name) => {
-          const n = name.toLowerCase();
-          if (n.includes("xe máy") || n.includes("xe đạp"))
-            return "quantity_based";
-          if (
-            n.includes("thang máy") ||
-            n.includes("elevator") ||
-            n.includes("vệ sinh") ||
-            n.includes("điện") ||
-            n.includes("nước") ||
-            n.includes("internet") ||
-            n.includes("wifi")
-          )
-            return "fixed_monthly";
-          return "quantity_based";
-        };
-
-        // Build a map of service id -> name for category lookup
-        const serviceNameMap = {};
-        allServices.forEach((s) => {
-          serviceNameMap[s._id.toString()] = s.name;
-        });
-
-        // Keep fixed_monthly services from existing record
-        const fixedServices = bookServiceRecord.services.filter((s) => {
-          const name = serviceNameMap[s.serviceId.toString()] || "";
-          return getCategory(name) === "fixed_monthly";
-        });
-
-        // Build new optional services entries
-        const newOptional = optionalServices.map((s) => ({
-          serviceId: s.serviceId,
-          quantity: s.quantity || 1,
-          startDate: s.startDate || contract.startDate,
-          endDate: s.endDate || null,
-        }));
-
-        bookServiceRecord.services = [...fixedServices, ...newOptional];
-        await bookServiceRecord.save({ session });
-      }
-    }
-
-    await session.commitTransaction();
-    session.endSession();
-
+    const result = await confirmContractRenewal(contractId, tenantId, extensionMonths);
     res.status(200).json({
       success: true,
-      message: "Cập nhật hợp đồng thành công.",
-      data: contract,
+      message: "Gia hạn hợp đồng thành công.",
+      data: {
+        contractId: result.contract._id,
+        newEndDate: result.newEndDate,
+        extensionMonths: result.extensionMonths,
+      },
     });
   } catch (error) {
-    await session.abortTransaction();
-    session.endSession();
-    console.error("Update Contract Error:", error);
-    res.status(500).json({
+    console.error("Confirm Renewal Error:", error);
+    res.status(400).json({
       success: false,
-      message: error.message || "Internal Server Error",
+      message: error.message || "Server Error",
+    });
+  }
+};
+
+exports.declineRenewal = async (req, res) => {
+  try {
+    const tenantId = req.user?.userId;
+    if (!tenantId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+      });
+    }
+    const { contractId } = req.body;
+    if (!contractId) {
+      return res.status(400).json({
+        success: false,
+        message: "Thiếu contractId",
+      });
+    }
+    const result = await declineContractRenewal(contractId, tenantId);
+    res.status(200).json({
+      success: true,
+      message: result.message,
+      data: {
+        contractId: result.contract._id,
+        status: result.contract.status,
+        renewalDeclined: result.contract.renewalDeclined,
+      },
+    });
+  } catch (error) {
+    console.error("Decline Renewal Error:", error);
+    res.status(400).json({
+      success: false,
+      message: error.message || "Server Error",
     });
   }
 };
