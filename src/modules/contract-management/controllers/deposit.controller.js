@@ -59,23 +59,9 @@ const createDeposit = async (req, res) => {
     // thì VẪN CHO PHÉP người mới cọc (để họ vào lấp chỗ trống ngắn hạn).
     const Contract = require("../models/contract.model");
     let allowShortTermDeposit = false;
-    let allowGuestDepositAfterTenantDecline = false;
 
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
-    // Người thuê đã từ chối gia hạn → phòng vẫn đang active nhưng có renewalDeclined
-    // → Guest được phép đặt cọc ngay
-    const tenantDeclinedContract = await Contract.findOne({
-      roomId: room,
-      status: "active",
-      renewalDeclined: { $ne: false },
-      endDate: { $gte: todayStart },
-    })
-      .select("_id contractCode")
-      .lean();
-    if (tenantDeclinedContract && existingDeposit) {
-      allowGuestDepositAfterTenantDecline = true;
-    }
 
     if (roomExists.status === "Deposited" && existingDeposit) {
       const futureContract = await Contract.findOne({
@@ -101,7 +87,7 @@ const createDeposit = async (req, res) => {
       }
     }
 
-    if (existingDeposit && !allowShortTermDeposit && !allowGuestDepositAfterTenantDecline) {
+    if (existingDeposit && !allowShortTermDeposit) {
       return res.status(400).json({
         success: false,
         message: "This room already has an active deposit",
