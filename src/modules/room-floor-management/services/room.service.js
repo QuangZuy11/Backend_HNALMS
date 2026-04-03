@@ -249,6 +249,20 @@ exports.getAllRooms = async (filters) => {
     }
   });
 
+  // Find ANY active contract that is fully activated (isActivated=true)
+  // Đây là trường hợp hợp đồng đã có hiệu lực (hoặc < 30 ngày so với ngày bắt đầu)
+  // Phòng này sẽ được xem là "Đã thuê" (Occupied) thay vì "Deposited"
+  const fullyActivatedContracts = await Contract.find({
+    status: "active",
+    isActivated: true,
+    roomId: { $in: roomIds },
+  })
+    .select("roomId")
+    .lean();
+
+  const fullyActivatedMap = {};
+  fullyActivatedContracts.forEach(c => fullyActivatedMap[c.roomId.toString()] = true);
+
   // Attach date info to rooms:
   // - Expiring soon: contractEndDate only (shows "Trống từ DD/MM")
   // - Long-term occupied: contractStartDate + contractEndDate
@@ -257,6 +271,12 @@ exports.getAllRooms = async (filters) => {
   const enrichedRooms = rooms.map((r) => {
     const obj = r.toObject();
     const roomKey = r._id.toString();
+
+    // NẾU CÓ HỢP ĐỒNG ĐÃ ĐƯỢC KÍCH HOẠT THÌ GHI ĐÈ TRẠNG THÁI PHÒNG LÀ OCCUPIED
+    if (fullyActivatedMap[roomKey]) {
+      obj.status = "Occupied";
+    }
+
     const endDate = expiryMap[roomKey];
     if (endDate) {
       // Expiring soon: only attach contractEndDate
@@ -392,6 +412,20 @@ exports.getRoomDetail = async (roomId) => {
       }
     );
     roomData.hasFloatingDeposit = hasFloatingDeposit;
+
+    // NẾU CÓ HỢP ĐỒNG ĐÃ ĐƯỢC KÍCH HOẠT THÌ GHI ĐÈ TRẠNG THÁI PHÒNG LÀ OCCUPIED
+    const fullyActivContract = await Contract.findOne({
+      roomId: room._id,
+      status: "active",
+      isActivated: true
+    }).select("_id").lean();
+
+    if (fullyActivContract) {
+       roomData.status = "Occupied";
+       // Nếu phòng đang bị Occupied thì không được xem là đang trống chờ người thuê tương lai, 
+       // tránh để FrontEnd hiển thị sai thành "Trống đến -> ..."
+       roomData.hasFutureInactiveContract = false; 
+    }
 
     return roomData;
   } catch (error) {
