@@ -139,17 +139,27 @@ exports.createContract = async (req, res) => {
       : null;
 
     if (existingUserInfo) {
-      // CCCD đã tồn tại → reuse account cũ, không tạo mới
       user = await User.findById(existingUserInfo.userId).session(session);
       if (!user) {
-        throw new Error(`Tìm thấy CCCD ${tenantInfo.cccd} nhưng tài khoản liên kết không tồn tại. Vui lòng liên hệ quản trị viên.`);
+        // User account bị xóa khỏi hệ thống → tạo mới User, reuse UserInfo cũ
+        isNewUser = true;
+        console.log(`[CREATE CONTRACT] UserInfo exists but User deleted. Creating new account for CCCD=${tenantInfo.cccd}`);
+      } else if (user.status === "inactive") {
+        // User account đang inactive (hợp đồng cũ đã thanh lý) → tạo tài khoản mới, reuse UserInfo cũ
+        isNewUser = true;
+        console.log(`[CREATE CONTRACT] Found inactive account for CCCD=${tenantInfo.cccd}. Creating new account, reusing existing UserInfo.`);
+      } else {
+        // User account đang active → reuse như cũ
+        isNewUser = false;
+        console.log(`[CREATE CONTRACT] Existing active User found by CCCD: ID=${user._id}, cccd=${tenantInfo.cccd}`);
       }
-      isNewUser = false;
-      console.log(`[CREATE CONTRACT] Existing User found by CCCD: ID=${user._id}, cccd=${tenantInfo.cccd}`);
     } else {
       // CCCD chưa tồn tại → tạo tài khoản mới ngay
       isNewUser = true;
+      console.log(`[CREATE CONTRACT] CCCD=${tenantInfo.cccd} not found. Creating new account.`);
+    }
 
+    if (isNewUser) {
       passwordRaw = generateRandomString(8);
       const hashedPassword = await bcrypt.hash(passwordRaw, 10);
 
@@ -185,16 +195,27 @@ exports.createContract = async (req, res) => {
       await user.save({ session });
       console.log(`[CREATE USER] ✅ New Tenant created with ID: ${user._id}`);
 
-      // Create UserInfo
-      const userInfo = new UserInfo({
-        userId: user._id,
-        fullname: tenantInfo.fullName,
-        cccd: tenantInfo.cccd,
-        address: tenantInfo.address,
-        dob: tenantInfo.dob,
-        gender: tenantInfo.gender || "Other",
-      });
-      await userInfo.save({ session });
+      if (existingUserInfo) {
+        // UserInfo đã tồn tại (CCCD cũ) → cập nhật liên kết userId mới
+        existingUserInfo.userId = user._id;
+        existingUserInfo.fullname = tenantInfo.fullName;
+        existingUserInfo.address = tenantInfo.address;
+        existingUserInfo.dob = tenantInfo.dob;
+        existingUserInfo.gender = tenantInfo.gender || "Other";
+        await existingUserInfo.save({ session });
+        console.log(`[CREATE USER] ✅ Reused existing UserInfo for CCCD=${tenantInfo.cccd}, linked to new user=${user._id}`);
+      } else {
+        // Tạo UserInfo hoàn toàn mới
+        const userInfo = new UserInfo({
+          userId: user._id,
+          fullname: tenantInfo.fullName,
+          cccd: tenantInfo.cccd,
+          address: tenantInfo.address,
+          dob: tenantInfo.dob,
+          gender: tenantInfo.gender || "Other",
+        });
+        await userInfo.save({ session });
+      }
     }
 
     // 3. Find the Deposit linked to this room (status = "Held")
