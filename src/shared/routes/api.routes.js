@@ -58,6 +58,7 @@ const moveOutRoutes = require("../../modules/contract-management/routes/moveout_
 const accountRoutes = require("../../modules/account-management/routes/account.routes");
 
 ApiRouter.use("/contracts", contractRoutes);
+ApiRouter.use("/renewals", require("../../modules/contract-management/routes/renewal.routes"));
 ApiRouter.use("/deposits", depositRoutes);
 ApiRouter.use("/move-outs", moveOutRoutes);
 ApiRouter.use("/accounts", accountRoutes);
