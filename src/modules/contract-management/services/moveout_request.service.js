@@ -1488,8 +1488,15 @@ class MoveOutRequestService {
 
     const tenant = await User.findById(moveOutRequest.tenantId).select("_id status");
     if (tenant && tenant.status !== "inactive") {
-      tenant.status = "inactive";
-      await tenant.save();
+      const activeContractCount = await Contract.countDocuments({
+        tenantId: moveOutRequest.tenantId,
+        _id: { $ne: moveOutRequest.contractId },
+        status: { $in: ["active", "extended"] }
+      });
+      if (activeContractCount === 0) {
+        tenant.status = "inactive";
+        await tenant.save();
+      }
     }
 
     moveOutRequest.status = "Completed";
