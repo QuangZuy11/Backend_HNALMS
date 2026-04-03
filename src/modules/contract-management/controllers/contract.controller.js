@@ -5,6 +5,7 @@ const User = require("../../authentication/models/user.model");
 const UserInfo = require("../../authentication/models/userInfor.model");
 const Deposit = require("../models/deposit.model");
 const InvoiceIncurred = require("../../invoice-management/models/invoice_incurred.model");
+const InvoicePeriodic = require("../../invoice-management/models/invoice_periodic.model");
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs"); // Ensure bcryptjs is installed
 const { checkAndSendRenewalNotifications } = require("../services/contract-renewal.service");
@@ -339,16 +340,30 @@ exports.createContract = async (req, res) => {
       const nextSeq = String(Math.floor(Math.random() * 10000)).padStart(4, '0');
       const invoiceCode = `HD-PREPAID-${datePrefix}-${nextSeq}`;
 
-      const prepaidInvoice = new InvoiceIncurred({
+      // Calculate due date based on prepay months (each month is prepaid, so due date is the end of the last prepaid month)
+      const contractStartDateObj = new Date(contractDetails.startDate);
+      const dueDate = new Date(contractStartDateObj);
+      dueDate.setMonth(dueDate.getMonth() + prepayMonths);
+      dueDate.setDate(0); // Go to last day of previous month
+
+      const prepaidInvoice = new InvoicePeriodic({
         invoiceCode,
         contractId: newContract._id,
-        repairRequestId: null,
         title: `Thanh toán tiền phòng trả trước (${prepayMonths} tháng)`,
+        items: [
+          {
+            itemName: "Tiền thuê phòng",
+            oldIndex: 0,
+            newIndex: 0,
+            usage: prepayMonths,
+            unitPrice: roomPrice,
+            amount: totalAmount,
+            isIndex: false,
+          }
+        ],
         totalAmount,
         status: "Paid",
-        type: "prepaid",
-        dueDate: new Date(),
-        images: [],
+        dueDate,
       });
       await prepaidInvoice.save({ session });
     }
