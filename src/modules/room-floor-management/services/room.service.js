@@ -249,6 +249,20 @@ exports.getAllRooms = async (filters) => {
     }
   });
 
+  // Find ANY active contract that is fully activated (isActivated=true)
+  // Đây là trường hợp hợp đồng đã có hiệu lực (hoặc < 30 ngày so với ngày bắt đầu)
+  // Phòng này sẽ được xem là "Đã thuê" (Occupied) thay vì "Deposited"
+  const fullyActivatedContracts = await Contract.find({
+    status: "active",
+    isActivated: true,
+    roomId: { $in: roomIds },
+  })
+    .select("roomId")
+    .lean();
+
+  const fullyActivatedMap = {};
+  fullyActivatedContracts.forEach(c => fullyActivatedMap[c.roomId.toString()] = true);
+
   // Attach date info to rooms:
   // - Expiring soon: contractEndDate only (shows "Trống từ DD/MM")
   // - Long-term occupied: contractStartDate + contractEndDate
@@ -257,6 +271,12 @@ exports.getAllRooms = async (filters) => {
   const enrichedRooms = rooms.map((r) => {
     const obj = r.toObject();
     const roomKey = r._id.toString();
+
+    // NẾU CÓ HỢP ĐỒNG ĐÃ ĐƯỢC KÍCH HOẠT THÌ GHI ĐÈ TRẠNG THÁI PHÒNG LÀ OCCUPIED
+    if (fullyActivatedMap[roomKey]) {
+      obj.status = "Occupied";
+    }
+
     const endDate = expiryMap[roomKey];
     if (endDate) {
       // Expiring soon: only attach contractEndDate
@@ -349,16 +369,16 @@ exports.getRoomDetail = async (roomId) => {
     }).select("startDate depositId").lean().sort({ startDate: 1 });
 
     if (futureActiveContract) {
-       roomData.futureContractStartDate = futureActiveContract.startDate;
+      roomData.futureContractStartDate = futureActiveContract.startDate;
     }
     if (futureInactiveContract) {
-       // Tính ngày trống = 1 ngày trước startDate
-       const vacantDate = new Date(futureInactiveContract.startDate);
-       vacantDate.setDate(vacantDate.getDate() - 1);
-       roomData.contractStartDate = vacantDate;
-       roomData.contractEndDate = null;
-       roomData.futureContractStartDate = futureInactiveContract.startDate;
-       roomData.hasFutureInactiveContract = true;
+      // Tính ngày trống = 1 ngày trước startDate
+      const vacantDate = new Date(futureInactiveContract.startDate);
+      vacantDate.setDate(vacantDate.getDate() - 1);
+      roomData.contractStartDate = vacantDate;
+      roomData.contractEndDate = null;
+      roomData.futureContractStartDate = futureInactiveContract.startDate;
+      roomData.hasFutureInactiveContract = true;
     }
 
     // Check for floating deposit
@@ -383,8 +403,8 @@ exports.getRoomDetail = async (roomId) => {
     const hasFloatingDeposit = heldDeposits.some(
       (d) => {
         if (!boundDepositIds.has(d._id.toString())) {
-            // Deposit không bind bất kỳ contract nào -> floating
-            return true;
+          // Deposit không bind bất kỳ contract nào -> floating
+          return true;
         }
         // Deposit bound nhưng contract là inactive -> KHÔNG coi là floating
         // Vì !hasFloatingDeposit sẽ được xử lý riêng (phòng vẫn trống)
@@ -393,21 +413,18 @@ exports.getRoomDetail = async (roomId) => {
     );
     roomData.hasFloatingDeposit = hasFloatingDeposit;
 
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    // Người thuê đã từ chối gia hạn nhưng hợp đồng vẫn active đến endDate
-    // → hiển thị "Có thể cọc ngay bây giờ" cho Guest
-    const tenantDeclinedContract = await Contract.findOne({
+    // NẾU CÓ HỢP ĐỒNG ĐÃ ĐƯỢC KÍCH HOẠT THÌ GHI ĐÈ TRẠNG THÁI PHÒNG LÀ OCCUPIED
+    const fullyActivContract = await Contract.findOne({
       roomId: room._id,
       status: "active",
-      renewalDeclined: { $ne: false },
-      endDate: { $gte: todayStart },
-    })
-      .select("endDate contractCode")
-      .lean();
-    roomData.guestCanDepositNow = Boolean(tenantDeclinedContract);
-    if (tenantDeclinedContract) {
-      roomData.currentTenantContractEndsAt = tenantDeclinedContract.endDate;
+      isActivated: true
+    }).select("_id").lean();
+
+    if (fullyActivContract) {
+      roomData.status = "Occupied";
+      // Nếu phòng đang bị Occupied thì không được xem là đang trống chờ người thuê tương lai, 
+      // tránh để FrontEnd hiển thị sai thành "Trống đến -> ..."
+      roomData.hasFutureInactiveContract = false;
     }
 
     return roomData;
