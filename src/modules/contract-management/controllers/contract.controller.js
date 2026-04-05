@@ -92,6 +92,7 @@ exports.createContract = async (req, res) => {
     // 1.8 Validate Short-term Rental (if future contract exists)
     const newContractEndDate = new Date(contractDetails.startDate);
     newContractEndDate.setMonth(newContractEndDate.getMonth() + contractDetails.duration);
+    newContractEndDate.setDate(newContractEndDate.getDate() - 1);
     
     if (futureContract) {
       const futureStartDate = new Date(futureContract.startDate);
@@ -293,6 +294,7 @@ exports.createContract = async (req, res) => {
     // 4. Create Contract Record
     const endDate = new Date(contractDetails.startDate);
     endDate.setMonth(endDate.getMonth() + contractDetails.duration);
+    endDate.setDate(endDate.getDate() - 1);
 
     const newContract = new Contract({
       contractCode: generateContractCode(room.name),
@@ -423,7 +425,7 @@ exports.createContract = async (req, res) => {
           ? `Đã tạo hợp đồng thành công. Tài khoản đã tạo nhưng sẽ được kích hoạt vào ngày ${startDateObj.toLocaleDateString("vi-VN")}. Mật khẩu đã gửi email.`
           : "Đã tạo hợp đồng thành công. Tài khoản và mật khẩu đã được gửi đến email."
         )
-      : "Tài khoản cho số điện thoại/email này đã tồn tại nên không tạo mới, hợp đồng đã được tạo thành công!";
+      : "Tài khoản cho CCCD/CMND này đã tồn tại nên không tạo mới, hợp đồng đã được tạo thành công!";
 
     res.status(201).json({
       success: true,
@@ -697,6 +699,7 @@ exports.updateContract = async (req, res) => {
       if (duration < 6) throw new Error("Thời hạn thuê tối thiểu 6 tháng.");
       const newEndDate = new Date(contract.startDate);
       newEndDate.setMonth(newEndDate.getMonth() + Number(duration));
+      newEndDate.setDate(newEndDate.getDate() - 1);
       contract.duration = Number(duration);
       contract.endDate = newEndDate;
     }
@@ -818,6 +821,7 @@ exports.updateContract = async (req, res) => {
       if (duration < 6) throw new Error("Thời hạn thuê tối thiểu 6 tháng.");
       const newEndDate = new Date(contract.startDate);
       newEndDate.setMonth(newEndDate.getMonth() + Number(duration));
+      newEndDate.setDate(newEndDate.getDate() - 1);
       contract.duration = Number(duration);
       contract.endDate = newEndDate;
     }
