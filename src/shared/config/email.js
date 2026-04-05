@@ -154,7 +154,7 @@ EMAIL_TEMPLATES.DEPOSIT_CONFIRMATION = {
           </div>
           <div class="notice">
             <strong>⏰ Lưu ý quan trọng:</strong><br/>
-            Phòng sẽ được giữ trong <strong>7 ngày</strong> kể từ hôm nay.<br/>
+            Phòng sẽ được giữ trong <strong>30 ngày</strong> kể từ hôm nay.<br/>
             Vui lòng liên hệ ban quản lý để ký hợp đồng trước khi hết thời hạn.
           </div>
           <p style="margin-top: 20px;">Trân trọng,<br><strong>Ban Quản Lý Tòa Nhà</strong></p>
