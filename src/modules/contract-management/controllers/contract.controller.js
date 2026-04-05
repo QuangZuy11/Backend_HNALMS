@@ -66,20 +66,24 @@ exports.createContract = async (req, res) => {
       }).session(session).sort({ startDate: 1 });
     }
 
-    // 1.5. Validate startDate: chỉ được tối đa 7 ngày từ khi bắt đầu cọc (nếu có deposit)
+    // 1.5. Validate startDate: >= ngày cọc, và <= 6 tháng kể từ ngày cọc (nếu có deposit)
     if (depositId) {
       const deposit = await Deposit.findById(depositId).session(session);
       if (deposit) {
         const depositCreatedDate = new Date(deposit.createdAt);
-        const maxStartDate = new Date(
-          depositCreatedDate.getTime() + 7 * 24 * 60 * 60 * 1000,
-        );
+        const maxStartDate = new Date(depositCreatedDate);
+        maxStartDate.setMonth(maxStartDate.getMonth() + 6);
         const contractStartDate = new Date(contractDetails.startDate);
 
+        if (contractStartDate < depositCreatedDate) {
+          throw new Error(
+            `Ngày bắt đầu hợp đồng (${contractStartDate.toLocaleDateString("vi-VN")}) không được trước ngày cọc (${depositCreatedDate.toLocaleDateString("vi-VN")}).`
+          );
+        }
         if (contractStartDate > maxStartDate) {
-           // We might want to bypass the 7-day rule here if we are creating a short-term rental.
-           // However, let's keep it strictly for the deposit itself to be valid.
-           // Bypassing it could allow indefinitely expired deposits to be used.
+          throw new Error(
+            `Ngày bắt đầu hợp đồng (${contractStartDate.toLocaleDateString("vi-VN")}) không được vượt quá 6 tháng kể từ ngày cọc (${depositCreatedDate.toLocaleDateString("vi-VN")}). Vui lòng chọn ngày bắt đầu trước ngày ${maxStartDate.toLocaleDateString("vi-VN")}.`
+          );
         }
       }
     }
@@ -87,7 +91,8 @@ exports.createContract = async (req, res) => {
     // 1.8 Validate Short-term Rental (if future contract exists)
     const newContractEndDate = new Date(contractDetails.startDate);
     newContractEndDate.setMonth(newContractEndDate.getMonth() + contractDetails.duration);
-    
+    newContractEndDate.setDate(newContractEndDate.getDate() - 1);
+
     if (futureContract) {
       const futureStartDate = new Date(futureContract.startDate);
       // The new rental MUST end before the future contract starts
@@ -288,6 +293,7 @@ exports.createContract = async (req, res) => {
     // 4. Create Contract Record
     const endDate = new Date(contractDetails.startDate);
     endDate.setMonth(endDate.getMonth() + contractDetails.duration);
+    endDate.setDate(endDate.getDate() - 1);
 
     const newContract = new Contract({
       contractCode: generateContractCode(room.name),
@@ -415,10 +421,10 @@ exports.createContract = async (req, res) => {
 
     const successMsg = isNewUser
       ? (tenantInitialStatus === "inactive"
-          ? `Đã tạo hợp đồng thành công. Tài khoản đã tạo nhưng sẽ được kích hoạt vào ngày ${startDateObj.toLocaleDateString("vi-VN")}. Mật khẩu đã gửi email.`
-          : "Đã tạo hợp đồng thành công. Tài khoản và mật khẩu đã được gửi đến email."
-        )
-      : "Tài khoản cho số điện thoại/email này đã tồn tại nên không tạo mới, hợp đồng đã được tạo thành công!";
+        ? `Đã tạo hợp đồng thành công. Tài khoản đã tạo nhưng sẽ được kích hoạt vào ngày ${startDateObj.toLocaleDateString("vi-VN")}. Mật khẩu đã gửi email.`
+        : "Đã tạo hợp đồng thành công. Tài khoản và mật khẩu đã được gửi đến email."
+      )
+      : "Tài khoản cho CCCD/CMND này đã tồn tại nên không tạo mới, hợp đồng đã được tạo thành công!";
 
     res.status(201).json({
       success: true,
@@ -692,6 +698,7 @@ exports.updateContract = async (req, res) => {
       if (duration < 6) throw new Error("Thời hạn thuê tối thiểu 6 tháng.");
       const newEndDate = new Date(contract.startDate);
       newEndDate.setMonth(newEndDate.getMonth() + Number(duration));
+      newEndDate.setDate(newEndDate.getDate() - 1);
       contract.duration = Number(duration);
       contract.endDate = newEndDate;
     }
@@ -791,4 +798,142 @@ exports.updateContract = async (req, res) => {
   }
 };
 
-module.exports = exports;
+// Update Contract (duration, coResidents, optional services, images)
+exports.updateContract = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { id } = req.params;
+    const { duration, coResidents, optionalServices, images } = req.body;
+
+    // 1. Find and validate contract
+    const contract = await Contract.findById(id)
+      .populate({ path: "roomId", populate: { path: "roomTypeId" } })
+      .session(session);
+    if (!contract) throw new Error("Không tìm thấy hợp đồng.");
+    if (contract.status !== "active")
+      throw new Error("Chỉ có thể sửa hợp đồng đang hiệu lực.");
+
+    // 2. Update duration & endDate if changed
+    if (duration && duration !== contract.duration) {
+      if (duration < 6) throw new Error("Thời hạn thuê tối thiểu 6 tháng.");
+      const newEndDate = new Date(contract.startDate);
+      newEndDate.setMonth(newEndDate.getMonth() + Number(duration));
+      newEndDate.setDate(newEndDate.getDate() - 1);
+      contract.duration = Number(duration);
+      contract.endDate = newEndDate;
+    }
+
+    // 3. Update co-residents if provided
+    if (coResidents !== undefined) {
+      const personMax = contract.roomId?.roomTypeId?.personMax || 1;
+      const totalPeople = (coResidents ? coResidents.length : 0) + 1;
+      if (totalPeople > personMax) {
+        throw new Error(
+          `Số người ở (${totalPeople}) vượt quá giới hạn (tối đa ${personMax} người).`,
+        );
+      }
+      contract.coResidents = coResidents;
+    }
+
+    // 4. Update images if provided
+    if (images !== undefined) {
+      if (!images || images.length === 0)
+        throw new Error("Phải có ít nhất 1 ảnh hợp đồng.");
+      contract.images = images;
+    }
+
+    await contract.save({ session });
+
+    // 5. Update optional services in BookService record
+    if (optionalServices !== undefined) {
+      const bookServiceRecord = await BookService.findOne({
+        contractId: contract._id,
+      }).session(session);
+
+      if (bookServiceRecord) {
+        // Keep all fixed_monthly services, replace only quantity_based ones
+        const Service = require("../../service-management/models/service.model");
+        const allServices = await Service.find({ isActive: true }).session(
+          session,
+        );
+
+        const getCategory = (name) => {
+          const n = name.toLowerCase();
+          if (n.includes("xe máy") || n.includes("xe đạp"))
+            return "quantity_based";
+          if (
+            n.includes("thang máy") ||
+            n.includes("elevator") ||
+            n.includes("vệ sinh") ||
+            n.includes("điện") ||
+            n.includes("nước") ||
+            n.includes("internet") ||
+            n.includes("wifi")
+          )
+            return "fixed_monthly";
+          return "quantity_based";
+        };
+
+        // Build a map of service id -> name for category lookup
+        const serviceNameMap = {};
+        allServices.forEach((s) => {
+          serviceNameMap[s._id.toString()] = s.name;
+        });
+
+        // Keep fixed_monthly services from existing record
+        const fixedServices = bookServiceRecord.services.filter((s) => {
+          const name = serviceNameMap[s.serviceId.toString()] || "";
+          return getCategory(name) === "fixed_monthly";
+        });
+
+        // Build new optional services entries
+        const newOptional = optionalServices.map((s) => ({
+          serviceId: s.serviceId,
+          quantity: s.quantity || 1,
+          startDate: s.startDate || contract.startDate,
+          endDate: s.endDate || null,
+        }));
+
+        bookServiceRecord.services = [...fixedServices, ...newOptional];
+        await bookServiceRecord.save({ session });
+      }
+    }
+
+    await session.commitTransaction();
+    session.endSession();
+
+    res.status(200).json({
+      success: true,
+      message: "Cập nhật hợp đồng thành công.",
+      data: contract,
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
+    console.error("Update Contract Error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Internal Server Error",
+    });
+  }
+};
+
+// Test: Gửi thông báo gia hạn hợp đồng thủ công
+exports.sendRenewalNotifications = async (req, res) => {
+  try {
+    console.log("[API] Gọi api gửi notification gia hạn hợp đồng...");
+    await checkAndSendRenewalNotifications();
+    res.status(200).json({
+      success: true,
+      message: "Đã chạy kiểm tra và gửi thông báo gia hạn hợp đồng",
+    });
+  } catch (error) {
+    console.error("Send Renewal Notifications Error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Internal Server Error",
+    });
+  }
+};

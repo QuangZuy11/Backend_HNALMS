@@ -180,10 +180,10 @@ const createDeposit = async (req, res) => {
               <p>Bạn đã đặt cọc thành công phòng <span class="value">${roomExists.name || roomExists.roomCode || ""}</span> tại <span class="label">Hoàng Nam Building</span>.</p>
               <ul class="info-list">
                 <li><span class="label">Số tiền cọc:</span> <span class="value">${amount.toLocaleString("vi-VN")}đ</span></li>
-                <li><span class="label">Thời gian giữ phòng:</span> <span class="value">7 ngày</span></li>
+                <li><span class="label">Thời gian giữ phòng:</span> <span class="value">30 ngày</span></li>
                 <li><span class="label">Ngày đặt cọc:</span> <span class="value">${new Date().toLocaleDateString("vi-VN")}</span></li>
               </ul>
-              <a class="cta-btn" href="#" style="pointer-events:none;">Đến ký hợp đồng trong 7 ngày</a>
+              <a class="cta-btn" href="#" style="pointer-events:none;">Đến ký hợp đồng trong 30 ngày</a>
               <div class="note">Vui lòng đến ký hợp đồng trong thời gian giữ phòng để hoàn tất thủ tục thuê phòng.<br>Đây là email tự động, vui lòng không trả lời lại email này.</div>
             </div>
             <div class="footer">Cảm ơn bạn đã tin tưởng Hoàng Nam Building!</div>

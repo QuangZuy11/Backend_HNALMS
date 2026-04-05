@@ -275,10 +275,10 @@ exports.sepayWebhook = async (req, res) => {
             return res.status(200).json({ success: true, message: "Amount mismatch" });
         }
 
-        // --- 5. Cập nhật trạng thái Deposit → "Held" + Thiết lập hết hạn 7 ngày ---
+        // --- 5. Cập nhật trạng thái Deposit → "Held" + Thiết lập hết hạn 30 ngày ---
         deposit.status = "Held";
-        // Thiết lập hết hạn = 7 ngày kể từ thanh toán thành công
-        deposit.expireAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+        // Thiết lập hết hạn = 30 ngày kể từ thanh toán thành công
+        deposit.expireAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 ngày
         await deposit.save();
 
         // --- 6. Tạo Payment record với status "Success" ---

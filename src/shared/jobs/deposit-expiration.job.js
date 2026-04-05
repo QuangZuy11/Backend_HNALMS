@@ -5,7 +5,7 @@ const Room = require("../../modules/room-floor-management/models/room.model");
 // =============================================
 // CRON JOB: Xử lý deposit hết hạn
 // 1. Pending + hết 5 phút → XÓA deposit (không tạo Payment)
-// 2. Held + quá 7 ngày:
+// 2. Held + quá 30 ngày:
 //    - Không có contract liên kết → Expired, Room → Available
 //    - Có contract liên kết nhưng chưa activate (status="inactive"|"active" && isActivated=false) → Reset timer (không expire)
 //    - activationStatus = false (contract bị xóa/chưa ký) → Expired
@@ -13,7 +13,7 @@ const Room = require("../../modules/room-floor-management/models/room.model");
 // =============================================
 
 const INTERVAL_MS = 60 * 1000; // 1 phút
-const HOLD_PERIOD_DAYS = 7; // Thời gian giữ cọc tối đa (chỉ áp dụng khi không có contract chờ activate)
+const HOLD_PERIOD_DAYS = 30; // Thời gian giữ cọc tối đa (chỉ áp dụng khi không có contract chờ activate)
 
 const processExpiredDeposits = async () => {
     try {
@@ -31,7 +31,7 @@ const processExpiredDeposits = async () => {
             console.log(`[CRON] 🗑️ Deposit ${deposit.transactionCode} → Deleted (timeout 5 min)`);
         }
 
-        // ========== 2. Xử lý Held quá 7 ngày (chưa gán hợp đồng) ==========
+        // ========== 2. Xử lý Held quá 30 ngày ==========
         const sevenDaysAgo = new Date(now.getTime() - HOLD_PERIOD_DAYS * 24 * 60 * 60 * 1000);
         const heldExpired = await Deposit.find({
             status: "Held",
@@ -73,7 +73,7 @@ const processExpiredDeposits = async () => {
             // Cập nhật Room → Available (chỉ khi không có contract active nào đang giữ phòng)
             await Room.findByIdAndUpdate(deposit.room, { status: "Available" });
 
-            console.log(`[CRON] ⏰ Deposit ${deposit.transactionCode} → Expired (over 7 days, no active contract)`);
+            console.log(`[CRON] ⏰ Deposit ${deposit.transactionCode} → Expired (over 30 days, no active contract)`);
         }
     } catch (error) {
         console.error("[CRON] ❌ Lỗi xử lý deposit:", error.message);
