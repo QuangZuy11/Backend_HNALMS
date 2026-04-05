@@ -67,20 +67,24 @@ exports.createContract = async (req, res) => {
       }).session(session).sort({ startDate: 1 });
     }
 
-    // 1.5. Validate startDate: chỉ được tối đa 7 ngày từ khi bắt đầu cọc (nếu có deposit)
+    // 1.5. Validate startDate: >= ngày cọc, và <= 6 tháng kể từ ngày cọc (nếu có deposit)
     if (depositId) {
       const deposit = await Deposit.findById(depositId).session(session);
       if (deposit) {
         const depositCreatedDate = new Date(deposit.createdAt);
-        const maxStartDate = new Date(
-          depositCreatedDate.getTime() + 7 * 24 * 60 * 60 * 1000,
-        );
+        const maxStartDate = new Date(depositCreatedDate);
+        maxStartDate.setMonth(maxStartDate.getMonth() + 6);
         const contractStartDate = new Date(contractDetails.startDate);
 
+        if (contractStartDate < depositCreatedDate) {
+          throw new Error(
+            `Ngày bắt đầu hợp đồng (${contractStartDate.toLocaleDateString("vi-VN")}) không được trước ngày cọc (${depositCreatedDate.toLocaleDateString("vi-VN")}).`
+          );
+        }
         if (contractStartDate > maxStartDate) {
-           // We might want to bypass the 7-day rule here if we are creating a short-term rental.
-           // However, let's keep it strictly for the deposit itself to be valid.
-           // Bypassing it could allow indefinitely expired deposits to be used.
+          throw new Error(
+            `Ngày bắt đầu hợp đồng (${contractStartDate.toLocaleDateString("vi-VN")}) không được vượt quá 6 tháng kể từ ngày cọc (${depositCreatedDate.toLocaleDateString("vi-VN")}). Vui lòng chọn ngày bắt đầu trước ngày ${maxStartDate.toLocaleDateString("vi-VN")}.`
+          );
         }
       }
     }
