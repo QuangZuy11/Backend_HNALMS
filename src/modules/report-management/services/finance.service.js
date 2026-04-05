@@ -1,6 +1,7 @@
 const InvoicePeriodic = require("../../invoice-management/models/invoice_periodic.model");
 const InvoiceIncurred = require("../../invoice-management/models/invoice_incurred.model");
 const FinancialTicket = require("../../managing-income-expenses/models/financial_tickets");
+const Deposit = require("../../contract-management/models/deposit.model"); 
 
 class FinanceService {
   async getDashboardData(month, year) {
@@ -21,10 +22,15 @@ class FinanceService {
         createdAt: { $gte: startOfMonth, $lte: endOfMonth } 
     }).populate({ path: 'contractId', select: 'roomId', populate: { path: 'roomId', select: 'name' } });
 
-    // Lấy phiếu chi (expense) có trạng thái hoàn thành/đã chi
     const financialTickets = await FinancialTicket.find({ 
         transactionDate: { $gte: startOfMonth, $lte: endOfMonth },
-        status: { $in: ["Completed", "Paid", "Approved"] } // Tùy chỉnh theo trạng thái thực tế của bạn
+        status: { $in: ["Completed", "Paid", "Approved"] } 
+    });
+
+    // [MỚI] Query tiền cọc giữ chỗ đã QUÁ HẠN / BỎ CỌC trong tháng hiện tại
+    const forfeitedDeposits = await Deposit.find({
+        status: { $in: ["Expired", "Forfeited"] }, // Lấy các trạng thái khách mất cọc
+        updatedAt: { $gte: startOfMonth, $lte: endOfMonth } // Tính theo ngày cọc hết hạn/bị hủy
     });
 
     // ==========================================
@@ -35,9 +41,10 @@ class FinanceService {
     let totalDebtPeriodic = 0;
     let totalDebtIncurred = 0;
 
-    // [MỚI] Khai báo thêm 2 biến để bóc tách hóa đơn phát sinh
     let prepaidRentRev = 0;     // Tiền phòng trả trước
-    let actualIncurredRev = 0;  // Tiền phạt, sửa chữa thực tế
+    let violationRev = 0;       // Tiền phạt, vi phạm
+    let repairRev = 0;          // Tiền sửa chữa
+    let guestDepositRev = 0;    // [MỚI] Tiền khách bỏ cọc
 
     periodicInvoices.forEach(inv => {
       if (inv.status === "Paid") totalRevenuePeriodic += inv.totalAmount;
@@ -46,20 +53,26 @@ class FinanceService {
 
     incurredInvoices.forEach(inv => {
       if (inv.status === "Paid") {
-          totalRevenueIncurred += inv.totalAmount; // Vẫn cộng vào tổng thu
+          totalRevenueIncurred += inv.totalAmount; 
           
-          // [MỚI] Bóc tách dữ liệu cho Biểu đồ tròn
           if (inv.type === "prepaid") {
               prepaidRentRev += inv.totalAmount;
+          } else if (inv.type === "violation") {
+              violationRev += inv.totalAmount;
           } else {
-              // Các type còn lại (violation, repair) sẽ vào đây
-              actualIncurredRev += inv.totalAmount;
+              repairRev += inv.totalAmount;
           }
       }
       if (inv.status === "Unpaid") totalDebtIncurred += inv.totalAmount;
     });
 
-    const totalRevenue = totalRevenuePeriodic + totalRevenueIncurred;
+    // [MỚI] Tính tổng tiền khách bỏ cọc
+    forfeitedDeposits.forEach(dep => {
+        guestDepositRev += dep.amount;
+    });
+
+    // [CẬP NHẬT] Tổng thu bằng Định kỳ + Phát sinh + Tiền mất cọc
+    const totalRevenue = totalRevenuePeriodic + totalRevenueIncurred + guestDepositRev;
     const totalDebt = totalDebtPeriodic + totalDebtIncurred;
     const totalExpense = financialTickets.reduce((sum, ticket) => sum + ticket.amount, 0);
     const netProfit = totalRevenue - totalExpense;
@@ -80,15 +93,16 @@ class FinanceService {
       }
     });
 
-    // [ĐÃ SỬA] Cập nhật mảng trả về cho Frontend
     const revenueBreakdown = [
       { name: "Tiền phòng (Định kỳ)", value: rentRev },
-      { name: "Tiền phòng trả trước", value: prepaidRentRev }, // [MỚI] Tách riêng
+      { name: "Tiền phòng trả trước", value: prepaidRentRev }, 
       { name: "Tiền điện", value: elecRev },
       { name: "Tiền nước", value: waterRev },
       { name: "Dịch vụ khác", value: serviceRev },
-      { name: "Phạt & Sửa chữa", value: actualIncurredRev } // [ĐÃ ĐỔI TÊN] Chỉ còn tiền phạt/sửa chữa
-    ].filter(item => item.value > 0); // Chỉ lấy những mục có tiền
+      { name: "Phạt vi phạm", value: violationRev }, 
+      { name: "Đền bù sửa chữa", value: repairRev },
+      { name: "Khách bỏ cọc giữ chỗ", value: guestDepositRev } // [MỚI] Hiển thị khoản thu "trên trời" này
+    ].filter(item => item.value > 0); 
 
     // ==========================================
     // 4. LẤY BIỂU ĐỒ 6 THÁNG GẦN NHẤT (BAR CHART)
@@ -108,12 +122,15 @@ class FinanceService {
       const pInv = await InvoicePeriodic.find({ createdAt: { $gte: sDate, $lte: eDate }, status: "Paid" });
       const iInv = await InvoiceIncurred.find({ createdAt: { $gte: sDate, $lte: eDate }, status: "Paid" });
       const tix = await FinancialTicket.find({ transactionDate: { $gte: sDate, $lte: eDate }, status: { $in: ["Completed", "Paid", "Approved"] } });
+      const lostDeps = await Deposit.find({ status: { $in: ["Expired", "Forfeited"] }, updatedAt: { $gte: sDate, $lte: eDate } }); // [MỚI]
 
-      const rev = pInv.reduce((s, x) => s + x.totalAmount, 0) + iInv.reduce((s, x) => s + x.totalAmount, 0);
+      const rev = pInv.reduce((s, x) => s + x.totalAmount, 0) + 
+                  iInv.reduce((s, x) => s + x.totalAmount, 0) + 
+                  lostDeps.reduce((s, x) => s + x.amount, 0); // [MỚI] Cộng vào doanh thu tháng
       const exp = tix.reduce((s, x) => s + x.amount, 0);
 
       chartData.push({
-        month: `T${m}/${y.toString().slice(-2)}`, // Format: T3/26
+        month: `T${m}/${y.toString().slice(-2)}`, 
         revenue: rev,
         expense: exp
       });
@@ -130,7 +147,7 @@ class FinanceService {
     const topDebts = [...periodicInvoices, ...incurredInvoices]
       .filter(inv => inv.status === "Unpaid")
       .sort((a, b) => b.totalAmount - a.totalAmount)
-      .slice(0, 5) // Chỉ lấy top 5
+      .slice(0, 5) 
       .map(inv => ({
         code: inv.invoiceCode,
         room: getRoomName(inv),
@@ -148,31 +165,41 @@ class FinanceService {
     };
   }
 
+  // ==========================================
+  // BÁO CÁO DÒNG TIỀN (CASH FLOW)
+  // ==========================================
   async getCashflowReport(startDate, endDate) {
     const start = new Date(startDate);
     start.setHours(0, 0, 0, 0);
     const end = new Date(endDate);
     end.setHours(23, 59, 59, 999);
 
-    // 1. Lấy tất cả Hóa đơn Định kỳ (Phòng, Điện, Nước, Dịch vụ)
     const periodicInvoices = await InvoicePeriodic.find({
       createdAt: { $gte: start, $lte: end },
-      status: { $ne: "Draft" } // Bỏ qua bản nháp, kế toán chỉ quan tâm cái đã chốt
+      status: { $ne: "Draft" } 
     }).populate({ path: 'contractId', select: 'roomId', populate: { path: 'roomId', select: 'name' } });
 
-    // 2. Lấy Hóa đơn Phát sinh (Phạt, Sửa chữa, Trả trước)
     const incurredInvoices = await InvoiceIncurred.find({
       createdAt: { $gte: start, $lte: end },
       status: { $ne: "Draft" }
     }).populate({ path: 'contractId', select: 'roomId', populate: { path: 'roomId', select: 'name' } });
 
-    // 3. Lấy Phiếu Chi
     const financialTickets = await FinancialTicket.find({
       transactionDate: { $gte: start, $lte: end },
       status: { $in: ["Completed", "Paid", "Approved"] }
     });
 
-    // 4. XỬ LÝ DỮ LIỆU ĐỂ ĐỔ RA BẢNG (FLATTEN DATA)
+    // [MỚI] Lấy các khoản cọc khách đưa (Tiền vào)
+    const incomingDeposits = await Deposit.find({
+        createdAt: { $gte: start, $lte: end }
+    }).populate('room');
+
+    // [MỚI] Lấy các khoản cọc trả lại khách (Tiền ra)
+    const refundedDeposits = await Deposit.find({
+        status: "Refunded",
+        refundDate: { $gte: start, $lte: end }
+    }).populate('room');
+
     let ledger = [];
     let summary = {
       expectedRevenue: 0,
@@ -199,7 +226,6 @@ class FinanceService {
         room: getRoomName(inv),
         transactionType: inv.status === "Paid" ? "THU" : "NỢ",
         category: "Định kỳ (Phòng, Điện, Nước...)",
-        // [MỚI] Thêm Hình thức thanh toán và Ghi chú
         paymentMethod: inv.paymentMethod || (inv.status === "Paid" ? "Chuyển khoản" : "-"),
         description: inv.title || "Thu tiền định kỳ", 
         inflow: inv.totalAmount,
@@ -223,7 +249,6 @@ class FinanceService {
         room: getRoomName(inv),
         transactionType: inv.status === "Paid" ? "THU" : "NỢ",
         category: catName,
-        // [MỚI] Thêm Hình thức thanh toán và Ghi chú
         paymentMethod: inv.paymentMethod || (inv.status === "Paid" ? "Chuyển khoản" : "-"),
         description: inv.title || "Thu tiền phát sinh",
         inflow: inv.totalAmount,
@@ -242,14 +267,51 @@ class FinanceService {
         date: ticket.transactionDate,
         room: "Tòa nhà (Chung)",
         transactionType: "CHI",
-        category: "Chi phí vận hành", // Cố định loại category cho phiếu chi
-        // [MỚI] Thêm Hình thức thanh toán và Ghi chú (Lấy title của ticket làm diễn giải)
+        category: "Chi phí vận hành", 
         paymentMethod: ticket.paymentMethod || "-",
         description: ticket.title + (ticket.rejectionReason ? ` (Lý do: ${ticket.rejectionReason})` : ""),
         inflow: 0,
         outflow: ticket.amount,
         status: ticket.status
       });
+    });
+
+    // [MỚI] --- Bóc tách Cọc giữ chỗ (Tiền vào quỹ nhưng CHƯA PHẢI DOANH THU) ---
+    incomingDeposits.forEach(dep => {
+        summary.actualCollected += dep.amount; // Tăng tồn quỹ
+        
+        ledger.push({
+            id: dep._id,
+            code: dep.transactionCode || "DEP-" + dep._id.toString().slice(-5).toUpperCase(),
+            date: dep.createdAt, // Ngày thu cọc
+            room: dep.room ? dep.room.name : "N/A",
+            transactionType: "THU",
+            category: "Thu cọc giữ chỗ (Khách ngoài)",
+            paymentMethod: "Chuyển khoản",
+            description: `Nhận cọc giữ chỗ của ${dep.name} - SĐT: ${dep.phone}`,
+            inflow: dep.amount,
+            outflow: 0,
+            status: "Đã thu" // Đã cầm tiền
+        });
+    });
+
+    // [MỚI] --- Bóc tách Hoàn Cọc (Tiền ra khỏi quỹ) ---
+    refundedDeposits.forEach(dep => {
+        summary.actualExpense += dep.amount; // Giảm tồn quỹ
+        
+        ledger.push({
+            id: dep._id,
+            code: dep.transactionCode || "REF-" + dep._id.toString().slice(-5).toUpperCase(),
+            date: dep.refundDate, // Ngày trả cọc
+            room: dep.room ? dep.room.name : "N/A",
+            transactionType: "CHI",
+            category: "Hoàn cọc giữ chỗ",
+            paymentMethod: "Chuyển khoản",
+            description: `Trả lại tiền cọc giữ chỗ cho ${dep.name}`,
+            inflow: 0,
+            outflow: dep.amount,
+            status: "Đã chi"
+        });
     });
 
     // Sắp xếp chứng từ theo thời gian mới nhất lên đầu
@@ -266,38 +328,44 @@ class FinanceService {
       ledger
     };
   }
+
+  // ==========================================
   // LẤY BÁO CÁO KẾT QUẢ KINH DOANH (P&L / REVENUE REPORT)
+  // ==========================================
   async getRevenueReport(startDate, endDate) {
     const start = new Date(startDate);
     start.setHours(0, 0, 0, 0);
     const end = new Date(endDate);
     end.setHours(23, 59, 59, 999);
 
-    // 1. Lấy Hóa đơn Định kỳ (Bao gồm cả Paid và Unpaid, miễn không phải Draft)
     const periodicInvoices = await InvoicePeriodic.find({
       createdAt: { $gte: start, $lte: end },
       status: { $ne: "Draft" }
     }).populate({ path: 'contractId', select: 'roomId', populate: { path: 'roomId', select: 'name' } });
 
-    // 2. Lấy Hóa đơn Phát sinh (LOẠI BỎ PREPAID vì trả trước không tính là doanh thu kỳ này)
     const incurredInvoices = await InvoiceIncurred.find({
       createdAt: { $gte: start, $lte: end },
       status: { $ne: "Draft" },
-      type: { $ne: "prepaid" } // Quan trọng: Bỏ qua tiền trả trước
+      type: { $ne: "prepaid" } 
     }).populate({ path: 'contractId', select: 'roomId', populate: { path: 'roomId', select: 'name' } });
 
-    // 3. Lấy Phiếu Chi (Chi phí ghi nhận trong kỳ)
     const financialTickets = await FinancialTicket.find({
       transactionDate: { $gte: start, $lte: end },
       status: { $in: ["Completed", "Paid", "Approved"] }
     });
 
+    // [MỚI] Lấy các cọc khách bỏ / vi phạm trong kỳ (ĐƯỢC GHI NHẬN LÀ DOANH THU)
+    const forfeitedDeposits = await Deposit.find({
+        status: { $in: ["Expired", "Forfeited"] },
+        updatedAt: { $gte: start, $lte: end }
+    }).populate('room');
+
     let pnlLedger = [];
     let summary = {
-      recognizedRevenue: 0, // Doanh thu ghi nhận
-      recognizedExpense: 0, // Chi phí ghi nhận
-      netProfit: 0,         // Lợi nhuận gộp
-      profitMargin: 0       // Tỷ suất lợi nhuận (%)
+      recognizedRevenue: 0, 
+      recognizedExpense: 0, 
+      netProfit: 0,         
+      profitMargin: 0       
     };
 
     const getRoomName = (inv) => {
@@ -305,7 +373,6 @@ class FinanceService {
         return "N/A";
     };
 
-    // --- Ghi nhận Doanh thu Định kỳ ---
     periodicInvoices.forEach(inv => {
       summary.recognizedRevenue += inv.totalAmount;
       pnlLedger.push({
@@ -321,7 +388,6 @@ class FinanceService {
       });
     });
 
-    // --- Ghi nhận Doanh thu Phát sinh (Chỉ tính Phạt/Sửa chữa) ---
     incurredInvoices.forEach(inv => {
       summary.recognizedRevenue += inv.totalAmount;
       pnlLedger.push({
@@ -337,7 +403,23 @@ class FinanceService {
       });
     });
 
-    // --- Ghi nhận Chi phí ---
+    // [MỚI] --- Ghi nhận Doanh thu từ Cọc Khách Bỏ ---
+    forfeitedDeposits.forEach(dep => {
+        summary.recognizedRevenue += dep.amount; // Cộng vào tổng Lợi nhuận
+        
+        pnlLedger.push({
+            id: dep._id,
+            date: dep.updatedAt, // Ngày chính thức chuyển thành doanh thu
+            code: dep.transactionCode || "DEP-" + dep._id.toString().slice(-5).toUpperCase(),
+            room: dep.room ? dep.room.name : "N/A",
+            description: `Thu tiền cọc giữ chỗ do khách bỏ/quá hạn (${dep.name})`,
+            category: "Doanh thu Mất cọc",
+            revenue: dep.amount,
+            expense: 0,
+            status: "Đã thu tiền"
+        });
+    });
+
     financialTickets.forEach(ticket => {
       summary.recognizedExpense += ticket.amount;
       pnlLedger.push({

@@ -2,15 +2,16 @@ const mongoose = require("mongoose");
 
 const { Schema } = mongoose;
 
+/**
+ * financial_tickets
+ * - amount: number
+ * - title: string
+ * - referenceId: ObjectId (tham chiếu tới bản ghi nguồn, ví dụ: RepairRequest)
+ * - status: string (ví dụ: 'Created', 'Completed', ...)
+ * - transactionDate: Date
+ */
 const FinancialTicketSchema = new Schema(
   {
-    // Phân loại phiếu để tách biệt Chi phí và Rút vốn
-    ticketType: {
-      type: String,
-      enum: ['Expense', 'OwnerRemittance'], 
-      default: 'Expense',
-    },
-    
     amount: {
       type: Number,
       required: true,
@@ -26,32 +27,26 @@ const FinancialTicketSchema = new Schema(
       ref: "InvoiceIncurred",
       default: null,
     },
-    
-    // Trạng thái chung cho các loại phiếu
     status: {
       type: String,
-      enum: ['Created', 'Pending', 'Completed', 'Rejected'], 
       default: "Created",
       trim: true,
     },
-    
+    // Ngày kế toán xác nhận đã thanh toán (chỉ dùng cho Payment)
     accountantPaidAt: {
       type: Date,
       default: null,
     },
-    
     paymentVoucher: {
-      type: String, 
+      type: String,
       default: null,
       index: true,
     },
-    
     rejectionReason: {
       type: String,
       default: null,
       trim: true,
     },
-
     transactionDate: {
       type: Date,
       default: Date.now,
