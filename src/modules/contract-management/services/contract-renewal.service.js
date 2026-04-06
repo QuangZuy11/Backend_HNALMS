@@ -1,11 +1,9 @@
 const Contract = require("../models/contract.model");
-const Deposit = require("../models/deposit.model");
 const Notification = require("../../notification-management/models/notification.model");
 const ContractNotificationLog = require("../models/contract-notification-log.model");
 const User = require("../../authentication/models/user.model");
 const PriceHistory = require("../../room-floor-management/models/pricehistory.model");
 
-// Cấu hình các mốc thời gian gửi notification
 const REMINDER_CONFIGS = [
     { type: "1_month", days: 30 },
     { type: "2_weeks", days: 14 },
@@ -39,12 +37,19 @@ function daysUntilContractEndUtc(endDate) {
     return Math.floor((end.getTime() - today.getTime()) / (24 * 60 * 60 * 1000));
 }
 
-/**
- * Kiểm tra xem hợp đồng có đang trong cửa sổ 30/14/7 ngày không (tính từ endDate hiện tại).
- */
 function isInRenewalWindow(endDate) {
     const daysLeft = daysUntilContractEndUtc(endDate);
     return daysLeft === 30 || daysLeft === 14 || (daysLeft >= 0 && daysLeft <= 7);
+}
+
+function formatDate(date) {
+    if (!date) return "";
+    const d = new Date(date);
+    return d.toLocaleDateString("vi-VN", {
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric"
+    });
 }
 
 async function getRoomTypePriceAtContractStart(roomTypeId, contractStartDate) {
@@ -77,18 +82,21 @@ async function buildRenewalPreviewPayload(contract) {
 
     const daysLeft = daysUntilContractEndUtc(contract.endDate);
     const inWindow = isInRenewalWindow(contract.endDate);
+
     const canRenew =
         contract.status === "active" &&
         daysLeft >= 0 &&
-        inWindow &&
-        !contract.renewalDeclined;
-    let blockingReason = null;
+        inWindow;
 
-    if (!canRenew) {
-        if (contract.renewalDeclined) blockingReason = "Bạn đã từ chối gia hạn hợp đồng này.";
-        else if (!inWindow) blockingReason = "Chỉ có thể gia hạn khi hợp đồng còn 30, 14 hoặc 7 ngày.";
-        else if (contract.status !== "active") blockingReason = "Hợp đồng không ở trạng thái cho phép gia hạn.";
-        else if (daysLeft < 0) blockingReason = "Hợp đồng đã hết hạn.";
+    let blockingReason = null;
+    if (contract.renewalStatus === "declined") {
+        blockingReason = "Bạn đã từ chối gia hạn hợp đồng này. Không thể gia hạn thêm.";
+    } else if (!inWindow) {
+        blockingReason = "Chỉ có thể gia hạn/từ chối khi hợp đồng còn 30, 14 hoặc 7 ngày.";
+    } else if (contract.status !== "active") {
+        blockingReason = "Hợp đồng không ở trạng thái cho phép gia hạn.";
+    } else if (daysLeft < 0) {
+        blockingReason = "Hợp đồng đã hết hạn.";
     }
 
     return {
@@ -106,12 +114,13 @@ async function buildRenewalPreviewPayload(contract) {
         canRenew,
         declineRenewalAvailable:
             contract.status === "active" &&
-            !contract.renewalDeclined &&
+            !contract.renewalStatus &&
             daysLeft >= 0 &&
             inWindow,
         renewalWindowDaysRemaining: daysLeft,
         contractStatus: contract.status,
-        blockingReason
+        blockingReason,
+        renewalStatus: contract.renewalStatus || null,
     };
 }
 
@@ -158,10 +167,6 @@ async function notifyManagersAndTenant({ managerTitle, managerContent, tenantId,
     }
 }
 
-/**
- * Check và gửi notification gia hạn hợp đồng
- * Chạy mỗi ngày để kiểm tra các contract sắp hết hạn
- */
 async function checkAndSendRenewalNotifications() {
     console.log("[CONTRACT RENEWAL] Bắt đầu kiểm tra gia hạn hợp đồng...");
 
@@ -176,17 +181,11 @@ async function checkAndSendRenewalNotifications() {
 
     const contracts = await Contract.find({
         status: "active",
-        endDate: {
-            $gte: today,
-            $lte: maxDate
-        }
+        renewalStatus: { $ne: "declined" },
+        endDate: { $gte: today, $lte: maxDate }
     }).populate("tenantId").populate("roomId", "name");
 
     console.log(`[CONTRACT RENEWAL] Tìm thấy ${contracts.length} hợp đồng sắp hết hạn`);
-
-    for (const c of contracts) {
-        console.log(`[CONTRACT RENEWAL] Contract: ${c.contractCode}, endDate: ${c.endDate}, renewalDeclined: ${c.renewalDeclined}`);
-    }
 
     let sentCount = 0;
     let skippedCount = 0;
@@ -203,13 +202,9 @@ async function checkAndSendRenewalNotifications() {
             targetDate.setUTCHours(0, 0, 0, 0);
 
             if (today.getTime() >= targetDate.getTime()) {
-                console.log(`[CONTRACT RENEWAL] Target date for ${config.type}: ${targetDate.toISOString()}, Today: ${today.toISOString()}`);
                 const result = await sendRenewalNotification(contract, config);
-                if (result) {
-                    sentCount++;
-                } else {
-                    skippedCount++;
-                }
+                if (result) sentCount++;
+                else skippedCount++;
             }
         }
     }
@@ -217,9 +212,6 @@ async function checkAndSendRenewalNotifications() {
     console.log(`[CONTRACT RENEWAL] Hoàn thành: Đã gửi ${sentCount} notification, bỏ qua ${skippedCount} notification đã gửi trước đó`);
 }
 
-/**
- * Gửi notification gia hạn cho một contract cụ thể
- */
 async function sendRenewalNotification(contract, config) {
     try {
         const logResult = await ContractNotificationLog.updateOne(
@@ -248,8 +240,8 @@ async function sendRenewalNotification(contract, config) {
         const content = `Hợp đồng thuê phòng ${contract.contractCode} sẽ hết hạn sau ${config.days} ngày (${formatDate(contract.endDate)}). Vui lòng liên hệ Quản Lý để gia hạn hoặc truy cập vào mục Gia Hạn Hợp Đồng trên ứng dụng. Xin Cảm Ơn !`;
 
         const notification = new Notification({
-            title: title,
-            content: content,
+            title,
+            content,
             type: "system",
             status: "sent",
             created_by: null,
@@ -263,15 +255,8 @@ async function sendRenewalNotification(contract, config) {
         await notification.save();
 
         await ContractNotificationLog.updateOne(
-            {
-                contractId: contract._id,
-                reminderType: config.type
-            },
-            {
-                $set: {
-                    notificationId: notification._id
-                }
-            }
+            { contractId: contract._id, reminderType: config.type },
+            { $set: { notificationId: notification._id } }
         );
 
         console.log(`[CONTRACT RENEWAL] Đã gửi notification ${config.type} cho contract ${contract.contractCode} - Tenant: ${contract.tenantId.fullName || contract.tenantId.email}`);
@@ -281,19 +266,6 @@ async function sendRenewalNotification(contract, config) {
         console.error(`[CONTRACT RENEWAL] Lỗi gửi notification cho contract ${contract.contractCode}:`, error.message);
         return false;
     }
-}
-
-/**
- * Format ngày sang dạng Việt Nam
- */
-function formatDate(date) {
-    if (!date) return "";
-    const d = new Date(date);
-    return d.toLocaleDateString("vi-VN", {
-        day: "2-digit",
-        month: "2-digit",
-        year: "numeric"
-    });
 }
 
 async function getRenewalPreviewForTenant(contractId, tenantId) {
@@ -336,21 +308,21 @@ async function confirmContractRenewal(contractId, tenantId, extensionMonths) {
     if (contract.status !== "active") {
         throw new Error("Chỉ có thể xác nhận gia hạn khi hợp đồng đang hiệu lực.");
     }
-
-    const daysLeft = daysUntilContractEndUtc(contract.endDate);
-    if (daysLeft < 0) throw new Error("Hợp đồng đã hết hạn.");
-    if (daysLeft !== 30 && daysLeft !== 14 && daysLeft > 7) {
-        throw new Error("Chỉ có thể gia hạn khi hợp đồng còn 30, 14 hoặc 7 ngày.");
-    }
-    if (contract.renewalDeclined) {
+    if (contract.renewalStatus === "declined") {
         throw new Error("Bạn đã từ chối gia hạn hợp đồng này, không thể gia hạn.");
     }
 
+    const daysLeft = daysUntilContractEndUtc(contract.endDate);
+    if (daysLeft < 0) throw new Error("Hợp đồng đã hết hạn.");
+    if (!isInRenewalWindow(contract.endDate)) {
+        throw new Error("Chỉ có thể gia hạn khi hợp đồng còn 30, 14 hoặc 7 ngày.");
+    }
+
+    // Gia hạn: update endDate và duration (không set renewalStatus để cho phép gia hạn nhiều lần)
     const newEnd = new Date(contract.endDate);
     newEnd.setMonth(newEnd.getMonth() + months);
     contract.endDate = newEnd;
     contract.duration = (contract.duration || 0) + months;
-    contract.renewalDeclined = false;
     await contract.save();
 
     const roomName = contract.roomId?.name || "";
@@ -381,21 +353,21 @@ async function declineContractRenewal(contractId, tenantId) {
     if (contract.status !== "active") {
         throw new Error("Chỉ có thể từ chối gia hạn khi hợp đồng đang hiệu lực.");
     }
+    if (contract.renewalStatus === "declined") {
+        throw new Error("Bạn đã từ chối gia hạn rồi. Không thể thay đổi quyết định.");
+    }
 
     const daysLeft = daysUntilContractEndUtc(contract.endDate);
     if (daysLeft < 0) throw new Error("Hợp đồng đã hết hạn.");
-    if (daysLeft !== 30 && daysLeft !== 14 && daysLeft > 7) {
+    if (!isInRenewalWindow(contract.endDate)) {
         throw new Error("Chỉ có thể từ chối gia hạn khi hợp đồng còn 30, 14 hoặc 7 ngày.");
     }
-    if (contract.renewalDeclined) {
-        throw new Error("Bạn đã từ chối gia hạn rồi.");
-    }
 
-    contract.renewalDeclined = true;
+    contract.renewalStatus = "declined";
     await contract.save();
 
     const roomName = contract.roomId?.name || "";
-    const msg = `Bạn đã từ chối gia hạn hợp đồng ${contract.contractCode} (phòng ${roomName}). Bạn vẫn ở đến hết ngày ${formatDate(contract.endDate)}. Khách (Guest) có thể đặt cọc phòng cho kỳ tiếp theo.`;
+    const msg = `Bạn đã từ chối gia hạn hợp đồng ${contract.contractCode} (phòng ${roomName}). Bạn vẫn ở đến hết ngày ${formatDate(contract.endDate)}. Vui lòng trả phòng khi hết hạn.`;
 
     await notifyManagersAndTenant({
         managerTitle: `Từ chối gia hạn — ${roomName}`,
