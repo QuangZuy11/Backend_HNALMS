@@ -55,6 +55,14 @@ const MoveOutRequestSchema = new Schema({
     default: false // true → mất cọc (không đủ điều kiện hoàn)
   },
 
+  // === Thông tin gap contract ===
+  // 🆕 Cờ xác định yêu cầu trả phòng này thuộc gap contract
+  // Gap contract = người thuê trong khoảng trống, LUÔN được hoàn cọc
+  isGapContract: {
+    type: Boolean,
+    default: false
+  },
+
   // === Thông tin hóa đơn cuối ===
   finalInvoiceId: {
     type: Schema.Types.ObjectId,

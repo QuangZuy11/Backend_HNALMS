@@ -52,6 +52,20 @@ class MoveOutRequestController {
       const moveOutRequest = serviceResult;
 
       const warnings = [];
+
+      // Kiểm tra xem có phải gap contract không
+      // Trường hợp 1: Khi requiresConfirmation=false → moveOutRequest là MongoDB doc (đã có isGapContract)
+      // Trường hợp 2: Khi requiresConfirmation=true → serviceResult.data có isGapContract
+      const isGapContract = moveOutRequest.isGapContract
+        || serviceResult.data?.isGapContract;
+
+      if (isGapContract) {
+        warnings.push({
+          type: "gap_contract_deposit_protection",
+          message: "Bạn là người thuê trong khoảng trống (gap contract). Bạn LUÔN ĐƯỢC hoàn cọc khi trả phòng, không phụ thuộc vào thời gian báo trước hay thời gian ở."
+        });
+      }
+
       if (moveOutRequest.isEarlyNotice) {
         warnings.push({
           type: "early_notice",
@@ -69,7 +83,8 @@ class MoveOutRequestController {
         success: true,
         message: "Yêu cầu trả phòng đã được tạo. Quản lý sẽ liên hệ và phát hành hóa đơn cuối.",
         data: moveOutRequest,
-        warnings
+        warnings,
+        isGapContract
       });
     } catch (error) {
       console.error(`[MOVEOUT CTRL] ❌ Lỗi tạo yêu cầu:`, error.message);
@@ -98,6 +113,9 @@ class MoveOutRequestController {
       if (contract.status !== "active")
         return res.status(400).json({ success: false, message: "Hợp đồng không ở trạng thái hoạt động" });
 
+      // Kiểm tra gap contract để mobile suppress cảnh báo mất cọc
+      const { isGapContract } = await moveOutRequestService._checkIfGapContract(contract);
+
       return res.status(200).json({
         success: true,
         data: {
@@ -107,7 +125,8 @@ class MoveOutRequestController {
           endDate: contract.endDate,
           duration: contract.duration,
           roomName: contract.roomId?.name,
-          roomCode: contract.roomId?.roomCode
+          roomCode: contract.roomId?.roomCode,
+          isGapContract
         }
       });
     } catch (error) {

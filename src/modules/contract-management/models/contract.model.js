@@ -64,13 +64,15 @@ const contractSchema = new Schema(
       default: false,
     },
     /**
-     * Trạng thái từ chối gia hạn.
-     * true = tenant đã bấm từ chối, phòng mở cho Guest cọc sớm.
-     * Hợp đồng vẫn active đến endDate.
+     * Chỉ dùng khi tenant TỪ CHỐI gia hạn (khóa không cho gia hạn nữa).
+     * null = chưa từ chối → có thể gia hạn nhiều lần.
+     * "declined" = đã từ chối → không thể gia hạn.
+     * "renewed" không còn dùng vì tenant có thể gia hạn nhiều lần (endDate tự động dời).
      */
-    renewalDeclined: {
-      type: Boolean,
-      default: false,
+    renewalStatus: {
+      type: String,
+      enum: ["declined"],
+      default: null,
     },
     // Terms & Conditions (Optional snapshot or ref)
     terms: {
