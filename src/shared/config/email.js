@@ -168,6 +168,71 @@ EMAIL_TEMPLATES.DEPOSIT_CONFIRMATION = {
   `
 };
 
+
+// Template thông báo thanh lý hợp đồng / hóa đơn tất toán
+EMAIL_TEMPLATES.LIQUIDATION_SETTLEMENT = {
+  subject: "Thông báo thanh lý hợp đồng & Hóa đơn tất toán - HNALMS",
+  getHtml: (tenantName, roomName, liquidationType, liquidationDate, totalSettlement, type) => {
+    const isForceMajeure = type === "force_majeure";
+    const accentColor = isForceMajeure ? "#3B82F6" : "#EF4444";
+    const totalFormatted = new Intl.NumberFormat("vi-VN").format(Math.abs(totalSettlement));
+    const isRefund = isForceMajeure;
+    return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background: ${accentColor}; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; color: white; }
+        .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 8px 8px; }
+        .info-box { background: white; padding: 15px; border-left: 4px solid ${accentColor}; margin: 20px 0; border-radius: 4px; }
+        .info-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee; }
+        .info-row:last-child { border-bottom: none; }
+        .label { color: #6B7280; font-size: 14px; }
+        .value { font-weight: bold; color: #1F2937; }
+        .total { font-size: 18px; color: ${accentColor}; }
+        .footer { text-align: center; margin-top: 20px; color: #666; font-size: 12px; }
+        .notice { background: #FEF3C7; border-left: 4px solid #F59E0B; padding: 12px 15px; border-radius: 4px; margin-top: 15px; font-size: 14px; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="header">
+          <h1 style="margin: 0;">HNALMS</h1>
+          <p style="margin: 5px 0 0 0;">Thông báo thanh lý hợp đồng</p>
+        </div>
+        <div class="content">
+          <h2>Xin chào ${tenantName},</h2>
+          <p>Hợp đồng thuê phòng <strong>${roomName}</strong> của bạn đã được chính thức thanh lý theo lý do: <strong>${liquidationType}</strong>.</p>
+          <div class="info-box">
+            <div class="info-row"><span class="label">Phòng</span><span class="value">${roomName}</span></div>
+            <div class="info-row"><span class="label">Loại thanh lý</span><span class="value">${liquidationType}</span></div>
+            <div class="info-row"><span class="label">Ngày thanh lý</span><span class="value">${liquidationDate}</span></div>
+            <div class="info-row">
+              <span class="label">${isRefund ? "Số tiền được hoàn lại" : "Số tiền cần thanh toán thêm"}</span>
+              <span class="value total">${totalFormatted} đ</span>
+            </div>
+          </div>
+          <div class="notice">
+            <strong>⚠️ Lưu ý:</strong><br/>
+            ${isRefund
+              ? "Số tiền hoàn lại sẽ được Ban quản lý liên hệ và chuyển khoản trong vòng <strong>3 ngày làm việc</strong>."
+              : "Vui lòng thanh toán số tiền còn nợ trong vòng <strong>3 ngày</strong> kể từ ngày thanh lý."
+            }
+          </div>
+          <p style="margin-top: 20px;">Trân trọng,<br><strong>Ban Quản Lý Tòa Nhà</strong></p>
+        </div>
+        <div class="footer">
+          <p>&copy; ${new Date().getFullYear()} HNALMS. All rights reserved.</p>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+  }
+};
+
 module.exports = {
   EMAIL_CONFIG,
   EMAIL_TEMPLATES

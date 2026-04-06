@@ -56,12 +56,14 @@ const contractRoutes = require("../../modules/contract-management/routes/contrac
 const depositRoutes = require("../../modules/contract-management/routes/deposit.routes");
 const moveOutRoutes = require("../../modules/contract-management/routes/moveout_request.routes");
 const accountRoutes = require("../../modules/account-management/routes/account.routes");
+const liquidationRoutes = require("../../modules/contract-management/routes/liquidation.routes");
 
 ApiRouter.use("/contracts", contractRoutes);
 ApiRouter.use("/renewals", require("../../modules/contract-management/routes/renewal.routes"));
 ApiRouter.use("/deposits", depositRoutes);
 ApiRouter.use("/move-outs", moveOutRoutes);
 ApiRouter.use("/accounts", accountRoutes);
+ApiRouter.use("/liquidations", liquidationRoutes);
 ApiRouter.use("/devices", deviceRoutes);
 ApiRouter.use("/invoices", invoiceRoutes);
 ApiRouter.use("/meter-readings", meterreadingRoutes);
