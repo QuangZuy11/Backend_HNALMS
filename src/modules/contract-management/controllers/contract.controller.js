@@ -71,9 +71,11 @@ exports.createContract = async (req, res) => {
       const deposit = await Deposit.findById(depositId).session(session);
       if (deposit) {
         const depositCreatedDate = new Date(deposit.createdAt);
+        depositCreatedDate.setHours(0, 0, 0, 0);
         const maxStartDate = new Date(depositCreatedDate);
         maxStartDate.setMonth(maxStartDate.getMonth() + 6);
         const contractStartDate = new Date(contractDetails.startDate);
+        contractStartDate.setHours(0, 0, 0, 0);
 
         if (contractStartDate < depositCreatedDate) {
           throw new Error(
