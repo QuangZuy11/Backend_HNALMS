@@ -8,7 +8,6 @@ const InvoiceIncurred = require("../../invoice-management/models/invoice_incurre
 const InvoicePeriodic = require("../../invoice-management/models/invoice_periodic.model");
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs"); // Ensure bcryptjs is installed
-const { checkAndSendRenewalNotifications } = require("../services/contract-renewal.service");
 
 // Helper to generate random digit string (numbers only)
 const generateRandomString = (length) => {
@@ -95,7 +94,7 @@ exports.createContract = async (req, res) => {
     const newContractEndDate = new Date(contractDetails.startDate);
     newContractEndDate.setMonth(newContractEndDate.getMonth() + contractDetails.duration);
     newContractEndDate.setDate(newContractEndDate.getDate() - 1);
-    
+
     if (futureContract) {
       const futureStartDate = new Date(futureContract.startDate);
       // The new rental MUST end before the future contract starts
@@ -424,9 +423,9 @@ exports.createContract = async (req, res) => {
 
     const successMsg = isNewUser
       ? (tenantInitialStatus === "inactive"
-          ? `Đã tạo hợp đồng thành công. Tài khoản đã tạo nhưng sẽ được kích hoạt vào ngày ${startDateObj.toLocaleDateString("vi-VN")}. Mật khẩu đã gửi email.`
-          : "Đã tạo hợp đồng thành công. Tài khoản và mật khẩu đã được gửi đến email."
-        )
+        ? `Đã tạo hợp đồng thành công. Tài khoản đã tạo nhưng sẽ được kích hoạt vào ngày ${startDateObj.toLocaleDateString("vi-VN")}. Mật khẩu đã gửi email.`
+        : "Đã tạo hợp đồng thành công. Tài khoản và mật khẩu đã được gửi đến email."
+      )
       : "Tài khoản cho CCCD/CMND này đã tồn tại nên không tạo mới, hợp đồng đã được tạo thành công!";
 
     res.status(201).json({

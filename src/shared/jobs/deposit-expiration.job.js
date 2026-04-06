@@ -1,4 +1,5 @@
 const Deposit = require("../../modules/contract-management/models/deposit.model");
+const Contract = require("../../modules/contract-management/models/contract.model");
 const Room = require("../../modules/room-floor-management/models/room.model");
 
 // =============================================
@@ -36,6 +37,12 @@ const processExpiredDeposits = async () => {
             status: "Held",
             createdAt: { $lt: sevenDaysAgo }, // Dùng createdAt (timestamps)
         });
+
+        const heldDepositIds = heldExpired.map((deposit) => deposit._id);
+        const linkedDepositIds = await Contract.distinct("depositId", {
+            depositId: { $in: heldDepositIds },
+        });
+        const linkedDepositIdSet = new Set(linkedDepositIds.map((id) => String(id)));
 
         for (const deposit of heldExpired) {
             // Lấy thông tin contract liên kết (dùng contractId mới)

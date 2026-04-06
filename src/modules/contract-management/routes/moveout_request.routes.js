@@ -9,42 +9,53 @@ const { authenticate } = require("../../authentication/middlewares");
 
 // Lấy thông tin hợp đồng khi ấn nút "Trả phòng"
 // GET /api/move-outs/contract/:contractId/info
-// Auth: Tenant
 router.get("/contract/:contractId/info", authenticate, moveOutRequestController.getContractInfo);
 
 // Tenant tạo yêu cầu trả phòng
 // POST /api/move-outs
-// Body: { contractId, expectedMoveOutDate, reason }
-// Auth: Tenant
+// Body: { contractId, expectedMoveOutDate, reason, confirmContinue? }
 router.post("/", authenticate, moveOutRequestController.createMoveOutRequest);
 
 // Tenant lấy yêu cầu trả phòng của mình
 // GET /api/move-outs/my/:contractId
-// Auth: Tenant
 router.get("/my/:contractId", authenticate, moveOutRequestController.getMyMoveOutRequest);
+
+
 
 // ============================================================================
 // MANAGER ROUTES
 // ============================================================================
 
-// Quản lý lấy danh sách yêu cầu trả phòng
+// Lấy danh sách yêu cầu trả phòng
 // GET /api/move-outs/list?status=Requested&page=1&limit=20
-// Auth: Manager
 router.get("/list", authenticate, moveOutRequestController.getAllMoveOutRequests);
 
-// Quản lý xác nhận hoàn tất trả phòng
-// PUT /api/move-outs/:moveOutRequestId/complete
+// Lấy chi tiết một yêu cầu trả phòng
+// GET /api/move-outs/:moveOutRequestId
+router.get("/:moveOutRequestId", authenticate, moveOutRequestController.getMoveOutRequestById);
+
+// [STEP 2] Manager phát hành hóa đơn cuối sau khi kiểm tra phòng
+// POST/PUT /api/move-outs/:moveOutRequestId/release-invoice
+// Body: { managerInvoiceNotes, electricIndex, waterIndex }
+router.post("/:moveOutRequestId/release-invoice", authenticate, moveOutRequestController.releaseFinalInvoice);
+router.put("/:moveOutRequestId/release-invoice", authenticate, moveOutRequestController.releaseFinalInvoice);
+
+// [STEP 3] Manager xác nhận hoàn tất trả phòng
+// PATCH/PUT /api/move-outs/:moveOutRequestId/complete
 // Body: { managerCompletionNotes }
-// Auth: Manager
+router.patch("/:moveOutRequestId/complete", authenticate, moveOutRequestController.completeMoveOut);
 router.put("/:moveOutRequestId/complete", authenticate, moveOutRequestController.completeMoveOut);
 
 // ============================================================================
-// SHARED ROUTES
+// ACCOUNTANT ROUTES
 // ============================================================================
 
-// Hủy yêu cầu trả phòng
-// DELETE /api/move-outs/:moveOutRequestId
-// Auth: Tenant or Manager
-router.delete("/:moveOutRequestId", authenticate, moveOutRequestController.cancelMoveOutRequest);
+// ============================================================================
+// SYSTEM / SHARED ROUTES
+// ============================================================================
+
+// So sánh tiền cọc vs hóa đơn cuối
+// GET /api/move-outs/:moveOutRequestId/deposit-vs-invoice
+router.get("/:moveOutRequestId/deposit-vs-invoice", authenticate, moveOutRequestController.getDepositVsInvoice);
 
 module.exports = router;

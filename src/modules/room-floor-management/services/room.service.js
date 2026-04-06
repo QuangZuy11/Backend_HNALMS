@@ -369,16 +369,16 @@ exports.getRoomDetail = async (roomId) => {
     }).select("startDate depositId").lean().sort({ startDate: 1 });
 
     if (futureActiveContract) {
-       roomData.futureContractStartDate = futureActiveContract.startDate;
+      roomData.futureContractStartDate = futureActiveContract.startDate;
     }
     if (futureInactiveContract) {
-       // Tính ngày trống = 1 ngày trước startDate
-       const vacantDate = new Date(futureInactiveContract.startDate);
-       vacantDate.setDate(vacantDate.getDate() - 1);
-       roomData.contractStartDate = vacantDate;
-       roomData.contractEndDate = null;
-       roomData.futureContractStartDate = futureInactiveContract.startDate;
-       roomData.hasFutureInactiveContract = true;
+      // Tính ngày trống = 1 ngày trước startDate
+      const vacantDate = new Date(futureInactiveContract.startDate);
+      vacantDate.setDate(vacantDate.getDate() - 1);
+      roomData.contractStartDate = vacantDate;
+      roomData.contractEndDate = null;
+      roomData.futureContractStartDate = futureInactiveContract.startDate;
+      roomData.hasFutureInactiveContract = true;
     }
 
     // Check for floating deposit
@@ -403,8 +403,8 @@ exports.getRoomDetail = async (roomId) => {
     const hasFloatingDeposit = heldDeposits.some(
       (d) => {
         if (!boundDepositIds.has(d._id.toString())) {
-            // Deposit không bind bất kỳ contract nào -> floating
-            return true;
+          // Deposit không bind bất kỳ contract nào -> floating
+          return true;
         }
         // Deposit bound nhưng contract là inactive -> KHÔNG coi là floating
         // Vì !hasFloatingDeposit sẽ được xử lý riêng (phòng vẫn trống)
@@ -421,10 +421,10 @@ exports.getRoomDetail = async (roomId) => {
     }).select("_id").lean();
 
     if (fullyActivContract) {
-       roomData.status = "Occupied";
-       // Nếu phòng đang bị Occupied thì không được xem là đang trống chờ người thuê tương lai, 
-       // tránh để FrontEnd hiển thị sai thành "Trống đến -> ..."
-       roomData.hasFutureInactiveContract = false; 
+      roomData.status = "Occupied";
+      // Nếu phòng đang bị Occupied thì không được xem là đang trống chờ người thuê tương lai, 
+      // tránh để FrontEnd hiển thị sai thành "Trống đến -> ..."
+      roomData.hasFutureInactiveContract = false;
     }
 
     return roomData;

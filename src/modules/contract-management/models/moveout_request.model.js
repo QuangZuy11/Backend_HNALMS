@@ -30,41 +30,77 @@ const MoveOutRequestSchema = new Schema({
     maxlength: 500
   },
 
-  // Trạng thái: Requested → Completed (hoặc Cancelled)
+  /**
+   * Luồng trạng thái (theo flowchart Tenant Terminate Contract):
+   *  Requested → InvoiceReleased → Paid → Completed
+   *                                      ↘ Cancelled (hủy bất kỳ lúc nào trước Paid)
+   */
   status: {
     type: String,
-    enum: ['Requested', 'Completed', 'Cancelled'],
+    enum: ['Requested', 'InvoiceReleased', 'Paid', 'Completed'],
     default: 'Requested'
   },
 
-  // Kiểm tra unhappy case
+  // === Kiểm tra điều kiện hoàn cọc ===
   isEarlyNotice: {
     type: Boolean,
-    default: false // Báo trả phòng < 30 ngày trước hạn
+    default: false // true khi ngày trả phòng cách ngày kết thúc hợp đồng dưới 30 ngày
   },
   isUnderMinStay: {
     type: Boolean,
-    default: false // Thời gian ở < 3 tháng
+    default: false // true khi thời gian thuê < 3 tháng
   },
   isDepositForfeited: {
     type: Boolean,
-    default: false // Mất cọc không
+    default: false // true → mất cọc (không đủ điều kiện hoàn)
   },
 
-  // Tiền cọc hoàn
-  depositRefund: {
+  // === Thông tin hóa đơn cuối ===
+  finalInvoiceId: {
+    type: Schema.Types.ObjectId,
+    ref: 'Invoice',
+    default: null
+  },
+
+  // === Thông tin hoàn/bù cọc ===
+  depositRefundAmount: {
     type: Number,
-    default: 0
+    default: 0 // Số tiền cọc được hoàn lại cho tenant (sau khi trừ hóa đơn nếu có)
   },
 
-  // Xác nhận hoàn tất
-  completedDate: {
+  // === Thông tin thanh toán ===
+  paymentMethod: {
+    type: String,
+    enum: ['online', 'offline', null],
+    default: null
+  },
+  paymentTransactionCode: {
+    type: String,
+    default: null
+  },
+  paymentDate: {
     type: Date,
     default: null
+  },
+
+  // === Ghi chú từng bước ===
+  managerInvoiceNotes: {
+    type: String,
+    maxlength: 1000
+  },
+  accountantNotes: {
+    type: String,
+    maxlength: 1000
   },
   managerCompletionNotes: {
     type: String,
     maxlength: 1000
+  },
+
+  // Ngày hoàn tất
+  completedDate: {
+    type: Date,
+    default: null
   }
 }, {
   timestamps: true,
@@ -79,4 +115,3 @@ MoveOutRequestSchema.index({ status: 1 });
 const MoveOutRequest = mongoose.model("MoveOutRequest", MoveOutRequestSchema);
 
 module.exports = MoveOutRequest;
-

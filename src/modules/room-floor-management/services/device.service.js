@@ -4,11 +4,17 @@ const xlsx = require("xlsx");
 class DeviceService {
   
   async createDevice(data) {
-
     if (data.price === undefined || data.price === null || Number(data.price) <= 0) {
       throw new Error("Giá thiết bị phải lớn hơn 0");
     }
 
+    const nameTrim = data.name.trim();
+    const existing = await Device.findOne({ name: { $regex: new RegExp(`^${nameTrim}$`, "i") } });
+    if (existing) {
+      throw new Error(`Thiết bị có tên "${nameTrim}" đã tồn tại trong hệ thống`);
+    }
+
+    data.unit = "Cái";
     const device = new Device(data);
     return await device.save();
   }
@@ -18,11 +24,22 @@ class DeviceService {
   }
 
   async updateDevice(id, data) {
-
     if (data.price !== undefined && (data.price === null || Number(data.price) <= 0)) {
       throw new Error("Giá thiết bị phải lớn hơn 0");
     }
 
+    if (data.name) {
+      const nameTrim = data.name.trim();
+      const existing = await Device.findOne({ 
+        name: { $regex: new RegExp(`^${nameTrim}$`, "i") },
+        _id: { $ne: id } 
+      });
+      if (existing) {
+        throw new Error(`Tên thiết bị "${nameTrim}" đã được sử dụng bởi một thiết bị khác`);
+      }
+    }
+
+    data.unit = "Cái";
     const device = await Device.findByIdAndUpdate(id, data, { new: true });
     if (!device) throw new Error("Không tìm thấy thiết bị");
     return device;
@@ -34,14 +51,12 @@ class DeviceService {
     return device;
   }
 
-  // Tạo file mẫu
   async generateTemplateExcel() {
     const headers = [
       { header: "Tên thiết bị (*)", key: "name", width: 30 },
       { header: "Thương hiệu", key: "brand", width: 20 },
       { header: "Model", key: "model", width: 20 },
       { header: "Danh mục", key: "category", width: 20 },
-      { header: "Đơn vị tính", key: "unit", width: 10 },
       { header: "Giá tiền", key: "price", width: 15 },
       { header: "Mô tả", key: "description", width: 40 },
     ];
@@ -51,7 +66,6 @@ class DeviceService {
       brand: "LG",
       model: "FV1409S4W",
       category: "Điện gia dụng",
-      unit: "Cái",
       price: 8500000,
       description: "Inverter, giặt hơi nước"
     }];
@@ -64,29 +78,50 @@ class DeviceService {
     return xlsx.write(workbook, { type: "buffer", bookType: "xlsx" });
   }
 
-  // Import Excel
   async importExcel(fileBuffer) {
     const workbook = xlsx.read(fileBuffer, { type: "buffer" });
     const sheetName = workbook.SheetNames[0];
     const worksheet = workbook.Sheets[sheetName];
     const jsonData = xlsx.utils.sheet_to_json(worksheet, { header: 1 });
 
+    // 1. Kiểm tra file có dữ liệu không (ít nhất phải có 2 dòng: 1 header + 1 data)
+    if (!jsonData || jsonData.length < 2) {
+      throw new Error("File Excel không có dữ liệu để Import.");
+    }
+
+    // ==============================================================
+    // [MỚI] 2. BỨC TƯỜNG LỬA: KIỂM TRA ĐÚNG FILE MẪU THIẾT BỊ KHÔNG
+    // ==============================================================
+    const headerRow = jsonData[0] || [];
+    const firstColumnHeader = (headerRow[0] || "").toString().trim();
+    
+    // Nếu cột đầu tiên không chứa chữ "Tên thiết bị", chắc chắn là nhầm file!
+    if (!firstColumnHeader.toLowerCase().includes("tên thiết bị")) {
+      throw new Error("Sai định dạng file! Vui lòng tải đúng file mẫu của Quản lý Thiết bị.");
+    }
+    // ==============================================================
+
     const devicesToInsert = [];
     const errors = [];
+    
+    const allExistingDevices = await Device.find({}, "name");
+    const existingNamesInDB = new Set(allExistingDevices.map(d => d.name.toLowerCase().trim()));
+    const namesInCurrentExcel = new Set();
 
-    // Bắt đầu từ dòng index 1 (dòng 2 trong excel) vì dòng 0 là Header
     for (let i = 1; i < jsonData.length; i++) {
       const row = jsonData[i];
-      if (!row || row.length === 0) continue;
+      // Nếu dòng trống hoàn toàn thì bỏ qua
+      if (!row || row.length === 0 || Object.keys(row).length === 0) continue;
 
+      const rawName = (row[0] || "").toString().trim();
       const deviceData = {
-        name: row[0],
+        name: rawName,
         brand: row[1] || "",
         model: row[2] || "",
         category: row[3] || "",
-        unit: row[4] || "Cái",
-        price: row[5] || 0,
-        description: row[6] || ""
+        price: Number(row[4]) || 0,
+        description: (row[5] || "").toString().slice(0, 100),
+        unit: "Cái"
       };
 
       if (!deviceData.name) {
@@ -94,6 +129,19 @@ class DeviceService {
         continue;
       }
 
+      const lowerName = deviceData.name.toLowerCase();
+
+      if (existingNamesInDB.has(lowerName)) {
+        errors.push(`Dòng ${i + 1}: Tên "${deviceData.name}" đã tồn tại trong hệ thống`);
+        continue;
+      }
+
+      if (namesInCurrentExcel.has(lowerName)) {
+        errors.push(`Dòng ${i + 1}: Tên "${deviceData.name}" bị lặp lại trong file Excel`);
+        continue;
+      }
+
+      namesInCurrentExcel.add(lowerName);
       devicesToInsert.push(deviceData);
     }
 
