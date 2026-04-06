@@ -34,7 +34,11 @@ router.get(
   liquidationController.getLiquidationByContract
 );
 
+// Lấy thông tin tiền đã trả trước để preview thanh lý
+router.get("/preflight/:contractId", liquidationController.getPreflightData);
+
 // Lấy chi tiết 1 liquidation
 router.get("/:id", liquidationController.getLiquidationById);
+
 
 module.exports = router;
