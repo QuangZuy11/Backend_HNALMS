@@ -88,5 +88,7 @@ ApiRouter.use("/reports", reportRoutes);
 const financeRoute = require('../../modules/report-management/routes/finance.routes');
 ApiRouter.use("/finance", financeRoute);
 
+const prepaidRentRoutes = require("../../modules/prepaid-rent/routes/prepaid_rent.routes");
+ApiRouter.use("/prepaid-rent", prepaidRentRoutes);
 
 module.exports = ApiRouter;

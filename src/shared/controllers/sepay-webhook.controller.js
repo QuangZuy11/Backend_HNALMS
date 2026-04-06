@@ -1,11 +1,13 @@
 const depositController = require("../../modules/room-floor-management/controllers/deposit-room.controller");
 const invoicePaymentController = require("../../modules/invoice-management/controllers/invoice-payment.controller");
+const prepaidRentController = require("../../modules/prepaid-rent/controllers/prepaid_rent.controller");
 
 /**
  * Webhook chung cho tất cả giao dịch Sepay
  * Phân biệt loại giao dịch qua nội dung chuyển khoản:
  *   - "Coc ..." → Đặt cọc phòng
  *   - "HD ..."  → Thanh toán hóa đơn phát sinh
+ *   - "PREPAID ..." → Trả trước tiền phòng
  *
  * Middleware verifySepayToken đã xác thực API Key trước khi vào đây.
  */
@@ -40,7 +42,13 @@ exports.handleWebhook = async (req, res) => {
             return invoicePaymentController.sepayWebhookForInvoice(req, res);
         }
 
-        // 3. Không khớp loại nào
+        // 3. Trả trước tiền phòng: nội dung chứa "PREPAID"
+        if (/PREPAID\s+\S+\s+\d{8}/.test(upperContent)) {
+            console.log("[SEPAY WEBHOOK] 💰 Detected PREPAID RENT transaction");
+            return prepaidRentController.sepayWebhookForPrepaidRent(req, res);
+        }
+
+        // 4. Không khớp loại nào
         console.log(`[SEPAY WEBHOOK] ❓ Unknown transaction type: "${content}"`);
         return res.status(200).json({
             success: true,
