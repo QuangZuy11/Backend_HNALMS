@@ -34,14 +34,14 @@ function startOfUtcDay(d) {
 function daysUntilContractEndUtc(endDate) {
     const today = startOfUtcDay(new Date());
     const end = startOfUtcDay(endDate);
-    // Tính số ngày còn lại tính CẢ ngày đầu và ngày cuối
-    return Math.floor((end.getTime() - today.getTime()) / (24 * 60 * 60 * 1000)) + 1;
+    // Không tính ngày cuối: nếu endDate = hôm nay → daysLeft = 0
+    return Math.floor((end.getTime() - today.getTime()) / (24 * 60 * 60 * 1000));
 }
 
 function isInRenewalWindow(endDate) {
     const daysLeft = daysUntilContractEndUtc(endDate);
-    // Cửa sổ gia hạn: từ ngày còn 30 ngày đến ngày còn 7 ngày (tính cả ngày đầu và ngày cuối)
-    return daysLeft >= 7 && daysLeft <= 30;
+    // Cửa sổ gia hạn: từ ngày còn 6 ngày đến ngày còn 29 ngày (không tính ngày cuối)
+    return daysLeft >= 6 && daysLeft <= 29;
 }
 
 function formatDate(date) {
@@ -102,7 +102,7 @@ async function buildRenewalPreviewPayload(contract) {
     } else if (daysLeft < 0) {
         blockingReason = "Hợp đồng đã hết hạn.";
     } else if (!alreadyRenewed && !inWindow) {
-        blockingReason = "Chỉ có thể gia hạn/từ chối khi hợp đồng còn từ 30 ngày đến 7 ngày.";
+        blockingReason = "Chỉ có thể gia hạn/từ chối khi hợp đồng còn từ 29 ngày đến 6 ngày.";
     }
 
     return {
@@ -118,7 +118,7 @@ async function buildRenewalPreviewPayload(contract) {
         currentRoomPrice,
         newRoomPrice,
         canRenew,
-        // Từ chối: chỉ hiện khi CHƯA gia hạn và CHƯA từ chối và trong cửa sổ
+        // Từ chối: chỉ hiện khi CHƯA gia hạn và CHƯA từ chối và trong cửa sổ 6-29 ngày
         declineRenewalAvailable:
             contract.status === "active" &&
             contract.renewalStatus === null &&
@@ -324,7 +324,7 @@ async function confirmContractRenewal(contractId, tenantId, extensionMonths) {
 
     // Gia hạn: phải nằm trong cửa sổ 7-30 ngày
     if (!isInRenewalWindow(contract.endDate)) {
-        throw new Error("Chỉ có thể gia hạn khi hợp đồng còn từ 30 ngày đến 7 ngày.");
+        throw new Error("Chỉ có thể gia hạn khi hợp đồng còn từ 29 ngày đến 6 ngày.");
     }
 
     // Gia hạn: update endDate và duration
@@ -372,7 +372,7 @@ async function declineContractRenewal(contractId, tenantId) {
     const daysLeft = daysUntilContractEndUtc(contract.endDate);
     if (daysLeft < 0) throw new Error("Hợp đồng đã hết hạn.");
     if (!isInRenewalWindow(contract.endDate)) {
-        throw new Error("Chỉ có thể từ chối gia hạn khi hợp đồng còn từ 30 ngày đến 7 ngày.");
+        throw new Error("Chỉ có thể từ chối gia hạn khi hợp đồng còn từ 29 ngày đến 6 ngày.");
     }
 
     contract.renewalStatus = "declined";
