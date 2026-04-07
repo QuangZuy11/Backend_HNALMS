@@ -22,6 +22,45 @@ const generateTransactionCode = (roomName) => {
     return `Coc ${roomShort} ${randomStr}`;
 };
 
+/** HĐ active đã kích hoạt + renewalStatus declined → cho tối đa 1 cọc mới (không trùng cọc của khách hiện tại). */
+async function evaluateDeclinedRenewalNextDeposit(roomObjectId, existingHeldDeposits) {
+    const declinedContract = await Contract.findOne({
+        roomId: roomObjectId,
+        status: "active",
+        isActivated: true,
+        renewalStatus: "declined",
+    }).lean();
+    if (!declinedContract) return { next: "none" };
+    const tenantADepositId = declinedContract.depositId?.toString();
+    const extraHeld = existingHeldDeposits.filter(
+        (d) => !tenantADepositId || d._id.toString() !== tenantADepositId,
+    );
+    if (extraHeld.length > 0) {
+        return {
+            next: "reject",
+            body: {
+                success: false,
+                message:
+                    "Phòng đã có người đặt cọc cho kỳ thuê tiếp theo. Không thể tạo thêm cọc.",
+            },
+        };
+    }
+    const pendingOthers = await Deposit.countDocuments({
+        room: roomObjectId,
+        status: "Pending",
+    });
+    if (pendingOthers > 0) {
+        return {
+            next: "reject",
+            body: {
+                success: false,
+                message: "Đang có giao dịch đặt cọc chờ thanh toán cho phòng này.",
+            },
+        };
+    }
+    return { next: "allow" };
+}
+
 // =============================================
 // POST /api/deposits/initiate
 // Bước 1: Khách điền form → hệ thống sinh mã & trả về QR chuyển khoản
@@ -57,39 +96,9 @@ exports.initiateDeposit = async (req, res) => {
             // Phòng trống hoàn toàn → cho phép đặt cọc
             allowDeposit = true;
         } else if (room.status === "Occupied") {
-            // Người thuê từ chối gia hạn — cho tối đa 1 cọc cho khách kế tiếp (không trùng với depositId HĐ hiện tại)
-            const declinedContract = await Contract.findOne({
-                roomId: room._id,
-                status: "active",
-                isActivated: true,
-                renewalStatus: "declined",
-            }).lean();
-
-            if (declinedContract) {
-                const tenantADepositId = declinedContract.depositId?.toString();
-                const extraHeld = existingHeldDeposits.filter(
-                    (d) => !tenantADepositId || d._id.toString() !== tenantADepositId,
-                );
-                if (extraHeld.length > 0) {
-                    return res.status(400).json({
-                        success: false,
-                        message:
-                            "Phòng đã có người đặt cọc cho kỳ thuê tiếp theo. Không thể tạo thêm cọc.",
-                    });
-                }
-                const pendingOthers = await Deposit.countDocuments({
-                    room: room._id,
-                    status: "Pending",
-                });
-                if (pendingOthers > 0) {
-                    return res.status(400).json({
-                        success: false,
-                        message:
-                            "Đang có giao dịch đặt cọc chờ thanh toán cho phòng này.",
-                    });
-                }
-                allowDeposit = true;
-            }
+            const ev = await evaluateDeclinedRenewalNextDeposit(room._id, existingHeldDeposits);
+            if (ev.next === "reject") return res.status(400).json(ev.body);
+            if (ev.next === "allow") allowDeposit = true;
         } else if (room.status === "Deposited") {
             // Phòng đang deposited → kiểm tra các hợp đồng
             const futureContracts = await Contract.find({
@@ -131,20 +140,31 @@ exports.initiateDeposit = async (req, res) => {
                     roomId: room._id,
                     status: "active",
                     isActivated: true,
-                });
+                }).lean();
                 if (activeContracts) {
-                    return res.status(400).json({
-                        success: false,
-                        message: "Phòng đang có người thuê, không thể đặt cọc.",
-                    });
+                    // DB status vẫn Deposited khi khách từ chối gia hạn (API chi tiết phòng không ghi đè Occupied).
+                    if (activeContracts.renewalStatus === "declined") {
+                        const ev = await evaluateDeclinedRenewalNextDeposit(
+                            room._id,
+                            existingHeldDeposits,
+                        );
+                        if (ev.next === "reject") return res.status(400).json(ev.body);
+                        if (ev.next === "allow") allowDeposit = true;
+                    } else {
+                        return res.status(400).json({
+                            success: false,
+                            message: "Phòng đang có người thuê, không thể đặt cọc.",
+                        });
+                    }
+                } else {
+                    // Trường hợp hy hữu: Deposited nhưng không có contract nào
+                    // Reset tất cả deposit cũ, cho phép cọc mới
+                    for (const dep of existingHeldDeposits) {
+                        dep.activationStatus = false;
+                        await dep.save();
+                    }
+                    allowDeposit = true;
                 }
-                // Trường hợp hy hữu: Deposited nhưng không có contract nào
-                // Reset tất cả deposit cũ, cho phép cọc mới
-                for (const dep of existingHeldDeposits) {
-                    dep.activationStatus = false;
-                    await dep.save();
-                }
-                allowDeposit = true;
             }
         }
 

@@ -427,12 +427,18 @@ exports.getRoomDetail = async (roomId) => {
       status: "active",
       isActivated: true,
     })
-      .select("_id renewalStatus startDate")
+      .select("_id renewalStatus startDate endDate")
       .sort({ startDate: -1 })
       .lean();
 
     if (activeActivatedContract) {
       roomData.contractRenewalStatus = activeActivatedContract.renewalStatus ?? null;
+      if (activeActivatedContract.endDate) {
+        roomData.activeContractEndDate = activeActivatedContract.endDate;
+        if (!roomData.contractEndDate) {
+          roomData.contractEndDate = activeActivatedContract.endDate;
+        }
+      }
     }
 
     // Chỉ khi KHÔNG declined mới ghi đè Occupied + tắt cờ future inactive (declined vẫn cho đặt cọc kỳ sau)
