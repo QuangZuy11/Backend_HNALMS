@@ -55,6 +55,7 @@ const FinancialTicketSchema = new Schema(
   {
     timestamps: true,
     collection: "financial_tickets",
+    strict: false,
   }
 );
 
