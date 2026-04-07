@@ -525,10 +525,11 @@ exports.getContractById = async (req, res) => {
         .json({ success: false, message: "Contract not found" });
     }
 
-    // Fetch tenant's UserInfo separately
-    const tenantInfo = await UserInfo.findOne({
-      userId: contract.tenantId._id,
-    });
+    // tenantId có thể null nếu User đã xóa / populate không tìm thấy — tránh crash khi xem HĐ
+    const tenantUserId = contract.tenantId?._id ?? contract.tenantId;
+    const tenantInfo = tenantUserId
+      ? await UserInfo.findOne({ userId: tenantUserId })
+      : null;
 
     // Fetch BookService for this contract (with populated service names/prices)
     const bookServiceRecord = await BookService.findOne({
