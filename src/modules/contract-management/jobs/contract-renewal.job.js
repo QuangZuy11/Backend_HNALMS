@@ -25,9 +25,20 @@ const contractRenewalJob = () => {
         }
     });
 
+    cron.schedule("0 0 * * *", async () => {
+        console.log("[CONTRACT RENEWAL WINDOW JOB] ⏱️ Bắt đầu job kiểm tra cửa sổ gia hạn...");
+        try {
+            await autoDeclineExpiredRenewalWindow();
+            console.log("[CONTRACT RENEWAL WINDOW JOB] ✅ Job kiểm tra cửa sổ gia hạn hoàn thành");
+        } catch (error) {
+            console.error("[CONTRACT RENEWAL WINDOW JOB] ❌ Lỗi khi kiểm tra cửa sổ gia hạn:", error.message);
+        }
+    });
+
     console.log("[CONTRACT RENEWAL JOB] ✅ Cron jobs đã được lên lịch:");
     console.log("  - Gửi thông báo: Mỗi ngày lúc 9:00 AM");
     console.log("  - Xử lý hết hạn: Mỗi ngày lúc 00:05");
+    console.log("  - Tự động từ chối gia hạn hết cửa sổ: Mỗi ngày lúc 00:00");
 };
 
 async function checkAndProcessExpiredContracts() {
@@ -95,6 +106,73 @@ async function checkAndProcessExpiredContracts() {
 
     console.log(`[CONTRACT EXPIRY] Hoàn thành: ${expiredCount} hợp đồng đã hết hạn`);
     return { expiredCount };
+}
+
+async function autoDeclineExpiredRenewalWindow() {
+    console.log("[CONTRACT RENEWAL WINDOW] Bắt đầu kiểm tra cửa sổ gia hạn...");
+
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+
+    // Tìm hợp đồng trong cửa sổ gia hạn nhưng chưa hành động và sắp hết cửa sổ (< 7 ngày)
+    const contracts = await Contract.find({
+        status: "active",
+        renewalStatus: null,
+        endDate: {
+            $gte: today,
+            $lte: new Date(today.getTime() + 6 * 24 * 60 * 60 * 1000) // còn <= 6 ngày
+        }
+    }).populate("tenantId").populate("roomId", "name");
+
+    console.log(`[CONTRACT RENEWAL WINDOW] Tìm thấy ${contracts.length} hợp đồng hết cửa sổ gia hạn`);
+
+    let declinedCount = 0;
+
+    for (const contract of contracts) {
+        contract.renewalStatus = "declined";
+        await contract.save();
+        declinedCount++;
+
+        const roomName = contract.roomId?.name || "";
+        const managers = await User.find({ role: "manager", status: "active" }).select("_id");
+
+        if (managers.length > 0) {
+            const notification = new Notification({
+                title: `Hết cửa sổ gia hạn — ${roomName}`,
+                content: `Hợp đồng ${contract.contractCode} (phòng ${roomName}) đã hết cửa sổ gia hạn mà người thuê chưa thực hiện hành động. Hệ thống đã tự động từ chối gia hạn.`,
+                type: "system",
+                status: "sent",
+                created_by: null,
+                recipients: managers.map((m) => ({
+                    recipient_id: m._id,
+                    recipient_role: "manager",
+                    is_read: false
+                }))
+            });
+            await notification.save();
+        }
+
+        if (contract.tenantId) {
+            const tenantNoti = new Notification({
+                title: `Hết cửa sổ gia hạn — ${roomName}`,
+                content: `Hợp đồng ${contract.contractCode} (phòng ${roomName}) đã hết cửa sổ gia hạn (còn dưới 7 ngày). Bạn chưa thực hiện gia hạn hoặc từ chối, hệ thống đã tự động từ chối gia hạn. Vui lòng liên hệ Quản Lý để trả phòng khi hết hạn.`,
+                type: "system",
+                status: "sent",
+                created_by: null,
+                recipients: [{
+                    recipient_id: contract.tenantId._id || contract.tenantId,
+                    recipient_role: "tenant",
+                    is_read: false
+                }]
+            });
+            await tenantNoti.save();
+        }
+
+        console.log(`[CONTRACT RENEWAL WINDOW] Contract ${contract.contractCode} đã tự động từ chối gia hạn`);
+    }
+
+    console.log(`[CONTRACT RENEWAL WINDOW] Hoàn thành: ${declinedCount} hợp đồng đã tự động từ chối`);
+    return { declinedCount };
 }
 
 const contractRenewalJobInitialRun = (delayMs = 30000) => {
