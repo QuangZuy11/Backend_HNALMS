@@ -630,6 +630,39 @@ exports.getPreflightData = async (req, res) => {
 
     const totalRentRefund = paidRentPeriods.reduce((sum, p) => sum + p.refundAmount, 0);
 
+    // ── Tính nợ tiền phòng (dành cho Vi phạm) ──
+    const startDt = new Date(contract.startDate);
+    startDt.setHours(12, 0, 0, 0);
+    const endDt = new Date(liqDate);
+    endDt.setHours(12, 0, 0, 0);
+    const roomPrice = contract.roomId?.roomTypeId?.currentPrice || 0;
+    const deposit = contract.depositId;
+
+    let rentDebtDays = 0;
+    if (endDt >= startDt) {
+      for (let d = new Date(startDt); d <= endDt; d.setDate(d.getDate() + 1)) {
+        const ts = d.getTime();
+        let isPaid = false;
+        
+        // Cần parse lại từ fromStr/toStr do mảng paidRentPeriods không lưu object Date
+        for (const p of paidRentPeriods) {
+          const [fD, fM, fY] = p.fromStr.split("/");
+          const [tD, tM, tY] = p.toStr.split("/");
+          const fromDtLk = new Date(Number(fY), Number(fM)-1, Number(fD), 12, 0, 0, 0);
+          const toDtLk = new Date(Number(tY), Number(tM)-1, Number(tD), 12, 0, 0, 0);
+          
+          if (ts >= fromDtLk.getTime() && ts <= toDtLk.getTime()) {
+            isPaid = true;
+            break;
+          }
+        }
+        if (!isPaid) {
+          rentDebtDays++;
+        }
+      }
+    }
+    const rentDebtAmount = rentDebtDays * Math.round(roomPrice / 30);
+
     // ── rentPaidUntil (dùng để hiển thị tham khảo) ──
     const rentPaidUntil = contract.rentPaidUntil ?? null;
 
@@ -638,11 +671,17 @@ exports.getPreflightData = async (req, res) => {
       data: {
         contractId,
         contractCode: contract.contractCode,
+        roomName: contract.roomId?.name,
+        roomPrice,
+        depositStatus: deposit ? deposit.status : "N/A",
+        depositAmount: deposit ? deposit.amount : 0,
         endDate: contract.endDate ?? null,
         rentPaidUntil,
         totalPaidInvoices: paidInvoices.length,
-        paidRentPeriods,         // Danh sách từng giai đoạn + số tiền hoàn
-        totalRentRefund,         // Tổng tiền thuê được hoàn
+        paidRentPeriods,
+        totalRentRefund,
+        rentDebtDays,
+        rentDebtAmount,
         deposit: contract.depositId || null,
       },
     });
