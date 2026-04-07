@@ -507,6 +507,15 @@ exports.getAllContracts = async (req, res) => {
 
 exports.getContractById = async (req, res) => {
   try {
+    const rawIds = await Contract.findById(req.params.id)
+      .select("tenantId depositId")
+      .lean();
+    if (!rawIds) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Contract not found" });
+    }
+
     const contract = await Contract.findById(req.params.id)
       .populate({
         path: "roomId",
@@ -525,9 +534,10 @@ exports.getContractById = async (req, res) => {
         .json({ success: false, message: "Contract not found" });
     }
 
-    // tenantId có thể null nếu User đã xóa / populate không tìm thấy — tránh crash khi xem HĐ
-    const tenantUserId = contract.tenantId?._id ?? contract.tenantId;
-    const tenantInfo = tenantUserId
+    // ObjectId gốc vẫn còn trên document khi populate tenantId trả null (User đã xóa / ref hỏng)
+    const tenantUserId =
+      contract.tenantId?._id ?? contract.tenantId ?? rawIds.tenantId;
+    let tenantInfo = tenantUserId
       ? await UserInfo.findOne({ userId: tenantUserId })
       : null;
 
@@ -544,6 +554,55 @@ exports.getContractById = async (req, res) => {
 
     // Convert to plain object and fix Decimal128 fields
     const contractData = contract.toObject();
+
+    // Thông tin Bên B: nếu không còn User/UserInfo, lấy từ phiếu cọc (đã nhập lúc đặt cọc)
+    let depositSnapshot =
+      contractData.depositId &&
+      typeof contractData.depositId === "object" &&
+      contractData.depositId.name
+        ? contractData.depositId
+        : null;
+    if (!depositSnapshot && rawIds.depositId) {
+      depositSnapshot = await Deposit.findById(rawIds.depositId)
+        .select("name phone email")
+        .lean();
+    }
+
+    let tenantInfoOut = tenantInfo ? tenantInfo.toObject() : null;
+    if (!tenantInfoOut && depositSnapshot?.name) {
+      tenantInfoOut = {
+        fullname: depositSnapshot.name,
+        cccd: null,
+        dob: null,
+        gender: null,
+        address: null,
+      };
+    }
+
+    let tenantIdOut = contractData.tenantId
+      ? { ...contractData.tenantId }
+      : null;
+    if (tenantIdOut && depositSnapshot) {
+      if (!tenantIdOut.phoneNumber && depositSnapshot.phone) {
+        tenantIdOut.phoneNumber = depositSnapshot.phone;
+      }
+      if (!tenantIdOut.email && depositSnapshot.email) {
+        tenantIdOut.email = depositSnapshot.email;
+      }
+    }
+    if (!tenantIdOut && depositSnapshot?.name) {
+      tenantIdOut = {
+        username: depositSnapshot.name,
+        phoneNumber: depositSnapshot.phone || null,
+        email: depositSnapshot.email || null,
+      };
+    } else if (!tenantIdOut && tenantInfoOut?.fullname) {
+      tenantIdOut = {
+        username: tenantInfoOut.fullname,
+        phoneNumber: depositSnapshot?.phone || null,
+        email: depositSnapshot?.email || null,
+      };
+    }
 
     // Fix roomType currentPrice (Decimal128 → Number)
     if (contractData.roomId?.roomTypeId?.currentPrice) {
@@ -585,7 +644,8 @@ exports.getContractById = async (req, res) => {
       success: true,
       data: {
         ...contractData,
-        tenantInfo: tenantInfo ? tenantInfo.toObject() : null,
+        tenantId: tenantIdOut,
+        tenantInfo: tenantInfoOut,
         bookServices,
         assets,
       },
