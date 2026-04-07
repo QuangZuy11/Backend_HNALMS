@@ -64,14 +64,15 @@ const contractSchema = new Schema(
       default: false,
     },
     /**
-     * Chỉ dùng khi tenant TỪ CHỐI gia hạn (khóa không cho gia hạn nữa).
-     * null = chưa từ chối → có thể gia hạn nhiều lần.
-     * "declined" = đã từ chối → không thể gia hạn.
-     * "renewed" không còn dùng vì tenant có thể gia hạn nhiều lần (endDate tự động dời).
+     * Trạng thái hành động gia hạn/từ chối của tenant trong cửa sổ gia hạn:
+     * - null: chưa thực hiện hành động nào, có thể gia hạn hoặc từ chối (1 lần duy nhất)
+     * - "renewed": đã gia hạn rồi, không thể gia hạn/từ chối nữa
+     * - "declined": đã từ chối rồi, không thể gia hạn/từ chối nữa
+     * Cửa sổ gia hạn: từ ngày còn 30 ngày đến ngày còn 7 ngày (tính cả ngày đầu và ngày cuối)
      */
     renewalStatus: {
       type: String,
-      enum: ["declined"],
+      enum: ["renewed", "declined"],
       default: null,
     },
     // Terms & Conditions (Optional snapshot or ref)
