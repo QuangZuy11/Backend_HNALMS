@@ -40,8 +40,8 @@ function daysUntilContractEndUtc(endDate) {
 
 function isInRenewalWindow(endDate) {
     const daysLeft = daysUntilContractEndUtc(endDate);
-    // Cửa sổ gia hạn: từ ngày còn 6 ngày đến ngày còn 29 ngày (không tính ngày cuối)
-    return daysLeft >= 6 && daysLeft <= 29;
+    // Cửa sổ gia hạn: từ ngày còn 7 ngày đến ngày còn 30 ngày (không tính ngày cuối)
+    return daysLeft >= 7 && daysLeft <= 30;
 }
 
 function formatDate(date) {
@@ -52,6 +52,92 @@ function formatDate(date) {
         month: "2-digit",
         year: "numeric"
     });
+}
+
+function toDateOnly(date) {
+    const d = new Date(date);
+    d.setHours(0, 0, 0, 0);
+    return d;
+}
+
+async function checkIfGapContract(contract) {
+    if (!contract?.roomId) {
+        return { isGapContract: false, primaryContract: null };
+    }
+
+    const contractId = contract._id ? contract._id : contract;
+    const others = await Contract.find({
+        roomId: contract.roomId,
+        _id: { $ne: contractId },
+        status: { $in: ["active", "inactive"] }
+    })
+        .select("_id startDate endDate tenantId status depositId isActivated")
+        .lean();
+
+    if (!others.length) {
+        return { isGapContract: false, primaryContract: null };
+    }
+
+    const myStart = toDateOnly(contract.startDate);
+    const myEnd = toDateOnly(contract.endDate);
+
+    // Tìm hợp đồng start sớm nhất
+    let primaryEarliest = others[0];
+    for (const o of others) {
+        if (toDateOnly(o.startDate) < toDateOnly(primaryEarliest.startDate)) {
+            primaryEarliest = o;
+        }
+    }
+    const type1 = myStart > toDateOnly(primaryEarliest.startDate);
+
+    // Tìm hợp đồng bắt đầu sau endDate của mình với khe >= 7 ngày
+    const minGap = 7;
+    let nextAfterEnd = null;
+    for (const o of others) {
+        const oStart = toDateOnly(o.startDate);
+        if (oStart.getTime() <= myEnd.getTime()) {
+            continue;
+        }
+        const gapDays = Math.floor((oStart.getTime() - myEnd.getTime()) / (24 * 60 * 60 * 1000));
+        if (gapDays < minGap) {
+            continue;
+        }
+        if (
+            !nextAfterEnd ||
+            oStart.getTime() < toDateOnly(nextAfterEnd.startDate).getTime()
+        ) {
+            nextAfterEnd = o;
+        }
+    }
+    const type2 = Boolean(nextAfterEnd);
+    const isGapContract = type1 || type2;
+    const primaryContract = type2 && nextAfterEnd ? nextAfterEnd : type1 ? primaryEarliest : null;
+
+    return { isGapContract, primaryContract };
+}
+
+async function getNextActiveContract(roomId, afterDate) {
+    const next = await Contract.findOne({
+        roomId,
+        startDate: { $gt: afterDate },
+        status: "active",
+        isActivated: true
+    })
+        .select("_id startDate endDate contractCode tenantId")
+        .sort({ startDate: 1 })
+        .lean();
+    return next;
+}
+
+function _monthsBetween(startDate, endDate) {
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    let months = (end.getFullYear() - start.getFullYear()) * 12;
+    months += end.getMonth() - start.getMonth();
+    if (end.getDate() >= start.getDate()) {
+        months += 1;
+    }
+    return Math.max(months, 1);
 }
 
 async function getRoomTypePriceAtContractStart(roomTypeId, contractStartDate) {
@@ -82,12 +168,42 @@ async function buildRenewalPreviewPayload(contract) {
     const newRoomPrice =
         currentRoomPrice !== baselinePrice ? currentRoomPrice : null;
 
+    // Kiểm tra gap contract: chỉ được gia hạn tối đa đến ngày bắt đầu hợp đồng kế tiếp
+    let maxRenewalEndDate = null;
+    let isGapContract = false;
+    let nextActiveContract = null;
+
+    if (contract.renewalStatus === "renewed") {
+        const gapCheck = await checkIfGapContract(contract);
+        isGapContract = gapCheck.isGapContract;
+        if (isGapContract) {
+            const next = await getNextActiveContract(contract.roomId, contract.endDate);
+            if (next) {
+                const nextStart = toDateOnly(next.startDate);
+                const myEnd = toDateOnly(contract.endDate);
+                if (nextStart.getTime() > myEnd.getTime()) {
+                    maxRenewalEndDate = next.startDate;
+                    nextActiveContract = {
+                        contractCode: next.contractCode,
+                        startDate: next.startDate
+                    };
+                }
+            }
+        }
+    }
+
+    // Số tháng tối đa gia hạn cho gap contract
+    let maxExtensionMonths = MAX_EXTENSION_MONTHS;
+    if (isGapContract && maxRenewalEndDate) {
+        const gapMonths = _monthsBetween(toDateOnly(contract.endDate), toDateOnly(maxRenewalEndDate));
+        maxExtensionMonths = Math.min(gapMonths, MAX_EXTENSION_MONTHS);
+    }
+
     const daysLeft = daysUntilContractEndUtc(contract.endDate);
     const inWindow = isInRenewalWindow(contract.endDate);
     const alreadyRenewed = contract.renewalStatus === "renewed";
     const alreadyDeclined = contract.renewalStatus === "declined";
 
-    // Gia hạn lần đầu: cần trong cửa sổ 7-30 ngày. Gia hạn lần tiếp theo: không cần kiểm tra cửa sổ.
     const canRenew =
         contract.status === "active" &&
         daysLeft >= 0 &&
@@ -102,7 +218,9 @@ async function buildRenewalPreviewPayload(contract) {
     } else if (daysLeft < 0) {
         blockingReason = "Hợp đồng đã hết hạn.";
     } else if (!alreadyRenewed && !inWindow) {
-        blockingReason = "Chỉ có thể gia hạn/từ chối khi hợp đồng còn từ 29 ngày đến 6 ngày.";
+        blockingReason = "Chỉ có thể gia hạn/từ chối khi hợp đồng còn từ 30 ngày đến 7 ngày.";
+    } else if (isGapContract && !maxRenewalEndDate) {
+        blockingReason = "Hợp đồng gap không có hợp đồng kế tiếp để lấy ngày giới hạn gia hạn.";
     }
 
     return {
@@ -118,7 +236,7 @@ async function buildRenewalPreviewPayload(contract) {
         currentRoomPrice,
         newRoomPrice,
         canRenew,
-        // Từ chối: chỉ hiện khi CHƯA gia hạn và CHƯA từ chối và trong cửa sổ 6-29 ngày
+        // Từ chối: chỉ hiện khi CHƯA gia hạn và CHƯA từ chối và trong cửa sổ 7-30 ngày
         declineRenewalAvailable:
             contract.status === "active" &&
             contract.renewalStatus === null &&
@@ -128,6 +246,11 @@ async function buildRenewalPreviewPayload(contract) {
         contractStatus: contract.status,
         blockingReason,
         renewalStatus: contract.renewalStatus || null,
+        // Thông tin gap contract
+        isGapContract,
+        maxRenewalEndDate,
+        nextActiveContract,
+        maxExtensionMonths,
     };
 }
 
@@ -324,7 +447,36 @@ async function confirmContractRenewal(contractId, tenantId, extensionMonths) {
 
     // Gia hạn: phải nằm trong cửa sổ 7-30 ngày
     if (!isInRenewalWindow(contract.endDate)) {
-        throw new Error("Chỉ có thể gia hạn khi hợp đồng còn từ 29 ngày đến 6 ngày.");
+        throw new Error("Chỉ có thể gia hạn khi hợp đồng còn từ 30 ngày đến 7 ngày.");
+    }
+
+    // Kiểm tra gap contract: chỉ được gia hạn tối đa đến ngày bắt đầu hợp đồng kế tiếp
+    let maxRenewalEndDate = null;
+    if (contract.renewalStatus === "renewed") {
+        const gapCheck = await checkIfGapContract(contract);
+        if (gapCheck.isGapContract) {
+            const next = await getNextActiveContract(contract.roomId, contract.endDate);
+            if (next) {
+                const nextStart = toDateOnly(next.startDate);
+                const myEnd = toDateOnly(contract.endDate);
+                if (nextStart.getTime() > myEnd.getTime()) {
+                    maxRenewalEndDate = next.startDate;
+                }
+            }
+        }
+    }
+
+    // Tính maxExtensionMonths cho gap contract
+    let maxExt = MAX_EXTENSION_MONTHS;
+    if (maxRenewalEndDate) {
+        maxExt = _monthsBetween(toDateOnly(contract.endDate), toDateOnly(maxRenewalEndDate));
+        maxExt = Math.min(maxExt, MAX_EXTENSION_MONTHS);
+    }
+    if (months > maxExt) {
+        const gapMsg = maxRenewalEndDate
+            ? `Hợp đồng gap chỉ được gia hạn tối đa ${maxExt} tháng (đến ngày ${formatDate(maxRenewalEndDate)} — ngày bắt đầu hợp đồng ${next?.contractCode || "kế tiếp"}).`
+            : `Hợp đồng gap có hợp đồng kế tiếp nhưng không xác định được ngày giới hạn.`;
+        throw new Error(gapMsg);
     }
 
     // Gia hạn: update endDate và duration
@@ -372,7 +524,7 @@ async function declineContractRenewal(contractId, tenantId) {
     const daysLeft = daysUntilContractEndUtc(contract.endDate);
     if (daysLeft < 0) throw new Error("Hợp đồng đã hết hạn.");
     if (!isInRenewalWindow(contract.endDate)) {
-        throw new Error("Chỉ có thể từ chối gia hạn khi hợp đồng còn từ 29 ngày đến 6 ngày.");
+        throw new Error("Chỉ có thể từ chối gia hạn khi hợp đồng còn từ 30 ngày đến 7 ngày.");
     }
 
     contract.renewalStatus = "declined";
