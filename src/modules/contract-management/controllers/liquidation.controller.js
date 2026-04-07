@@ -134,18 +134,30 @@ exports.createLiquidation = async (req, res) => {
     let totalSettlement = 0;
 
     // Lấy số tiền cọc từ linked deposit
+    const isDepositRefunded = contract.depositId && contract.depositId.status === "Refunded";
     const depositAmount = contract.depositId
       ? toNumber(contract.depositId.amount)
       : 0;
 
     if (liquidationType === "force_majeure") {
-      // Hoàn 100% tiền cọc
-      depositRefundAmount = depositAmount;
+      // Hoàn tiền cọc (Nếu đã hoàn rồi thì trả 0)
+      depositRefundAmount = isDepositRefunded ? 0 : depositAmount;
 
-      // ── Tính tiền thuê còn dư: từ ngày thanh lý đến endDate của hợp đồng ──
+      // ── Tính tiền thuê còn dư dựa trên ngày khách đã trả trước (rentPaidUntil) ──
       let remainingDays = 0;
       let remainingRentLabel = "";
-      if (contract.endDate) {
+
+      if (contract.rentPaidUntil) {
+        const rpUntil = new Date(contract.rentPaidUntil);
+        rpUntil.setHours(12, 0, 0, 0);
+        if (rpUntil > liqDate) {
+          remainingDays = Math.round((rpUntil - liqDate) / msPerDay);
+          remainingRentLabel = `${remainingDays} ngày (đã trả trước đến ${rpUntil.toLocaleDateString("vi-VN")})`;
+        } else {
+          remainingRentLabel = `0 ngày (đã quá hạn trả trước: ${rpUntil.toLocaleDateString("vi-VN")})`;
+        }
+      } else if (contract.endDate) {
+        // Fallback: nếu chưa ghi nhận hóa đơn trả trước, dùng endDate làm mốc tối đa
         const endDateObj = new Date(contract.endDate);
         endDateObj.setHours(12, 0, 0, 0);
         if (endDateObj > liqDate) {
@@ -166,7 +178,7 @@ exports.createLiquidation = async (req, res) => {
       // ── 6a. Invoice items cho force_majeure ──
       const invoiceItems = [
         {
-          itemName: "Hoàn tiền cọc (100%)",
+          itemName: isDepositRefunded ? "Hoàn tiền cọc (Đã được hoàn từ trước)" : "Hoàn tiền cọc (100%)",
           usage: 1,
           unitPrice: depositRefundAmount,
           amount: depositRefundAmount,
@@ -467,3 +479,125 @@ exports.getAllLiquidations = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// ─────────────────────────────────────────────
+// GET /liquidations/preflight/:contractId?liquidationDate=YYYY-MM-DD
+// Tính toán hoàn tiền thuê theo từng kỳ hóa đơn đã thanh toán
+// ─────────────────────────────────────────────
+exports.getPreflightData = async (req, res) => {
+  try {
+    const { contractId } = req.params;
+    const msPerDay = 1000 * 60 * 60 * 24;
+
+    // ── Ngày thanh lý (từ query param hoặc hôm nay) ──
+    let liqDate = req.query.liquidationDate
+      ? new Date(req.query.liquidationDate)
+      : new Date();
+    liqDate.setHours(12, 0, 0, 0);
+
+    // ── Lấy hợp đồng ──
+    const contract = await Contract.findById(contractId)
+      .populate({ path: "roomId", populate: { path: "roomTypeId", select: "currentPrice typeName" } })
+      .populate("depositId", "status amount refundDate forfeitedDate")
+      .lean();
+
+    if (!contract) {
+      return res.status(404).json({ success: false, message: "Không tìm thấy hợp đồng." });
+    }
+
+    // ── Lấy tất cả hóa đơn Paid, sắp xếp cũ → mới ──
+    const paidInvoices = await InvoicePeriodic.find({ contractId, status: "Paid" })
+      .sort({ createdAt: 1 })
+      .lean();
+
+    // ── Helper: parse "từ DD/MM/YYYY đến DD/MM/YYYY" từ itemName ──
+    const parseVNDate = (str) => {
+      const [d, m, y] = str.split("/").map(Number);
+      const dt = new Date(y, m - 1, d, 12, 0, 0);
+      return dt;
+    };
+
+    const parsePeriodFromText = (text) => {
+      const match = text.match(/từ (\d{2}\/\d{2}\/\d{4}) đến (\d{2}\/\d{2}\/\d{4})/i);
+      if (!match) return null;
+      return { from: parseVNDate(match[1]), to: parseVNDate(match[2]), fromStr: match[1], toStr: match[2] };
+    };
+
+    // ── Duyệt từng hóa đơn → từng item tiền thuê → tính hoàn/không hoàn ──
+    const paidRentPeriods = [];
+
+    for (const invoice of paidInvoices) {
+      for (const item of invoice.items) {
+        const nameLC = item.itemName.toLowerCase();
+        if (!nameLC.includes("tiền thuê") && !nameLC.includes("tiền phòng")) continue;
+        if (item.amount <= 0) continue; // Bỏ qua dòng =0 (đã trả trước, không phát sinh)
+
+        const period = parsePeriodFromText(item.itemName);
+        if (!period) continue; // Không parse được ngày → skip
+
+        const { from, to, fromStr, toStr } = period;
+        const totalDays = Math.round((to - from) / msPerDay) + 1;
+        const dailyRate = totalDays > 0 ? item.amount / totalDays : 0;
+
+        let usedDays = 0;
+        let unusedDays = 0;
+        let note = "";
+
+        if (liqDate >= to) {
+          // Khách đã ở hết giai đoạn này → không hoàn
+          usedDays = totalDays;
+          unusedDays = 0;
+          note = "Đã sử dụng hết giai đoạn";
+        } else if (liqDate < from) {
+          // Ngày thanh lý trước ngày bắt đầu giai đoạn → hoàn toàn bộ
+          usedDays = 0;
+          unusedDays = totalDays;
+          note = "Chưa sử dụng giai đoạn này";
+        } else {
+          // Liqdate trong giai đoạn: đã ở từ `from` đến `liqDate`, còn lại `liqDate+1` đến `to`
+          usedDays = Math.round((liqDate - from) / msPerDay) + 1;
+          unusedDays = totalDays - usedDays;
+          note = `Đã ở ${usedDays} ngày, còn ${unusedDays} ngày chưa dùng`;
+        }
+
+        const refundAmount = Math.round(dailyRate * unusedDays);
+
+        paidRentPeriods.push({
+          invoiceTitle: invoice.title,
+          itemName: item.itemName,
+          fromStr,
+          toStr,
+          totalDays,
+          dailyRate: Math.round(dailyRate),
+          usedDays,
+          unusedDays,
+          itemAmount: Math.round(item.amount),
+          refundAmount,
+          note,
+        });
+      }
+    }
+
+    const totalRentRefund = paidRentPeriods.reduce((sum, p) => sum + p.refundAmount, 0);
+
+    // ── rentPaidUntil (dùng để hiển thị tham khảo) ──
+    const rentPaidUntil = contract.rentPaidUntil ?? null;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        contractId,
+        contractCode: contract.contractCode,
+        endDate: contract.endDate ?? null,
+        rentPaidUntil,
+        totalPaidInvoices: paidInvoices.length,
+        paidRentPeriods,         // Danh sách từng giai đoạn + số tiền hoàn
+        totalRentRefund,         // Tổng tiền thuê được hoàn
+        deposit: contract.depositId || null,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+

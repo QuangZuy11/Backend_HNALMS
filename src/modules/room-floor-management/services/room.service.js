@@ -128,13 +128,16 @@ exports.getAllRooms = async (filters) => {
     endDate: { $gte: now, $lte: oneMonthFromNow },
     roomId: { $in: roomIds },
   })
-    .select("roomId endDate")
+    .select("roomId endDate renewalStatus")
     .lean();
 
-  // Build map: roomId -> endDate (expiring soon)
+  // Build map: roomId -> { endDate, renewalStatus } (expiring soon)
   const expiryMap = {};
   expiringContracts.forEach((c) => {
-    expiryMap[c.roomId.toString()] = c.endDate;
+    expiryMap[c.roomId.toString()] = {
+      endDate: c.endDate,
+      renewalStatus: c.renewalStatus,
+    };
   });
 
   // Find ALL active contracts with endDate > 1 month (long-term occupied rooms)
@@ -143,15 +146,16 @@ exports.getAllRooms = async (filters) => {
     endDate: { $gt: oneMonthFromNow },
     roomId: { $in: roomIds },
   })
-    .select("roomId startDate endDate")
+    .select("roomId startDate endDate renewalStatus")
     .lean();
 
-  // Build map: roomId -> { startDate, endDate } (long-term)
+  // Build map: roomId -> { startDate, endDate, renewalStatus } (long-term)
   const activeContractMap = {};
   allActiveContracts.forEach((c) => {
     activeContractMap[c.roomId.toString()] = {
       startDate: c.startDate,
       endDate: c.endDate,
+      renewalStatus: c.renewalStatus,
     };
   });
 
@@ -252,10 +256,12 @@ exports.getAllRooms = async (filters) => {
   // Find ANY active contract that is fully activated (isActivated=true)
   // Đây là trường hợp hợp đồng đã có hiệu lực (hoặc < 30 ngày so với ngày bắt đầu)
   // Phòng này sẽ được xem là "Đã thuê" (Occupied) thay vì "Deposited"
+  // NHƯNG: loại trừ hợp đồng có renewalStatus = "declined" (người thuê từ chối gia hạn → phòng có thể mở đặt cọc sớm)
   const fullyActivatedContracts = await Contract.find({
     status: "active",
     isActivated: true,
     roomId: { $in: roomIds },
+    renewalStatus: { $ne: "declined" },
   })
     .select("roomId")
     .lean();
@@ -277,16 +283,18 @@ exports.getAllRooms = async (filters) => {
       obj.status = "Occupied";
     }
 
-    const endDate = expiryMap[roomKey];
-    if (endDate) {
-      // Expiring soon: only attach contractEndDate
-      obj.contractEndDate = endDate;
+    const expiryInfo = expiryMap[roomKey];
+    if (expiryInfo) {
+      // Expiring soon: attach endDate + renewalStatus
+      obj.contractEndDate = expiryInfo.endDate;
+      obj.contractRenewalStatus = expiryInfo.renewalStatus || null;
     } else {
       const active = activeContractMap[roomKey];
       if (active) {
-        // Long-term: attach both dates
+        // Long-term: attach both dates + renewalStatus
         obj.contractStartDate = active.startDate;
         obj.contractEndDate = active.endDate;
+        obj.contractRenewalStatus = active.renewalStatus || null;
       } else {
         // Check for future contract (Deposited room)
         const future = futureContractMap[roomKey];
@@ -413,17 +421,38 @@ exports.getRoomDetail = async (roomId) => {
     );
     roomData.hasFloatingDeposit = hasFloatingDeposit;
 
-    // NẾU CÓ HỢP ĐỒNG ĐÃ ĐƯỢC KÍCH HOẠT THÌ GHI ĐÈ TRẠNG THÁI PHÒNG LÀ OCCUPIED
-    const fullyActivContract = await Contract.findOne({
+    // Hợp đồng đang active + đã kích hoạt (bất kể renewal) — để FE biết renewalStatus (vd: declined)
+    const activeActivatedContract = await Contract.findOne({
       roomId: room._id,
       status: "active",
-      isActivated: true
-    }).select("_id").lean();
+      isActivated: true,
+    })
+      .select("_id renewalStatus startDate endDate")
+      .sort({ startDate: -1 })
+      .lean();
 
-    if (fullyActivContract) {
+    if (activeActivatedContract) {
+      roomData.contractRenewalStatus = activeActivatedContract.renewalStatus ?? null;
+      if (activeActivatedContract.endDate) {
+        roomData.activeContractEndDate = activeActivatedContract.endDate;
+        if (!roomData.contractEndDate) {
+          roomData.contractEndDate = activeActivatedContract.endDate;
+        }
+      }
+    }
+
+    // Chỉ khi KHÔNG declined mới ghi đè Occupied + tắt cờ future inactive (declined vẫn cho đặt cọc kỳ sau)
+    const blockingOccupiedContract = await Contract.findOne({
+      roomId: room._id,
+      status: "active",
+      isActivated: true,
+      renewalStatus: { $ne: "declined" },
+    })
+      .select("_id")
+      .lean();
+
+    if (blockingOccupiedContract) {
       roomData.status = "Occupied";
-      // Nếu phòng đang bị Occupied thì không được xem là đang trống chờ người thuê tương lai, 
-      // tránh để FrontEnd hiển thị sai thành "Trống đến -> ..."
       roomData.hasFutureInactiveContract = false;
     }
 
