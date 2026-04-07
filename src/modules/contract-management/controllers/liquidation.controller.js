@@ -253,7 +253,7 @@ exports.createLiquidation = async (req, res) => {
         }
       }
       await Room.findByIdAndUpdate(room._id, { status: "Available" }, { session });
-      await User.findByIdAndUpdate(contract.tenantId._id || contract.tenantId, { status: "inactive" }, { session });
+      // Removed: await User.findByIdAndUpdate(contract.tenantId._id || contract.tenantId, { status: "inactive" }, { session });
 
       await session.commitTransaction();
       session.endSession();
@@ -363,7 +363,7 @@ exports.createLiquidation = async (req, res) => {
         }
       }
       await Room.findByIdAndUpdate(room._id, { status: "Available" }, { session });
-      await User.findByIdAndUpdate(contract.tenantId._id || contract.tenantId, { status: "inactive" }, { session });
+      // Removed: await User.findByIdAndUpdate(contract.tenantId._id || contract.tenantId, { status: "inactive" }, { session });
 
       await session.commitTransaction();
       session.endSession();
@@ -532,8 +532,53 @@ exports.getPreflightData = async (req, res) => {
         if (!nameLC.includes("tiền thuê") && !nameLC.includes("tiền phòng")) continue;
         if (item.amount <= 0) continue; // Bỏ qua dòng =0 (đã trả trước, không phát sinh)
 
-        const period = parsePeriodFromText(item.itemName);
-        if (!period) continue; // Không parse được ngày → skip
+        // ── Helper: Cố gắng parse ngày, nếu thất bại (VD: format cũ chỉ ghi "Tiền thuê phòng"), fallback tính theo số tháng ──
+        let period = parsePeriodFromText(item.itemName);
+        
+        // Nếu không có ngày trong tex nhưng hóa đơn này là "PREPAID" hoặc "trả trước"
+        if (!period && 
+           (invoice.invoiceCode?.includes("PREPAID") || invoice.title?.toLowerCase().includes("trả trước") || item.usage > 1)) {
+          // Fallback: dùng startDate của hợp đồng và usage để tính
+          const isFirstDay = new Date(contract.startDate).getDate() === 1;
+          let fromDt = new Date(contract.startDate);
+          fromDt.setHours(12, 0, 0, 0);
+
+          if (!isFirstDay) {
+            fromDt = new Date(fromDt.getFullYear(), fromDt.getMonth() + 1, 1);
+            fromDt.setHours(12, 0, 0, 0);
+          }
+          
+          const toDt = new Date(fromDt.getFullYear(), fromDt.getMonth() + (item.usage >= 1 ? item.usage : 1), 0);
+          toDt.setHours(12, 0, 0, 0);
+
+          const fmt = (d) => `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
+          
+          period = {
+            from: fromDt,
+            to: toDt,
+            fromStr: fmt(fromDt),
+            toStr: fmt(toDt)
+          };
+        }
+
+        if (!period) {
+          // Vẫn không có thông tin ngày → thử đoán kì này là 1 tháng tính từ dueDate
+          const fromDt = new Date(invoice.dueDate || invoice.createdAt);
+          fromDt.setHours(12, 0, 0, 0);
+          const toDt = new Date(fromDt);
+          toDt.setMonth(toDt.getMonth() + 1);
+          toDt.setDate(toDt.getDate() - 1);
+          toDt.setHours(12, 0, 0, 0);
+          
+          const fmt = (d) => `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
+          
+          period = {
+            from: fromDt,
+            to: toDt,
+            fromStr: fmt(fromDt),
+            toStr: fmt(toDt)
+          };
+        }
 
         const { from, to, fromStr, toStr } = period;
         const totalDays = Math.round((to - from) / msPerDay) + 1;
