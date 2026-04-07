@@ -66,6 +66,39 @@ const createDeposit = async (req, res) => {
     if (roomExists.status === "Available") {
       // Phòng trống hoàn toàn → cho phép đặt cọc
       allowDeposit = true;
+    } else if (roomExists.status === "Occupied") {
+      const declinedContract = await Contract.findOne({
+        roomId: room,
+        status: "active",
+        isActivated: true,
+        renewalStatus: "declined",
+      }).lean();
+
+      if (declinedContract) {
+        const tenantADepositId = declinedContract.depositId?.toString();
+        const extraHeld = existingHeldDeposits.filter(
+          (d) => !tenantADepositId || d._id.toString() !== tenantADepositId,
+        );
+        if (extraHeld.length > 0) {
+          return res.status(400).json({
+            success: false,
+            message:
+              "Phòng đã có người đặt cọc cho kỳ thuê tiếp theo. Không thể tạo thêm cọc.",
+          });
+        }
+        const pendingOthers = await Deposit.countDocuments({
+          room: room,
+          status: "Pending",
+        });
+        if (pendingOthers > 0) {
+          return res.status(400).json({
+            success: false,
+            message:
+              "Đang có giao dịch đặt cọc chờ thanh toán cho phòng này.",
+          });
+        }
+        allowDeposit = true;
+      }
     } else if (roomExists.status === "Deposited") {
       // Phòng đang deposited → kiểm tra các hợp đồng
       const futureContracts = await Contract.find({

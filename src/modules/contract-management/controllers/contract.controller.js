@@ -51,7 +51,23 @@ exports.createContract = async (req, res) => {
       .populate("roomTypeId")
       .session(session);
     if (!room) throw new Error("Room not found");
-    if (room.status !== "Available" && room.status !== "Deposited") {
+
+    // 1.0 Check if room is Occupied but renewalStatus = "declined" → allow new contract
+    // Người thuê hiện tại đã từ chối gia hạn, phòng có thể được ký hợp đồng mới
+    let isRenewalDeclined = false;
+    let occupiedDeclinedContract = null;
+    if (room.status === "Occupied") {
+      occupiedDeclinedContract = await Contract.findOne({
+        roomId: room._id,
+        status: "active",
+        isActivated: true,
+      }).session(session).sort({ startDate: -1 });
+      if (occupiedDeclinedContract?.renewalStatus === "declined") {
+        isRenewalDeclined = true;
+      }
+    }
+
+    if (room.status !== "Available" && room.status !== "Deposited" && !isRenewalDeclined) {
       if (room.status === "Occupied")
         throw new Error("Room is currently occupied.");
     }
@@ -101,6 +117,19 @@ exports.createContract = async (req, res) => {
       if (newContractEndDate >= futureStartDate) {
         throw new Error(
           `Phòng đã có người cọc trước. Thời hạn thuê của bạn kết thúc vào ngày ${newContractEndDate.toLocaleDateString("vi-VN")} vượt quá ngày bắt đầu của khách kế tiếp (${futureStartDate.toLocaleDateString("vi-VN")}). Vui lòng giảm thời hạn thuê xuống.`
+        );
+      }
+    }
+
+    // HĐ mới (khách B) phải bắt đầu sau ngày kết thúc HĐ hiện tại (khách A đã declined)
+    if (isRenewalDeclined && occupiedDeclinedContract) {
+      const newStart = new Date(contractDetails.startDate);
+      newStart.setHours(0, 0, 0, 0);
+      const prevEnd = new Date(occupiedDeclinedContract.endDate);
+      prevEnd.setHours(0, 0, 0, 0);
+      if (newStart <= prevEnd) {
+        throw new Error(
+          `Ngày bắt đầu hợp đồng mới phải sau ngày kết thúc hợp đồng hiện tại (${prevEnd.toLocaleDateString("vi-VN")}).`,
         );
       }
     }

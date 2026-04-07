@@ -56,6 +56,40 @@ exports.initiateDeposit = async (req, res) => {
         if (room.status === "Available") {
             // Phòng trống hoàn toàn → cho phép đặt cọc
             allowDeposit = true;
+        } else if (room.status === "Occupied") {
+            // Người thuê từ chối gia hạn — cho tối đa 1 cọc cho khách kế tiếp (không trùng với depositId HĐ hiện tại)
+            const declinedContract = await Contract.findOne({
+                roomId: room._id,
+                status: "active",
+                isActivated: true,
+                renewalStatus: "declined",
+            }).lean();
+
+            if (declinedContract) {
+                const tenantADepositId = declinedContract.depositId?.toString();
+                const extraHeld = existingHeldDeposits.filter(
+                    (d) => !tenantADepositId || d._id.toString() !== tenantADepositId,
+                );
+                if (extraHeld.length > 0) {
+                    return res.status(400).json({
+                        success: false,
+                        message:
+                            "Phòng đã có người đặt cọc cho kỳ thuê tiếp theo. Không thể tạo thêm cọc.",
+                    });
+                }
+                const pendingOthers = await Deposit.countDocuments({
+                    room: room._id,
+                    status: "Pending",
+                });
+                if (pendingOthers > 0) {
+                    return res.status(400).json({
+                        success: false,
+                        message:
+                            "Đang có giao dịch đặt cọc chờ thanh toán cho phòng này.",
+                    });
+                }
+                allowDeposit = true;
+            }
         } else if (room.status === "Deposited") {
             // Phòng đang deposited → kiểm tra các hợp đồng
             const futureContracts = await Contract.find({
