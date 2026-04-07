@@ -7,6 +7,7 @@ const User = require("../../authentication/models/user.model");
 const MeterReading = require("../../invoice-management/models/meterreading.model");
 const InvoicePeriodic = require("../../invoice-management/models/invoice_periodic.model");
 const Service = require("../../service-management/models/service.model");
+const FinancialTicket = require("../../managing-income-expenses/models/financial_tickets");
 const { sendEmail } = require("../../notification-management/services/email.service");
 const { EMAIL_TEMPLATES } = require("../../../shared/config/email");
 
@@ -214,12 +215,14 @@ exports.createLiquidation = async (req, res) => {
       ];
 
       const typeLabel = "Bất khả kháng";
-      const settlement = new InvoicePeriodic({
+      const settlement = new FinancialTicket({
         invoiceCode: generateSettlementInvoiceCode(),
         contractId: contract._id,
+        referenceId: contract._id,
         title: `Hóa đơn tất toán - ${typeLabel} - ${room.name}`,
         items: invoiceItems,
         totalAmount: totalSettlement,
+        amount: Math.abs(totalSettlement),
         status: "Unpaid",
         dueDate: new Date(liqDate.getTime() + 3 * 24 * 60 * 60 * 1000),
       });
@@ -324,13 +327,15 @@ exports.createLiquidation = async (req, res) => {
         },
       ];
 
-      const typeLabel = "Vi phạm";
-      const settlement = new InvoicePeriodic({
+      const typeLabel = "Vi phạm hợp đồng";
+      const settlement = new FinancialTicket({
         invoiceCode: generateSettlementInvoiceCode(),
         contractId: contract._id,
+        referenceId: contract._id,
         title: `Hóa đơn tất toán - ${typeLabel} - ${room.name}`,
         items: invoiceItems,
         totalAmount: totalSettlement,
+        amount: Math.abs(totalSettlement),
         status: "Unpaid",
         dueDate: new Date(liqDate.getTime() + 3 * 24 * 60 * 60 * 1000),
       });
