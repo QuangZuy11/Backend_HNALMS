@@ -342,16 +342,13 @@ exports.createContract = async (req, res) => {
     const prepayMonths = req.body.prepayMonths ? Number(req.body.prepayMonths) : 0;
     if (prepayMonths > 0) {
       const totalAmount = prepayMonths * roomPrice;
-      const date = new Date();
+      const date = new Date(); // Thời điểm kí hợp đồng (= createdAt của invoice)
       const datePrefix = `${String(date.getDate()).padStart(2, '0')}${String(date.getMonth() + 1).padStart(2, '0')}${date.getFullYear()}`;
       const nextSeq = String(Math.floor(Math.random() * 10000)).padStart(4, '0');
       const invoiceCode = `HD-PREPAID-${datePrefix}-${nextSeq}`;
 
-      // Calculate due date based on prepay months (each month is prepaid, so due date is the end of the last prepaid month)
-      const contractStartDateObj = new Date(contractDetails.startDate);
-      const dueDate = new Date(contractStartDateObj);
-      dueDate.setMonth(dueDate.getMonth() + prepayMonths);
-      dueDate.setDate(0); // Go to last day of previous month
+      // dueDate = ngày kí hợp đồng (hôm nay)
+      const dueDate = date;
 
       const prepaidInvoice = new InvoicePeriodic({
         invoiceCode,
@@ -374,6 +371,7 @@ exports.createContract = async (req, res) => {
       });
       await prepaidInvoice.save({ session });
     }
+
 
     // 5. Update Room Status
     // Nếu hợp đồng bắt đầu ngay hôm nay hoặc trong quá khứ -> Occupied
