@@ -370,17 +370,36 @@ exports.createContract = async (req, res) => {
     // 4.5 Create prepaid invoice if prepayMonths is provided
     const prepayMonths = req.body.prepayMonths ? Number(req.body.prepayMonths) : 0;
     if (prepayMonths > 0) {
-      const totalAmount = prepayMonths * roomPrice;
       const date = new Date();
       const datePrefix = `${String(date.getDate()).padStart(2, '0')}${String(date.getMonth() + 1).padStart(2, '0')}${date.getFullYear()}`;
       const nextSeq = String(Math.floor(Math.random() * 10000)).padStart(4, '0');
       const invoiceCode = `HD-PREPAID-${datePrefix}-${nextSeq}`;
+      const dueDate = date;
 
-      // Calculate due date based on prepay months (each month is prepaid, so due date is the end of the last prepaid month)
-      const contractStartDateObj = new Date(contractDetails.startDate);
-      const dueDate = new Date(contractStartDateObj);
-      dueDate.setMonth(dueDate.getMonth() + prepayMonths);
-      dueDate.setDate(0); // Go to last day of previous month
+      const formatVN = (d) => {
+        const dd = String(d.getDate()).padStart(2, '0');
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const yyyy = d.getFullYear();
+        return `${dd}/${mm}/${yyyy}`;
+      };
+
+      const prepaidFrom = new Date(contractDetails.startDate);
+      prepaidFrom.setHours(12, 0, 0, 0);
+
+      const isFirstDay = prepaidFrom.getDate() === 1;
+      
+      let actualPrepaidFrom = new Date(prepaidFrom);
+      if (!isFirstDay) {
+        // Bắt đầu từ ngày 1 của tháng tiếp theo
+        actualPrepaidFrom = new Date(prepaidFrom.getFullYear(), prepaidFrom.getMonth() + 1, 1);
+        actualPrepaidFrom.setHours(12, 0, 0, 0);
+      }
+
+      const prepaidTo = new Date(actualPrepaidFrom.getFullYear(), actualPrepaidFrom.getMonth() + prepayMonths, 0);
+      prepaidTo.setHours(12, 0, 0, 0);
+
+      const totalAmount = prepayMonths * roomPrice;
+      const itemNameDesc = `Tiền thuê phòng trả trước ${prepayMonths} tháng (từ ${formatVN(actualPrepaidFrom)} đến ${formatVN(prepaidTo)})`;
 
       const prepaidInvoice = new InvoicePeriodic({
         invoiceCode,
@@ -388,7 +407,7 @@ exports.createContract = async (req, res) => {
         title: `Thanh toán tiền phòng trả trước (${prepayMonths} tháng)`,
         items: [
           {
-            itemName: "Tiền thuê phòng",
+            itemName: itemNameDesc,
             oldIndex: 0,
             newIndex: 0,
             usage: prepayMonths,
@@ -402,7 +421,13 @@ exports.createContract = async (req, res) => {
         dueDate,
       });
       await prepaidInvoice.save({ session });
+
+      // Cập nhật rentPaidUntil cho hợp đồng
+      newContract.rentPaidUntil = prepaidTo;
+      await newContract.save({ session });
     }
+
+
 
     // 5. Update Room Status
     // Nếu hợp đồng bắt đầu ngay hôm nay hoặc trong quá khứ -> Occupied
