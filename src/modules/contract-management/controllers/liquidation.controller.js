@@ -481,19 +481,23 @@ exports.getAllLiquidations = async (req, res) => {
 };
 
 // ─────────────────────────────────────────────
-// GET /liquidations/preflight/:contractId
-// Trả về thông tin tiền đã trả trước để preview thanh lý
+// GET /liquidations/preflight/:contractId?liquidationDate=YYYY-MM-DD
+// Tính toán hoàn tiền thuê theo từng kỳ hóa đơn đã thanh toán
 // ─────────────────────────────────────────────
 exports.getPreflightData = async (req, res) => {
   try {
     const { contractId } = req.params;
+    const msPerDay = 1000 * 60 * 60 * 24;
 
-    // Lấy hợp đồng kèm rentPaidUntil, endDate, và depositId
+    // ── Ngày thanh lý (từ query param hoặc hôm nay) ──
+    let liqDate = req.query.liquidationDate
+      ? new Date(req.query.liquidationDate)
+      : new Date();
+    liqDate.setHours(12, 0, 0, 0);
+
+    // ── Lấy hợp đồng ──
     const contract = await Contract.findById(contractId)
-      .populate({
-        path: "roomId",
-        populate: { path: "roomTypeId", select: "currentPrice typeName" },
-      })
+      .populate({ path: "roomId", populate: { path: "roomTypeId", select: "currentPrice typeName" } })
       .populate("depositId", "status amount refundDate forfeitedDate")
       .lean();
 
@@ -501,80 +505,99 @@ exports.getPreflightData = async (req, res) => {
       return res.status(404).json({ success: false, message: "Không tìm thấy hợp đồng." });
     }
 
-    // Lấy tất cả hóa đơn Paid của hợp đồng này, sắp xếp mới nhất trước
-    const paidInvoices = await InvoicePeriodic.find({
-      contractId,
-      status: "Paid",
-    })
-      .sort({ createdAt: -1 })
+    // ── Lấy tất cả hóa đơn Paid, sắp xếp cũ → mới ──
+    const paidInvoices = await InvoicePeriodic.find({ contractId, status: "Paid" })
+      .sort({ createdAt: 1 })
       .lean();
 
-    // Hóa đơn Paid mới nhất (để hiển thị ghi chú)
-    const latestPaidInvoice = paidInvoices[0] ?? null;
+    // ── Helper: parse "từ DD/MM/YYYY đến DD/MM/YYYY" từ itemName ──
+    const parseVNDate = (str) => {
+      const [d, m, y] = str.split("/").map(Number);
+      const dt = new Date(y, m - 1, d, 12, 0, 0);
+      return dt;
+    };
 
-    // Tìm item tiền thuê trong hóa đơn mới nhất để biết kỳ trả trước
-    let rentItemText = null;
-    let rentPaidFromStr = null;
-    if (latestPaidInvoice) {
-      const rentItem = latestPaidInvoice.items.find(
-        (it) =>
-          it.itemName.toLowerCase().includes("tiền thuê") ||
-          it.itemName.toLowerCase().includes("tiền phòng")
-      );
-      if (rentItem) {
-        rentItemText = rentItem.itemName;
-        const matchStart = rentItemText.match(/từ (\d{2}\/\d{2}\/\d{4})/i);
-        if (matchStart) {
-          rentPaidFromStr = matchStart[1];
+    const parsePeriodFromText = (text) => {
+      const match = text.match(/từ (\d{2}\/\d{2}\/\d{4}) đến (\d{2}\/\d{2}\/\d{4})/i);
+      if (!match) return null;
+      return { from: parseVNDate(match[1]), to: parseVNDate(match[2]), fromStr: match[1], toStr: match[2] };
+    };
+
+    // ── Duyệt từng hóa đơn → từng item tiền thuê → tính hoàn/không hoàn ──
+    const paidRentPeriods = [];
+
+    for (const invoice of paidInvoices) {
+      for (const item of invoice.items) {
+        const nameLC = item.itemName.toLowerCase();
+        if (!nameLC.includes("tiền thuê") && !nameLC.includes("tiền phòng")) continue;
+        if (item.amount <= 0) continue; // Bỏ qua dòng =0 (đã trả trước, không phát sinh)
+
+        const period = parsePeriodFromText(item.itemName);
+        if (!period) continue; // Không parse được ngày → skip
+
+        const { from, to, fromStr, toStr } = period;
+        const totalDays = Math.round((to - from) / msPerDay) + 1;
+        const dailyRate = totalDays > 0 ? item.amount / totalDays : 0;
+
+        let usedDays = 0;
+        let unusedDays = 0;
+        let note = "";
+
+        if (liqDate >= to) {
+          // Khách đã ở hết giai đoạn này → không hoàn
+          usedDays = totalDays;
+          unusedDays = 0;
+          note = "Đã sử dụng hết giai đoạn";
+        } else if (liqDate < from) {
+          // Ngày thanh lý trước ngày bắt đầu giai đoạn → hoàn toàn bộ
+          usedDays = 0;
+          unusedDays = totalDays;
+          note = "Chưa sử dụng giai đoạn này";
+        } else {
+          // Liqdate trong giai đoạn: đã ở từ `from` đến `liqDate`, còn lại `liqDate+1` đến `to`
+          usedDays = Math.round((liqDate - from) / msPerDay) + 1;
+          unusedDays = totalDays - usedDays;
+          note = `Đã ở ${usedDays} ngày, còn ${unusedDays} ngày chưa dùng`;
         }
+
+        const refundAmount = Math.round(dailyRate * unusedDays);
+
+        paidRentPeriods.push({
+          invoiceTitle: invoice.title,
+          itemName: item.itemName,
+          fromStr,
+          toStr,
+          totalDays,
+          dailyRate: Math.round(dailyRate),
+          usedDays,
+          unusedDays,
+          itemAmount: Math.round(item.amount),
+          refundAmount,
+          note,
+        });
       }
     }
 
-    // rentPaidUntil từ contract (được cập nhật khi markAsPaid)
+    const totalRentRefund = paidRentPeriods.reduce((sum, p) => sum + p.refundAmount, 0);
+
+    // ── rentPaidUntil (dùng để hiển thị tham khảo) ──
     const rentPaidUntil = contract.rentPaidUntil ?? null;
-    const endDate = contract.endDate ?? null;
-
-    // Tính số ngày còn dư tính từ HÔM NAY
-    const today = new Date();
-    today.setHours(12, 0, 0, 0);
-    const msPerDay = 1000 * 60 * 60 * 24;
-
-    let remainingDaysFromToday = 0;
-    let status = "no_data"; // "prepaid" | "overdue" | "no_data"
-
-    if (rentPaidUntil) {
-      const rpuDate = new Date(rentPaidUntil);
-      rpuDate.setHours(12, 0, 0, 0);
-      if (rpuDate > today) {
-        remainingDaysFromToday = Math.round((rpuDate - today) / msPerDay);
-        status = "prepaid"; // Còn dư tiền đã trả trước
-      } else {
-        remainingDaysFromToday = Math.round((today - rpuDate) / msPerDay);
-        status = "overdue"; // Đã qua ngày trả trước
-      }
-    }
-
-    // Tổng số hóa đơn đã Paid
-    const totalPaidInvoices = paidInvoices.length;
 
     res.status(200).json({
       success: true,
       data: {
         contractId,
         contractCode: contract.contractCode,
-        endDate,
+        endDate: contract.endDate ?? null,
         rentPaidUntil,
-        status,                    // "prepaid" | "overdue" | "no_data"
-        remainingDaysFromToday,    // ngày còn dư (nếu prepaid) hoặc ngày đã quá (nếu overdue)
-        totalPaidInvoices,         // tổng số HĐ đã thanh toán
-        latestPaidInvoiceTitle: latestPaidInvoice?.title ?? null,
-        latestPaidInvoiceDueDate: latestPaidInvoice?.dueDate ?? null,
-        rentItemText,              // text từ item tiền thuê trong HĐ mới nhất
-        rentPaidFromStr,           // startDate extract từ text HĐ
-        deposit: contract.depositId || null, // Include deposit object with status, amount, dates
+        totalPaidInvoices: paidInvoices.length,
+        paidRentPeriods,         // Danh sách từng giai đoạn + số tiền hoàn
+        totalRentRefund,         // Tổng tiền thuê được hoàn
+        deposit: contract.depositId || null,
       },
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
