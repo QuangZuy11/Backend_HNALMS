@@ -357,7 +357,17 @@ exports.createContract = async (req, res) => {
 
 exports.getAllContracts = async (req, res) => {
   try {
-    const contracts = await Contract.find()
+    const { status } = req.query;
+
+    const query = {};
+    if (status) {
+      // Handle case-insensitive status match (frontend sends "Active", DB stores "active")
+      const statusMap = { Active: "active", Expired: "expired", Terminated: "terminated", Pending: "pending" };
+      const mappedStatus = statusMap[status] || status.toLowerCase();
+      query.status = mappedStatus;
+    }
+
+    const contracts = await Contract.find(query)
       .populate({
         path: "roomId",
         select: "name customId status roomTypeId",
