@@ -2,6 +2,9 @@ const Deposit = require("../models/deposit.model");
 const Contract = require("../models/contract.model");
 const Room = require("../../room-floor-management/models/room.model");
 const {
+  findSuccessorContractAfterDeclined,
+} = require("../services/declinedRenewalSuccessor.service");
+const {
   sendEmail,
 } = require("../../notification-management/services/email.service");
 
@@ -13,6 +16,22 @@ async function evaluateDeclinedRenewalNextDeposit(roomObjectId, existingHeldDepo
     renewalStatus: "declined",
   }).lean();
   if (!declinedContract) return { next: "none" };
+
+  const successorContract = await findSuccessorContractAfterDeclined(
+    declinedContract,
+    roomObjectId,
+  );
+  if (successorContract) {
+    return {
+      next: "reject",
+      body: {
+        success: false,
+        message:
+          "Đã có hợp đồng kế tiếp cho phòng sau kỳ thuê hiện tại. Không thể đặt thêm cọc.",
+      },
+    };
+  }
+
   const tenantADepositId = declinedContract.depositId?.toString();
   const extraHeld = existingHeldDeposits.filter(
     (d) => !tenantADepositId || d._id.toString() !== tenantADepositId,

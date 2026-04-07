@@ -46,6 +46,10 @@ const Floor = require("../models/floor.model");
 const RoomType = require("../models/roomtype.model");
 const Contract = require("../../contract-management/models/contract.model");
 const Deposit = require("../../contract-management/models/deposit.model");
+const {
+  hasBookedSuccessorAfterDeclinedLease,
+  successorLeaseBookedByRoomIds,
+} = require("../../contract-management/services/declinedRenewalSuccessor.service");
 const xlsx = require("xlsx");
 const mongoose = require("mongoose");
 
@@ -269,6 +273,8 @@ exports.getAllRooms = async (filters) => {
   const fullyActivatedMap = {};
   fullyActivatedContracts.forEach(c => fullyActivatedMap[c.roomId.toString()] = true);
 
+  const successorBookedMap = await successorLeaseBookedByRoomIds(roomIds);
+
   // Attach date info to rooms:
   // - Expiring soon: contractEndDate only (shows "Trống từ DD/MM")
   // - Long-term occupied: contractStartDate + contractEndDate
@@ -318,6 +324,8 @@ exports.getAllRooms = async (filters) => {
 
     // Mark if room has a floating deposit (deposit waiting to sign contract)
     obj.hasFloatingDeposit = !!floatingDepositMap[roomKey];
+
+    obj.successorLeaseBooked = !!successorBookedMap[roomKey];
 
     return obj;
   });
@@ -455,6 +463,10 @@ exports.getRoomDetail = async (roomId) => {
       roomData.status = "Occupied";
       roomData.hasFutureInactiveContract = false;
     }
+
+    roomData.successorLeaseBooked = await hasBookedSuccessorAfterDeclinedLease(
+      room._id,
+    );
 
     return roomData;
   } catch (error) {

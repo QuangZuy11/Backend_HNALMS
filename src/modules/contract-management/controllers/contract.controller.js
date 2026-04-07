@@ -1,4 +1,7 @@
 const Contract = require("../models/contract.model");
+const {
+  hasBookedSuccessorAfterDeclinedLease,
+} = require("../services/declinedRenewalSuccessor.service");
 const BookService = require("../models/bookservice.model");
 const Room = require("../../room-floor-management/models/room.model");
 const User = require("../../authentication/models/user.model");
@@ -52,6 +55,12 @@ exports.createContract = async (req, res) => {
       .session(session);
     if (!room) throw new Error("Room not found");
 
+    if (await hasBookedSuccessorAfterDeclinedLease(room._id, session)) {
+      throw new Error(
+        "Đã có hợp đồng kế tiếp cho phòng sau kỳ thuê hiện tại. Không thể tạo thêm hợp đồng.",
+      );
+    }
+
     // 1.0 Check if room is Occupied but renewalStatus = "declined" → allow new contract
     // Người thuê hiện tại đã từ chối gia hạn, phòng có thể được ký hợp đồng mới
     let isRenewalDeclined = false;
@@ -72,14 +81,19 @@ exports.createContract = async (req, res) => {
         throw new Error("Room is currently occupied.");
     }
 
-    // 1.2 Check for Future Contract if room is Deposited
+    // 1.2 HĐ "khách kế tiếp" khi phòng Deposited: chỉ các HĐ active bắt đầu SAU ngày bắt đầu HĐ đang tạo.
+    // Trước đây dùng startDate > new Date() nên lẫn HĐ cũ (vd. 8/4) dù HĐ mới bắt đầu 10/5 → báo lỗi sai.
     let futureContract = null;
-    if (room.status === "Deposited") {
+    if (room.status === "Deposited" && contractDetails?.startDate) {
+      const newContractStart = new Date(contractDetails.startDate);
+      newContractStart.setHours(0, 0, 0, 0);
       futureContract = await Contract.findOne({
         roomId: room._id,
         status: "active",
-        startDate: { $gt: new Date() }
-      }).session(session).sort({ startDate: 1 });
+        startDate: { $gt: newContractStart },
+      })
+        .session(session)
+        .sort({ startDate: 1 });
     }
 
     // 1.5. Validate startDate: >= ngày cọc, và <= 6 tháng kể từ ngày cọc (nếu có deposit)
