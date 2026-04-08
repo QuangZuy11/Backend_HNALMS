@@ -51,8 +51,25 @@ async function evaluateDeclinedRenewalNextDeposit(roomObjectId, existingHeldDepo
     }
 
     const tenantADepositId = declinedContract.depositId?.toString();
+
+    // Lấy tất cả HĐ chưa kích hoạt để biết deposit nào đã bind vào HĐ tương lai (vd HĐ 464)
+    const inactiveContracts = await Contract.find({
+        roomId: roomObjectId,
+        isActivated: false,
+        status: { $nin: ["terminated", "expired"] },
+    }).select("depositId").lean();
+
+    const depositsBoundToInactive = new Set(
+        inactiveContracts
+            .filter((c) => c.depositId)
+            .map((c) => c.depositId.toString())
+    );
+
+    // extraHeld: loại bỏ cọc của HĐ 622 (tenantA) VÀ cọc đã bind vào HĐ 464 (chưa kích hoạt)
     const extraHeld = existingHeldDeposits.filter(
-        (d) => !tenantADepositId || d._id.toString() !== tenantADepositId,
+        (d) =>
+            (!tenantADepositId || d._id.toString() !== tenantADepositId) &&
+            !depositsBoundToInactive.has(d._id.toString()),
     );
     if (extraHeld.length > 0) {
         return {
