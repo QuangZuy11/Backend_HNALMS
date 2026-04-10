@@ -181,14 +181,15 @@ exports.sendPaymentInfo = async (req, res) => {
     const bankAccountName = encodeURIComponent(process.env.BANK_ACCOUNT_NAME || "HOANG NAM ALMS");
 
     // Generate transaction code: "Coc <RoomCode> <8 random digits>"
+    // Ví dụ: Coc P112A 89358552
     const roomCodeRaw = request.roomId.roomCode || request.roomId.name || "PHONG";
-    const roomCodeShort = roomCodeRaw.replace(/Phòng\s*/gi, 'P').replace(/[^a-zA-Z0-9]/g, '');
+    const roomCodeShort = roomCodeRaw.replace(/Ph\u00f2ng\s*/gi, 'P').replace(/[^a-zA-Z0-9]/g, '');
     const random8 = String(Math.floor(10000000 + Math.random() * 90000000));
     const transactionCode = `Coc ${roomCodeShort} ${random8}`;
     const encodedCode = encodeURIComponent(transactionCode);
 
-    // Use vietqr.io format for reliable Sepay detection
-    const qrUrl = `https://img.vietqr.io/image/${bankBin}-${bankAccount}-qr_only.jpg?amount=${totalAmount}&addInfo=${encodedCode}&accountName=${bankAccountName}`;
+    // Generate Sepay QR link format
+    const qrUrl = `https://qr.sepay.vn/img?acc=${bankAccount}&bank=${bankBin}&amount=${totalAmount}&des=${encodedCode}`;
     
     // Set expiry to 12 hours from now
     const expiresAt = new Date();
@@ -307,14 +308,22 @@ exports.sendPaymentInfo = async (req, res) => {
     }
 
     const qrBlockHtml = `
-      <div style="border: 2px dashed #007bff; padding: 15px; text-align: center; margin-top: 30px;">
-        <h3 style="color: #007bff; margin-top:0;">THANH TOÁN ĐỂ CHỐT PHÒNG</h3>
-        <p>Để hoàn tất thủ tục, vui lòng quét mã QR dưới đây:</p>
-        <img src="${qrUrl}" alt="QR Code" style="max-width: 250px; border: 1px solid #ccc; border-radius: 8px;"/>
-        <p style="font-size: 1.2rem;">Tổng cộng tiền cọc và trả trước: <strong style="color:red">${totalAmount.toLocaleString("vi-VN")} VNĐ</strong></p>
-        <p style="color: red; font-weight: bold; font-size: 1.1em; margin-top: 10px;">
-          LƯU Ý: Yêu cầu thanh toán và mã QR này sẽ hết hạn trong vòng 12 GIỜ. 
-          Nếu quý khách không thanh toán trong thời hạn 12 giờ, yêu cầu sẽ tự động bị hủy và phòng sẽ trở lại trạng thái trống.
+      <div style="border: 2px dashed #007bff; padding: 20px; text-align: center; margin-top: 30px; border-radius: 8px; background: #f0f7ff;">
+        <h3 style="color: #007bff; margin-top:0;">⚡ THANH TOÁN ĐỂ CHỐT PHÒNG</h3>
+        <p>Để hoàn tất thủ tục, vui lòng quét mã QR dưới đây hoặc chuyển khoản thủ công:</p>
+        <img src="${qrUrl}" alt="QR Code" style="max-width: 250px; border: 1px solid #ccc; border-radius: 8px; margin: 10px 0;"/>
+        <div style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 6px; padding: 12px; margin: 15px auto; max-width: 420px; text-align: left;">
+          <p style="margin: 4px 0;"><strong>🏦 Ngân hàng:</strong> Ngân hàng MB Bank</p>
+          <p style="margin: 4px 0;"><strong>👤 Tên tài khoản:</strong> HOANG NAM ALMS</p>
+          <p style="margin: 4px 0;"><strong>💳 Số tài khoản:</strong> ${process.env.BANK_ACCOUNT || "0372051662"}</p>
+          <p style="margin: 4px 0;"><strong>💰 Số tiền:</strong> <span style="color: #e63946; font-size: 1.1em;">${totalAmount.toLocaleString("vi-VN")} VNĐ</span></p>
+          <p style="margin: 4px 0;"><strong>📝 Nội dung chuyển khoản (bắt buộc):</strong></p>
+          <p style="background: #fff; border: 2px solid #007bff; border-radius: 4px; padding: 8px 12px; font-size: 1.15em; font-weight: bold; color: #007bff; letter-spacing: 1px; text-align: center; margin: 6px 0;">${transactionCode}</p>
+          <p style="font-size: 0.85em; color: #888; margin: 2px 0;">(Vui lòng nhập ĐÚNG nội dung này khi chuyển khoản để hệ thống tự động xác nhận)</p>
+        </div>
+        <p style="color: red; font-weight: bold; font-size: 1.05em; margin-top: 10px;">
+          ⏳ LƯU Ý: Yêu cầu thanh toán và mã QR này sẽ hết hạn trong vòng 12 GIỜ. 
+          Nếu không thanh toán trong thời hạn, yêu cầu sẽ tự động bị hủy và phòng trở lại trạng thái trống.
         </p>
       </div>
     `;
@@ -383,6 +392,7 @@ exports.handleSepayWebhook = async (req, res) => {
     const { content, transferAmount } = req.body;
     
     // Parse transactionCode from content – format: "Coc <RoomCode> <8digits>"
+    // Ví dụ: Coc P112A 89358552
     const matchCode = content.match(/Coc\s+\S+\s+\d{8}/i);
     if (!matchCode) {
       return res.status(200).json({ success: true, message: "No matching BookingRequest transactionCode in content" });
@@ -467,18 +477,181 @@ exports.handleSepayWebhook = async (req, res) => {
       await paymentRecord.save();
     }
 
+    // Mark BookingRequest as Paid before calling createContract
+    bookingRequest.paymentStatus = "Paid";
+    await bookingRequest.save();
+
     // Call createContract
-    bookingRequest.paymentStatus = "Paid"; await bookingRequest.save(); await contractController.createContract(mockReq, mockRes);
+    await contractController.createContract(mockReq, mockRes);
     
     if (contractResponseStatus === 201 || contractResponseStatus === 200) {
+      // Successfully converted → update BookingRequest status to Processed
+      await BookingRequest.findByIdAndUpdate(bookingRequest._id, { status: "Processed" });
+      // Ensure Payment record is marked Success (double-check)
+      if (paymentRecord) {
+        paymentRecord.status = "Success";
+        paymentRecord.paymentDate = paymentRecord.paymentDate || new Date();
+        await paymentRecord.save();
+      }
       console.log(`[SEPAY WEBHOOK] BookingRequest ${bookingRequest._id} successfully processed into Contract.`);
       return res.status(200).json({ success: true, message: "Booking Request converted to Contract" });
     } else {
       console.error(`[SEPAY WEBHOOK] Failed to convert BookingRequest. Data:`, contractResponseData);
-      return res.status(200).json({ success: true, message: "Failed to convert BookingRequest", errorDetail: contractResponseData });
+      // Payment đã nhận nhưng tạo hợp đồng lỗi → giữ paymentStatus = Paid nhưng status vẫn "Awaiting Payment" để admin xử lý thủ công
+      return res.status(200).json({ success: true, message: "Payment received but contract creation failed", errorDetail: contractResponseData });
     }
   } catch (error) {
     console.error("[SEPAY WEBHOOK] Error processing BookingRequest payment:", error);
     return res.status(200).json({ success: false, message: "Internal Server Error", error: error.stack });
   }
 };
+
+// =============================================
+// GET /api/booking-requests/payment-status/:transactionCode
+// FE gọi polling mỗi vài giây để kiểm tra trạng thái thanh toán
+// Tương tự GET /api/deposits/status/:transactionCode trong deposit flow
+// =============================================
+exports.getPaymentStatus = async (req, res) => {
+  try {
+    const { transactionCode } = req.params;
+
+    // 1. Tìm BookingRequest theo transactionCode
+    const bookingRequest = await BookingRequest.findOne({
+      transactionCode: new RegExp(`^${transactionCode}$`, "i")
+    }).populate("roomId");
+
+    if (!bookingRequest) {
+      return res.status(404).json({ success: false, message: "Không tìm thấy yêu cầu đặt phòng với mã này." });
+    }
+
+    // 2. Nếu đã Processed rồi → trả về ngay
+    if (bookingRequest.status === "Processed") {
+      return res.status(200).json({
+        success: true,
+        data: { status: "Processed", paymentStatus: "Paid", message: "Thanh toán đã được xác nhận, hợp đồng đã tạo." }
+      });
+    }
+
+    // 3. Nếu paymentStatus đã Paid nhưng contract chưa tạo → thử tạo lại
+    if (bookingRequest.paymentStatus === "Paid" && bookingRequest.status === "Awaiting Payment") {
+      console.log(`[BOOKING POLLING] Payment đã Paid nhưng contract chưa tạo, thử lại cho ${transactionCode}`);
+      await _triggerCreateContract(bookingRequest);
+      // Reload
+      const updated = await BookingRequest.findById(bookingRequest._id);
+      return res.status(200).json({
+        success: true,
+        data: {
+          status: updated.status,
+          paymentStatus: updated.paymentStatus,
+          message: updated.status === "Processed" ? "Hợp đồng đã được tạo." : "Đang xử lý..."
+        }
+      });
+    }
+
+    // 4. Kiểm tra Payment record
+    const paymentRecord = await Payment.findOne({
+      bookingRequestId: bookingRequest._id,
+      transactionCode: new RegExp(`^${transactionCode}$`, "i")
+    });
+
+    if (paymentRecord && paymentRecord.status === "Success") {
+      // Payment đã Success nhưng BookingRequest chưa được cập nhật → tự xử lý
+      console.log(`[BOOKING POLLING] Payment record Success, kích hoạt tạo hợp đồng cho ${transactionCode}`);
+      bookingRequest.paymentStatus = "Paid";
+      await bookingRequest.save();
+      await _triggerCreateContract(bookingRequest);
+      const updated = await BookingRequest.findById(bookingRequest._id);
+      return res.status(200).json({
+        success: true,
+        data: {
+          status: updated.status,
+          paymentStatus: updated.paymentStatus,
+          message: updated.status === "Processed" ? "Hợp đồng đã được tạo." : "Đang xử lý..."
+        }
+      });
+    }
+
+    // 5. Kiểm tra hết hạn
+    if (bookingRequest.paymentExpiresAt && new Date() > bookingRequest.paymentExpiresAt && bookingRequest.status === "Awaiting Payment") {
+      await BookingRequest.findByIdAndUpdate(bookingRequest._id, { status: "Expired" });
+      if (paymentRecord && paymentRecord.status === "Pending") {
+        paymentRecord.status = "Failed";
+        await paymentRecord.save();
+      }
+      return res.status(200).json({
+        success: true,
+        data: { status: "Expired", paymentStatus: "Unpaid", message: "Yêu cầu đã hết hạn thanh toán." }
+      });
+    }
+
+    // 6. Còn đang chờ
+    const expiresAt = bookingRequest.paymentExpiresAt;
+    const expireInSeconds = expiresAt ? Math.max(0, Math.floor((new Date(expiresAt) - Date.now()) / 1000)) : null;
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        status: bookingRequest.status,               // "Awaiting Payment"
+        paymentStatus: bookingRequest.paymentStatus, // "Unpaid"
+        transactionCode: bookingRequest.transactionCode,
+        totalAmount: bookingRequest.totalAmount,
+        expireAt: expiresAt,
+        expireInSeconds,
+        message: "Đang chờ thanh toán..."
+      }
+    });
+  } catch (error) {
+    console.error("[BOOKING POLLING] Error:", error);
+    return res.status(500).json({ success: false, message: "Lỗi máy chủ." });
+  }
+};
+
+// =============================================
+// Helper nội bộ: Tạo hợp đồng từ BookingRequest (dùng chung webhook & polling)
+// =============================================
+async function _triggerCreateContract(bookingRequest) {
+  try {
+    const contractController = require("./contract.controller");
+
+    const mockReq = {
+      body: {
+        roomId: bookingRequest.roomId._id || bookingRequest.roomId,
+        bookingRequestId: bookingRequest._id,
+        tenantInfo: {
+          fullName: bookingRequest.name,
+          cccd: bookingRequest.idCard,
+          phone: bookingRequest.phone,
+          email: bookingRequest.email,
+          dob: bookingRequest.dob,
+          address: bookingRequest.address,
+          gender: bookingRequest.gender || "Other"
+        },
+        coResidents: bookingRequest.coResidents || [],
+        contractDetails: {
+          startDate: bookingRequest.startDate,
+          duration: bookingRequest.duration
+        },
+        bookServices: bookingRequest.servicesInfo || [],
+        prepayMonths: parseInt(bookingRequest.prepayMonths, 10) || bookingRequest.duration
+      }
+    };
+
+    let contractResponseStatus = 200;
+    const mockRes = {
+      status: (code) => { contractResponseStatus = code; return mockRes; },
+      json: () => {}
+    };
+
+    await contractController.createContract(mockReq, mockRes);
+
+    if (contractResponseStatus === 201 || contractResponseStatus === 200) {
+      await BookingRequest.findByIdAndUpdate(bookingRequest._id, { status: "Processed" });
+      console.log(`[BOOKING POLLING] ✅ Contract created for BookingRequest ${bookingRequest._id}`);
+    } else {
+      console.warn(`[BOOKING POLLING] ⚠️ createContract returned ${contractResponseStatus}`);
+    }
+  } catch (err) {
+    console.error("[BOOKING POLLING] ❌ _triggerCreateContract error:", err.message);
+  }
+}
+

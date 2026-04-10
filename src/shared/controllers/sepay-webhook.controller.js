@@ -6,8 +6,9 @@ const bookingRequestController = require("../../modules/contract-management/cont
 /**
  * Webhook chung cho tất cả giao dịch Sepay
  * Phân biệt loại giao dịch qua nội dung chuyển khoản:
- *   - "Coc ..." → Đặt cọc phòng
- *   - "HD ..."  → Thanh toán hóa đơn phát sinh
+ *   - "Coc <Room> <8digits>" → Booking Request online HOẶC Đặt cọc thường
+ *     (phân biệt bằng DB lookup: tìm BookingRequest trước, nếu không thấy → Deposit)
+ *   - "HD ..."    → Thanh toán hóa đơn phát sinh
  *   - "PREPAID ..." → Trả trước tiền phòng
  *
  * Middleware verifySepayToken đã xác thực API Key trước khi vào đây.
@@ -31,21 +32,21 @@ exports.handleWebhook = async (req, res) => {
 
         // --- Phân biệt loại giao dịch ---
 
-        // 1. Đặt cọc hoặc Booking Request: nội dung chứa "COC <roomCode> <8digits>"
-        // Kiểm tra BookingRequest trước, nếu không có thì xử lý như deposit thường
+        // 1. COC: Booking Request hoặc Deposit thường
+        //    Format: "Coc <RoomCode> <8digits>" — ví dụ: Coc P112A 89358552
+        //    Phân biệt bằng DB lookup: BookingRequest ưu tiên trước
         if (/COC\s+\S+\s+\d{8}/.test(upperContent)) {
             const matchCode = content.match(/Coc\s+\S+\s+\d{8}/i);
             if (matchCode) {
                 const transCode = matchCode[0];
                 const BookingRequest = require("../../modules/contract-management/models/booking-request.model");
-                // Match ignore case to be safe, since bank might uppercase it
                 const br = await BookingRequest.findOne({ transactionCode: new RegExp(`^${transCode}$`, "i") });
                 if (br) {
-                    console.log("[SEPAY WEBHOOK] 📝 Detected BOOKING REQUEST (COC format) transaction");
+                    console.log("[SEPAY WEBHOOK] 📝 Detected BOOKING REQUEST transaction");
                     return bookingRequestController.handleSepayWebhook(req, res);
                 }
             }
-            // Không phải BookingRequest → xử lý như deposit thường
+            // Không tìm thấy BookingRequest → xử lý như Deposit thường
             console.log("[SEPAY WEBHOOK] 🏠 Detected DEPOSIT transaction");
             return depositController.sepayWebhook(req, res);
         }
