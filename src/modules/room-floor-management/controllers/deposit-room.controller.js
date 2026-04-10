@@ -103,13 +103,16 @@ async function evaluateDeclinedRenewalNextDeposit(roomObjectId, existingHeldDepo
 // =============================================
 exports.initiateDeposit = async (req, res) => {
     try {
-        const { roomId, name, phone, email } = req.body;
+        const { 
+            roomId, name, phone, email, 
+            idCard, startDate, duration, prepayMonths, coResidents 
+        } = req.body;
 
         // --- Validate input ---
-        if (!roomId || !name || !phone || !email) {
+        if (!roomId || !name || !phone || !email || !idCard || !startDate) {
             return res.status(400).json({
                 success: false,
-                message: "Vui lòng điền đầy đủ thông tin: roomId, name, phone, email",
+                message: "Vui lòng điền đầy đủ thông tin bắt buộc: roomId, name, phone, email, idCard, startDate",
             });
         }
 
@@ -217,11 +220,11 @@ exports.initiateDeposit = async (req, res) => {
             return res.status(400).json({ success: false, message: "Không thể đọc giá phòng" });
         }
 
-        // --- Sinh mã giao dịch ---
+        // --- Lấy thông tin ---
         const transactionCode = generateTransactionCode(room.name);
 
-        // --- Tính thời gian hết hạn (5 phút từ bây giờ) ---
-        const expireAt = new Date(Date.now() + 5 * 60 * 1000); // 5 phút
+        // --- Tính thời gian hết hạn (24 giờ từ bây giờ vì là gửi yêu cầu) ---
+        const expireAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 giờ
 
         // --- Lưu Deposit vào DB với status "Pending", activationStatus = null (chờ kích hoạt) ---
         const deposit = new Deposit({
@@ -234,6 +237,11 @@ exports.initiateDeposit = async (req, res) => {
             transactionCode,
             expireAt,
             activationStatus: null, // Chưa active, sẽ được set khi contract kích hoạt
+            idCard,
+            startDate: new Date(startDate),
+            duration: parseInt(duration, 10) || 12,
+            prepayMonths: prepayMonths === "all" ? "all" : (parseInt(prepayMonths, 10) || 2),
+            coResidents: Array.isArray(coResidents) ? coResidents : [],
         });
         await deposit.save();
 

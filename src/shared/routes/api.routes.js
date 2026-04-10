@@ -54,6 +54,7 @@ ApiRouter.use("/upload", uploadRoutes);
 
 const contractRoutes = require("../../modules/contract-management/routes/contract.routes");
 const depositRoutes = require("../../modules/contract-management/routes/deposit.routes");
+const bookingRequestRoutes = require("../../modules/contract-management/routes/booking-request.routes");
 const moveOutRoutes = require("../../modules/contract-management/routes/moveout_request.routes");
 const accountRoutes = require("../../modules/account-management/routes/account.routes");
 const liquidationRoutes = require("../../modules/contract-management/routes/liquidation.routes");
@@ -61,6 +62,7 @@ const liquidationRoutes = require("../../modules/contract-management/routes/liqu
 ApiRouter.use("/contracts", contractRoutes);
 ApiRouter.use("/renewals", require("../../modules/contract-management/routes/renewal.routes"));
 ApiRouter.use("/deposits", depositRoutes);
+ApiRouter.use("/booking-requests", bookingRequestRoutes);
 ApiRouter.use("/move-outs", moveOutRoutes);
 ApiRouter.use("/accounts", accountRoutes);
 ApiRouter.use("/liquidations", liquidationRoutes);

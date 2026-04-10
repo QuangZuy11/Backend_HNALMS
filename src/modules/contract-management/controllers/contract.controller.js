@@ -3,6 +3,7 @@ const {
   hasBookedSuccessorAfterDeclinedLease,
 } = require("../services/declinedRenewalSuccessor.service");
 const BookService = require("../models/bookservice.model");
+const BookingRequest = require("../models/booking-request.model");
 const Room = require("../../room-floor-management/models/room.model");
 const User = require("../../authentication/models/user.model");
 const UserInfo = require("../../authentication/models/userInfor.model");
@@ -42,6 +43,7 @@ exports.createContract = async (req, res) => {
     const {
       roomId,
       depositId, // Optional
+      bookingRequestId, // Optional (thay thế cho depositId từ request online)
       tenantInfo, // { fullName, dob, cccd, phone, email, address, ... }
       coResidents, // Array
       contractDetails, // { startDate, duration, services, paymentCycle, rentPaidUntil }
@@ -345,6 +347,43 @@ exports.createContract = async (req, res) => {
       }
     }
 
+    // 3.1. Process BookingRequest if provided
+    if (bookingRequestId) {
+      const bRequest = await BookingRequest.findById(bookingRequestId).session(session);
+      if (bRequest) {
+        bRequest.status = "Processed";
+        await bRequest.save({ session });
+
+        // Auto create a Held deposit to satisfy system constraints since this contract originated from a booking request
+        if (!linkedDepositId) {
+          const depositAmount = parseFloat(room.roomTypeId?.currentPrice?.toString() || "0");
+          
+          const roomCodeRaw = room.roomCode || room.name || "PHONG";
+          const roomCodeShort = roomCodeRaw.replace(/Phòng\s*/gi, 'P').replace(/[^a-zA-Z0-9]/g, '');
+          const random8 = String(Math.floor(10000000 + Math.random() * 90000000));
+          const transactionCode = `Coc ${roomCodeShort} ${random8}`;
+          
+          const deposit = new Deposit({
+            name: bRequest.name,
+            phone: bRequest.phone,
+            email: bRequest.email,
+            room: room._id,
+            amount: depositAmount,
+            status: "Held",
+            transactionCode: transactionCode,
+            activationStatus: contractIsActivated ? true : null,
+            idCard: bRequest.idCard,
+            startDate: bRequest.startDate,
+            duration: bRequest.duration,
+            prepayMonths: bRequest.prepayMonths,
+            coResidents: bRequest.coResidents,
+          });
+          await deposit.save({ session });
+          linkedDepositId = deposit._id;
+        }
+      }
+    }
+
     // 3.5. Update linked deposit's activationStatus
     // - Nếu hợp đồng đã active (startDate <= today): activationStatus = true
     // - Nếu hợp đồng chưa active (startDate > today): activationStatus = null (chờ ngày kích hoạt)
@@ -355,6 +394,9 @@ exports.createContract = async (req, res) => {
           linkedDeposit.activationStatus = true;
         } else {
           linkedDeposit.activationStatus = null; // Chưa active, chờ đến ngày
+        }
+        if (linkedDeposit.status === "Pending") {
+          linkedDeposit.status = "Held";
         }
         await linkedDeposit.save({ session });
       }
@@ -484,42 +526,64 @@ exports.createContract = async (req, res) => {
     await session.commitTransaction();
     session.endSession();
 
-    // 6. Send Email Notification to the tenant's email from the form (NOT user.email from DB)
-    if (isNewUser) {
-      const recipientEmail = tenantInfo.email;
-      console.log(`[DEBUG] Preparing to send email to ${recipientEmail}`);
-      const emailContent = EMAIL_TEMPLATES.NEW_CONTRACT_ACCOUNT.getHtml(
+    // 6. Send Email Notifications to the tenant's email from the form
+    const recipientEmail = tenantInfo.email;
+    if (recipientEmail) {
+      // 6.1 Send Account Info (if new user)
+      if (isNewUser) {
+        console.log(`[DEBUG] Preparing to send account email to ${recipientEmail}`);
+        const accountEmailContent = EMAIL_TEMPLATES.NEW_CONTRACT_ACCOUNT.getHtml(
+          tenantInfo.fullName,
+          user.username,
+          passwordRaw,
+          room.name,
+        );
+        try {
+          await sendEmail(recipientEmail, EMAIL_TEMPLATES.NEW_CONTRACT_ACCOUNT.subject, accountEmailContent);
+        } catch (err) {
+          console.error(`❌ [DEBUG] Failed to send account email to ${recipientEmail}:`, err);
+        }
+      }
+
+      // 6.2 Send Contract Form
+      // Lấy thông tin deposit nếu có
+      let depositValueForEmail = 0;
+      if (linkedDepositId) {
+        const d = await Deposit.findById(linkedDepositId);
+        if (d) depositValueForEmail = d.amount;
+      } else {
+        depositValueForEmail = depositAmount; // fallback to roomPrice
+      }
+      
+      const priceStr = new Intl.NumberFormat('vi-VN').format(roomPrice);
+      const startDt = new Date(contractDetails.startDate).toLocaleDateString("vi-VN");
+      const endDt = endDate.toLocaleDateString("vi-VN");
+
+      const contractEmailContent = EMAIL_TEMPLATES.ONLINE_BOOKING_CONTRACT.getHtml(
         tenantInfo.fullName,
-        user.username,
-        passwordRaw,
+        tenantInfo.cccd,
         room.name,
+        contractDetails.duration,
+        priceStr,
+        startDt,
+        endDt,
+        req.body.prepayMonths || 1,
+        depositValueForEmail
       );
 
       try {
-        await sendEmail(
-          recipientEmail,
-          EMAIL_TEMPLATES.NEW_CONTRACT_ACCOUNT.subject,
-          emailContent,
-        );
-        console.log(`✅ [DEBUG] Email successfully sent to ${recipientEmail}`);
-      } catch (emailError) {
-        console.error(
-          `❌ [DEBUG] Failed to send email to ${user.email}:`,
-          emailError,
-        );
-        // We don't throw here to ensure the contract creation success is still returned,
-        // but we might want to warn the user in the response if critical.
+        await sendEmail(recipientEmail, EMAIL_TEMPLATES.ONLINE_BOOKING_CONTRACT.subject, contractEmailContent);
+        console.log(`✅ [DEBUG] Contract email successfully sent to ${recipientEmail}`);
+      } catch (err) {
+        console.error(`❌ [DEBUG] Failed to send contract email to ${recipientEmail}:`, err);
       }
-    } else {
-      console.log(`[DEBUG] User existing. Skipping new account email.`);
     }
 
     const successMsg = isNewUser
       ? (tenantInitialStatus === "inactive"
-        ? `Đã tạo hợp đồng thành công. Tài khoản đã tạo nhưng sẽ được kích hoạt vào ngày ${startDateObj.toLocaleDateString("vi-VN")}. Mật khẩu đã gửi email.`
-        : "Đã tạo hợp đồng thành công. Tài khoản và mật khẩu đã được gửi đến email."
-      )
-      : "Tài khoản cho CCCD/CMND này đã tồn tại nên không tạo mới, hợp đồng đã được tạo thành công!";
+        ? `Đã tạo hợp đồng thành công. Tài khoản sẽ được kích hoạt vào ngày ${startDateObj.toLocaleDateString("vi-VN")}. Mật khẩu và Hợp đồng đã gửi email.`
+        : "Đã tạo hợp đồng thành công. Mật khẩu và Hợp đồng đã được gửi đến email.")
+      : "Đã tạo hợp đồng thành công và gửi Hợp đồng vào email khách hàng (Tài khoản đã tồn tại nên dùng mật khẩu cũ)!";
 
     res.status(201).json({
       success: true,

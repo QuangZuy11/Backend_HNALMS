@@ -18,6 +18,11 @@ const paymentSchema = new Schema(
       ref: "Deposits",
       default: null,
     },
+    bookingRequestId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "BookingRequest",
+      default: null,
+    },
     amount: {
       type: Number,
       required: true,
