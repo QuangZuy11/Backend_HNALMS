@@ -4,6 +4,7 @@ const emailService = require("./src/modules/notification-management/services/ema
 const { startDepositExpirationJob } = require("./src/shared/jobs/deposit-expiration.job");
 const contractStartJob = require("./src/modules/contract-management/jobs/contract-start.job");
 const { contractRenewalJob } = require("./src/modules/contract-management/jobs/contract-renewal.job");
+const { moveOutAutoCompleteJob } = require("./src/modules/contract-management/jobs/moveout-auto-complete.job");
 
 const PORT = process.env.PORT || 9999;
 
@@ -16,4 +17,5 @@ app.listen(PORT, async () => {
     startDepositExpirationJob();
     contractStartJob();
     contractRenewalJob();
+    moveOutAutoCompleteJob();
 });
