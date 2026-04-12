@@ -233,6 +233,80 @@ EMAIL_TEMPLATES.LIQUIDATION_SETTLEMENT = {
   }
 };
 
+// Template xác nhận hợp đồng (giống form hợp đồng pdf)
+EMAIL_TEMPLATES.ONLINE_BOOKING_CONTRACT = {
+  subject: "Xác nhận & Hợp đồng thuê nhà điện tử - HNALMS",
+  getHtml: (tenantName, tenantIdCard, roomName, duration, priceStr, startDateStr, endDateStr, prepayMonths, depositAmount) => `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <style>
+        body { font-family: 'Times New Roman', serif; line-height: 1.6; color: #000; }
+        .container { max-width: 700px; margin: 0 auto; padding: 30px; background: #fff; }
+        .header { text-align: center; margin-bottom: 30px; }
+        .title { font-size: 20px; font-weight: bold; margin-bottom: 20px; text-transform: uppercase; }
+        .section { margin-top: 15px; margin-bottom: 15px; }
+        .bold { font-weight: bold; }
+        .italic { font-style: italic; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="header">
+          <h2 style="margin:0;">CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM</h2>
+          <h3 style="margin:0; text-decoration: underline;">Độc lập - Tự do - Hạnh phúc</h3>
+        </div>
+        
+        <div align="center" class="title">HỢP ĐỒNG THUÊ NHÀ</div>
+        
+        <div class="section">
+          <p>Hôm nay, hai bên chúng tôi gồm:</p>
+          <div class="bold">BÊN CHO THUÊ (BÊN A): BAN QUẢN LÝ TÒA NHÀ HNALMS</div>
+          <p>Đại diện: Ban Quản Lý (Là đơn vị quản lý, vận hành phòng thuê)</p>
+          
+          <div class="bold" style="margin-top:10px;">BÊN THUÊ (BÊN B):</div>
+          <p>Ông/Bà: <span class="bold">${tenantName}</span></p>
+          <p>CCCD/CMND: <span class="bold">${tenantIdCard || "......................."}</span></p>
+        </div>
+
+        <div class="section">
+          <div class="bold">Điều 1: Nội dung hợp đồng</div>
+          <p>Bên A đồng ý cho bên B thuê phòng <span class="bold">${roomName}</span> thuộc hệ thống quản lý của HNALMS.</p>
+          <p>- Thời hạn thuê: <span class="bold">${duration}</span> tháng, từ ngày <span class="bold">${startDateStr}</span> đến ngày <span class="bold">${endDateStr}</span>.</p>
+        </div>
+
+        <div class="section">
+          <div class="bold">Điều 2: Giá thuê, tiền cọc và phương thức thanh toán</div>
+          <p>- Giá thuê phòng: <span class="bold">${priceStr}</span> VNĐ / tháng.</p>
+          <p>- Tiền cọc đã nhận: <span class="bold">${new Intl.NumberFormat('vi-VN').format(depositAmount)}</span> VNĐ.</p>
+          <p>- Hình thức thanh toán: Thanh toán <span class="bold">${prepayMonths}</span> tháng / lần vào đầu mỗi chu kỳ.</p>
+        </div>
+        
+        <div class="section">
+          <div class="bold">Điều 3: Cam kết chung</div>
+          <p>Bên B cam kết tuân thủ đầy đủ các nội quy tòa nhà, thanh toán tiền thuê và dịch vụ đúng hạn. Bên A cam kết bàn giao phòng và cung cấp các dịch vụ quản lý như thỏa thuận.</p>
+          <p class="italic" style="margin-top: 10px; color: #555;">(Hợp đồng này được tạo và lưu trữ điện tử từ hệ thống Booking HNALMS với giá trị pháp lý là thỏa thuận giữ phòng và xác nhận thuê phòng. Hợp đồng chính thức bản cứng sẽ được gửi/ký bổ sung theo quy định của Ban quản lý nếu cần).</p>
+        </div>
+        <br/>
+        <div style="display: flex; justify-content: space-between; text-align: center; margin-top: 30px;">
+          <div style="width: 45%; float: left; text-align: center;">
+            <div class="bold">ĐẠI DIỆN BÊN A</div>
+            <p class="italic">(Đã ký số)</p>
+            <div class="bold" style="margin-top: 40px;">BQL HNALMS</div>
+          </div>
+          <div style="width: 45%; float: right; text-align: center;">
+            <div class="bold">ĐẠI DIỆN BÊN B</div>
+            <p class="italic">(Xác nhận điện tử)</p>
+            <div class="bold" style="margin-top: 40px;">${tenantName}</div>
+          </div>
+          <div style="clear:both;"></div>
+        </div>
+      </div>
+    </body>
+    </html>
+  `
+};
+
 module.exports = {
   EMAIL_CONFIG,
   EMAIL_TEMPLATES

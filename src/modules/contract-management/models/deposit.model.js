@@ -67,6 +67,39 @@ const depositSchema = new Schema(
       default: null,
       sparse: true, // cho phép nhiều null vì nhiều deposit chưa có contract
     },
+    // Các trường lưu thông tin cho luồng Booking Online
+    idCard: {
+      type: String,
+      default: null,
+    },
+    dob: {
+      type: Date,
+      default: null,
+    },
+    address: {
+      type: String,
+      default: null,
+    },
+    gender: {
+      type: String,
+      default: "Other",
+    },
+    startDate: {
+      type: Date,
+      default: null,
+    },
+    duration: {
+      type: Number,
+      default: 12,
+    },
+    prepayMonths: {
+      type: mongoose.Schema.Types.Mixed, // có thể lưu số (2) hoặc chuỗi ("all")
+      default: 2,
+    },
+    coResidents: {
+      type: Array, // [{ fullName: String, cccd: String }]
+      default: [],
+    },
   },
   {
     timestamps: true,

@@ -103,13 +103,16 @@ async function evaluateDeclinedRenewalNextDeposit(roomObjectId, existingHeldDepo
 // =============================================
 exports.initiateDeposit = async (req, res) => {
     try {
-        const { roomId, name, phone, email } = req.body;
+        const { 
+            roomId, name, phone, email, 
+            idCard, dob, address, gender, startDate, duration, prepayMonths, coResidents 
+        } = req.body;
 
         // --- Validate input ---
-        if (!roomId || !name || !phone || !email) {
+        if (!roomId || !name || !phone || !email || !idCard || !startDate) {
             return res.status(400).json({
                 success: false,
-                message: "Vui lòng điền đầy đủ thông tin: roomId, name, phone, email",
+                message: "Vui lòng điền đầy đủ thông tin bắt buộc: roomId, name, phone, email, idCard, startDate",
             });
         }
 
@@ -217,11 +220,11 @@ exports.initiateDeposit = async (req, res) => {
             return res.status(400).json({ success: false, message: "Không thể đọc giá phòng" });
         }
 
-        // --- Sinh mã giao dịch ---
+        // --- Lấy thông tin ---
         const transactionCode = generateTransactionCode(room.name);
 
-        // --- Tính thời gian hết hạn (5 phút từ bây giờ) ---
-        const expireAt = new Date(Date.now() + 5 * 60 * 1000); // 5 phút
+        // --- Tính thời gian hết hạn (24 giờ từ bây giờ vì là gửi yêu cầu) ---
+        const expireAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 giờ
 
         // --- Lưu Deposit vào DB với status "Pending", activationStatus = null (chờ kích hoạt) ---
         const deposit = new Deposit({
@@ -234,6 +237,14 @@ exports.initiateDeposit = async (req, res) => {
             transactionCode,
             expireAt,
             activationStatus: null, // Chưa active, sẽ được set khi contract kích hoạt
+            idCard,
+            dob: dob ? new Date(dob) : null,
+            address,
+            gender: gender || "Other",
+            startDate: new Date(startDate),
+            duration: parseInt(duration, 10) || 12,
+            prepayMonths: prepayMonths === "all" ? "all" : (parseInt(prepayMonths, 10) || 2),
+            coResidents: Array.isArray(coResidents) ? coResidents : [],
         });
         await deposit.save();
 
@@ -404,6 +415,59 @@ exports.sepayWebhook = async (req, res) => {
         } catch (emailErr) {
             console.error("[SEPAY WEBHOOK] ❌ Lỗi gửi email:", emailErr.message);
             // Không throw, tiếp tục trả về success
+        }
+
+        // --- 9. Tự động tạo Hợp Đồng (nếu là giao dịch đặt phòng online có idCard) ---
+        if (deposit.idCard && deposit.startDate) {
+            console.log(`[SEPAY WEBHOOK] ⚡ Đang tiến hành tạo hợp đồng tự động cho giao dịch ${transactionCode}...`);
+            const contractController = require("../../contract-management/controllers/contract.controller");
+            
+            const mockReq = {
+                body: {
+                    roomId: deposit.room._id || deposit.room,
+                    depositId: deposit._id,
+                    tenantInfo: {
+                        fullName: deposit.name,
+                        cccd: deposit.idCard,
+                        phone: deposit.phone,
+                        email: deposit.email,
+                        dob: deposit.dob,
+                        address: deposit.address,
+                        gender: deposit.gender || "Other"
+                    },
+                    coResidents: deposit.coResidents || [],
+                    contractDetails: {
+                        startDate: deposit.startDate,
+                        duration: deposit.duration
+                    },
+                    bookServices: [],
+                    prepayMonths: parseInt(deposit.prepayMonths, 10) || deposit.duration
+                }
+            };
+
+            let contractResponseStatus = 200;
+            let contractResponseData = {};
+
+            const mockRes = {
+                status: (code) => {
+                    contractResponseStatus = code;
+                    return mockRes;
+                },
+                json: (data) => {
+                    contractResponseData = data;
+                }
+            };
+
+            try {
+                await contractController.createContract(mockReq, mockRes);
+                if (contractResponseStatus === 201 || contractResponseStatus === 200) {
+                    console.log(`[SEPAY WEBHOOK] ✅ Hợp đồng tạo tự động THÀNH CÔNG cho Deposit ${deposit._id}.`);
+                } else {
+                    console.error(`[SEPAY WEBHOOK] ❌ Lỗi tạo hợp đồng tự động cho Deposit:`, contractResponseData);
+                }
+            } catch (err) {
+                console.error(`[SEPAY WEBHOOK] ❌ Lỗi Fatal tạo hợp đồng:`, err.message);
+            }
         }
 
         return res.status(200).json({ success: true, message: "Deposit confirmed successfully" });

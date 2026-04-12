@@ -1,12 +1,14 @@
 const depositController = require("../../modules/room-floor-management/controllers/deposit-room.controller");
 const invoicePaymentController = require("../../modules/invoice-management/controllers/invoice-payment.controller");
 const prepaidRentController = require("../../modules/prepaid-rent/controllers/prepaid_rent.controller");
+const bookingRequestController = require("../../modules/contract-management/controllers/booking-request.controller");
 
 /**
  * Webhook chung cho tất cả giao dịch Sepay
  * Phân biệt loại giao dịch qua nội dung chuyển khoản:
- *   - "Coc ..." → Đặt cọc phòng
- *   - "HD ..."  → Thanh toán hóa đơn phát sinh
+ *   - "Coc <Room> <8digits>" → Booking Request online HOẶC Đặt cọc thường
+ *     (phân biệt bằng DB lookup: tìm BookingRequest trước, nếu không thấy → Deposit)
+ *   - "HD ..."    → Thanh toán hóa đơn phát sinh
  *   - "PREPAID ..." → Trả trước tiền phòng
  *
  * Middleware verifySepayToken đã xác thực API Key trước khi vào đây.
@@ -30,8 +32,29 @@ exports.handleWebhook = async (req, res) => {
 
         // --- Phân biệt loại giao dịch ---
 
-        // 1. Đặt cọc: nội dung chứa "COC"
+        // 1. COC: Booking Request hoặc Deposit thường
+        //    Format: "Coc <RoomCode> <8digits>" — ví dụ: Coc P112A 89358552
+        //    Phân biệt bằng DB lookup: BookingRequest ưu tiên trước
         if (/COC\s+\S+\s+\d{8}/.test(upperContent)) {
+            const matchCode = content.match(/Coc\s+\S+\s+\d{8}/i);
+            if (matchCode) {
+                const transCode = matchCode[0];
+                console.log(`[SEPAY WEBHOOK] Parsed transactionCode: "${transCode}" from content: "${content}"`);
+                
+                const BookingRequest = require("../../modules/contract-management/models/booking-request.model");
+                const br = await BookingRequest.findOne({ transactionCode: new RegExp(`^${transCode}$`, "i") });
+                console.log(`[SEPAY WEBHOOK] BookingRequest lookup for "${transCode}":`, br ? {
+                  _id: br._id,
+                  status: br.status,
+                  transactionCode: br.transactionCode
+                } : "NOT FOUND");
+                
+                if (br) {
+                    console.log("[SEPAY WEBHOOK] 📝 Detected BOOKING REQUEST transaction");
+                    return bookingRequestController.handleSepayWebhook(req, res);
+                }
+            }
+            // Không tìm thấy BookingRequest → xử lý như Deposit thường
             console.log("[SEPAY WEBHOOK] 🏠 Detected DEPOSIT transaction");
             return depositController.sepayWebhook(req, res);
         }
