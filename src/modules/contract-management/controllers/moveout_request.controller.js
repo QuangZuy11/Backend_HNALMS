@@ -282,6 +282,33 @@ class MoveOutRequestController {
     }
   }
 
+  // ============================================================
+  //  TENANT – Xoá yêu cầu trả phòng (chỉ khi status = Requested hoặc InvoiceReleased)
+  // ============================================================
+  /**
+   * DELETE /api/move-outs/:moveOutRequestId
+   */
+  async deleteMoveOutRequest(req, res) {
+    try {
+      const { moveOutRequestId } = req.params;
+      const tenantId = req.user?.userId;
+
+      const result = await moveOutRequestService.deleteMoveOutRequest(
+        moveOutRequestId,
+        tenantId
+      );
+
+      return res.status(200).json({
+        success: true,
+        message: "Yêu cầu trả phòng đã được xoá thành công.",
+        data: result,
+      });
+    } catch (error) {
+      console.error(`[MOVEOUT CTRL] ❌ Lỗi xoá yêu cầu trả phòng:`, error.message);
+      return res.status(400).json({ success: false, message: error.message });
+    }
+  }
+
 }
 
 module.exports = new MoveOutRequestController();
