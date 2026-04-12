@@ -98,7 +98,7 @@ const createDeposit = async (req, res) => {
     if (!name || !phone || !email || !room || !amount) {
       return res.status(400).json({
         success: false,
-        message: "Missing required fields: name, phone, email, room, amount",
+        message: "Nhập các trường bắt buộc: tên, số điện thoại, email, phòng, số tiền",
       });
     }
 
@@ -107,7 +107,7 @@ const createDeposit = async (req, res) => {
     if (!roomExists) {
       return res.status(404).json({
         success: false,
-        message: "Room not found",
+        message: "Không tìm thấy phòng",
       });
     }
 
@@ -269,7 +269,7 @@ const createDeposit = async (req, res) => {
 
     res.status(201).json({
       success: true,
-      message: "Deposit created successfully",
+      message: "Cọc thành công",
       data: newDeposit,
     });
   } catch (error) {
