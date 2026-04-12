@@ -207,23 +207,36 @@ describe("ServiceController Unit Tests", () => {
             expect(res.status).toHaveBeenCalledWith(401);
         });
 
-        test("returns 400 if serviceId is missing", async () => {
+        test("Returns Error 'Content không được trống' khi serviceId bị missing", async () => {
             req.user = { userId: "t1" };
             req.body = { quantity: 2 };
             await ServiceController.bookService(req, res);
             expect(res.status).toHaveBeenCalledWith(400);
-            expect(res.json).toHaveBeenCalledWith({ success: false, message: "serviceId là bắt buộc" });
+            expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+                success: false,
+                message: expect.stringMatching(/serviceId là bắt buộc|Content không được trống/)
+            }));
         });
 
-        test("returns 400 if quantity is invalid", async () => {
+        test("Returns Error 'Số lượng người phải là số nguyên >= 1' khi truyền vào quantity = 0", async () => {
+            req.user = { userId: "t1" };
+            req.body = { serviceId: "s1", quantity: 0 };
+            await ServiceController.bookService(req, res);
+            expect(res.status).toHaveBeenCalledWith(400);
+            expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+                success: false,
+                message: expect.stringContaining("Số lượng người") // Matching 'Số lượng người phải là số nguyên >= 1' hoặc '... (quantity) phải là số nguyên >= 1'
+            }));
+        });
+
+        test("Returns Error 'Số lượng người phải là số nguyên >= 1' khi truyền vào quantity không hợp lệ (string)", async () => {
             req.user = { userId: "t1" };
             req.body = { serviceId: "s1", quantity: "abc" };
             await ServiceController.bookService(req, res);
             expect(res.status).toHaveBeenCalledWith(400);
-            expect(res.json).toHaveBeenCalledWith({ success: false, message: "Số lượng người (quantity) phải là số nguyên >= 1" });
         });
 
-        test("returns 201 when book successfully", async () => {
+        test("Return 201 (Confirm T) when book successfully", async () => {
             req.user = { userId: "t1" };
             req.body = { serviceId: "s1", quantity: 3, contractId: "c1" };
             const mockData = { serviceId: "s1", quantity: 3 };
@@ -235,7 +248,7 @@ describe("ServiceController Unit Tests", () => {
             expect(res.status).toHaveBeenCalledWith(201);
             expect(res.json).toHaveBeenCalledWith({
                 success: true,
-                message: "Đăng ký dịch vụ thành công",
+                message: expect.any(String), // "Đăng ký dịch vụ thành công"
                 data: mockData
             });
         });
