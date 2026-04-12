@@ -39,8 +39,16 @@ exports.handleWebhook = async (req, res) => {
             const matchCode = content.match(/Coc\s+\S+\s+\d{8}/i);
             if (matchCode) {
                 const transCode = matchCode[0];
+                console.log(`[SEPAY WEBHOOK] Parsed transactionCode: "${transCode}" from content: "${content}"`);
+                
                 const BookingRequest = require("../../modules/contract-management/models/booking-request.model");
                 const br = await BookingRequest.findOne({ transactionCode: new RegExp(`^${transCode}$`, "i") });
+                console.log(`[SEPAY WEBHOOK] BookingRequest lookup for "${transCode}":`, br ? {
+                  _id: br._id,
+                  status: br.status,
+                  transactionCode: br.transactionCode
+                } : "NOT FOUND");
+                
                 if (br) {
                     console.log("[SEPAY WEBHOOK] 📝 Detected BOOKING REQUEST transaction");
                     return bookingRequestController.handleSepayWebhook(req, res);

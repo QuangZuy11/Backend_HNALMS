@@ -391,13 +391,18 @@ exports.handleSepayWebhook = async (req, res) => {
   try {
     const { content, transferAmount } = req.body;
     
+    console.log(`[BOOKING WH] ===== START handleSepayWebhook =====`);
+    console.log(`[BOOKING WH] content: "${content}", transferAmount: ${transferAmount}`);
+    
     // Parse transactionCode from content – format: "Coc <RoomCode> <8digits>"
     // Ví dụ: Coc P112A 89358552
     const matchCode = content.match(/Coc\s+\S+\s+\d{8}/i);
     if (!matchCode) {
+      console.log(`[BOOKING WH] No matchCode found in content`);
       return res.status(200).json({ success: true, message: "No matching BookingRequest transactionCode in content" });
     }
     const transactionCode = matchCode[0];
+    console.log(`[BOOKING WH] Parsed transactionCode: "${transactionCode}"`);
 
     const BookingRequest = require("../models/booking-request.model");
     const contractController = require("./contract.controller");
@@ -405,18 +410,28 @@ exports.handleSepayWebhook = async (req, res) => {
     // Find by transactionCode stored when QR was generated (Insensitive match)
     const bookingRequest = await BookingRequest.findOne({ transactionCode: new RegExp(`^${transactionCode}$`, "i") }).populate("roomId");
     if (!bookingRequest) {
+      console.log(`[BOOKING WH] BookingRequest NOT FOUND for transactionCode: "${transactionCode}"`);
       // Not a booking request – let normal deposit webhook handle it (return transparent)
       return res.status(200).json({ success: true, message: "Not a BookingRequest transactionCode, skipping" });
     }
 
+    console.log(`[BOOKING WH] Found BookingRequest: ${bookingRequest._id}`);
+    console.log(`[BOOKING WH] - status: ${bookingRequest.status}`);
+    console.log(`[BOOKING WH] - paymentStatus: ${bookingRequest.paymentStatus}`);
+    console.log(`[BOOKING WH] - totalAmount: ${bookingRequest.totalAmount}`);
+    console.log(`[BOOKING WH] - roomId: ${bookingRequest.roomId?._id}`);
+    console.log(`[BOOKING WH] Received amount: ${transferAmount}`);
+
     if (bookingRequest.status !== "Awaiting Payment") {
+      console.log(`[BOOKING WH] Skipping - status is "${bookingRequest.status}", expected "Awaiting Payment"`);
       return res.status(200).json({ success: true, message: "BookingRequest is already processed or expired" });
     }
 
     // Check amount
     const diff = Math.abs(transferAmount - bookingRequest.totalAmount);
+    console.log(`[BOOKING WH] Amount check: diff=${diff}, allowed=1000`);
     if (diff > 1000) {
-      console.warn(`[SEPAY WEBHOOK] Mismatch amount. Received ${transferAmount}, Expected ${bookingRequest.totalAmount}`);
+      console.warn(`[BOOKING WH] Amount mismatch! Received ${transferAmount}, Expected ${bookingRequest.totalAmount}`);
       return res.status(200).json({ success: true, message: "Amount mismatch for BookingRequest" });
     }
 
@@ -444,7 +459,15 @@ exports.handleSepayWebhook = async (req, res) => {
       }
     };
 
-    let contractResponseStatus = 200;
+    console.log(`[BOOKING WH] Mock request built:`, JSON.stringify({
+      roomId: mockReq.body.roomId,
+      bookingRequestId: mockReq.body.bookingRequestId,
+      tenantInfo: mockReq.body.tenantInfo,
+      duration: mockReq.body.contractDetails?.duration,
+      bookServices: mockReq.body.bookServices?.length
+    }, null, 2));
+
+    let contractResponseStatus = 0;
     let contractResponseData = {};
 
     const mockRes = {
@@ -460,6 +483,11 @@ exports.handleSepayWebhook = async (req, res) => {
     // Update Payment record for the Booking Request
     const Payment = require("../../invoice-management/models/payment.model");
     let paymentRecord = await Payment.findOne({ bookingRequestId: bookingRequest._id });
+    console.log(`[BOOKING WH] Payment record:`, paymentRecord ? {
+      _id: paymentRecord._id,
+      status: paymentRecord.status
+    } : "NOT FOUND");
+    
     if (paymentRecord) {
       paymentRecord.amount = transferAmount;
       paymentRecord.status = "Success";
@@ -480,28 +508,38 @@ exports.handleSepayWebhook = async (req, res) => {
     // Mark BookingRequest as Paid before calling createContract
     bookingRequest.paymentStatus = "Paid";
     await bookingRequest.save();
+    console.log(`[BOOKING WH] Updated BookingRequest.paymentStatus = "Paid"`);
 
     // Call createContract
+    console.log(`[BOOKING WH] Calling contractController.createContract...`);
     await contractController.createContract(mockReq, mockRes);
     
+    console.log(`[BOOKING WH] createContract returned - status: ${contractResponseStatus}`);
+    console.log(`[BOOKING WH] createContract response data:`, JSON.stringify(contractResponseData, null, 2));
+
     if (contractResponseStatus === 201 || contractResponseStatus === 200) {
       // Successfully converted → update BookingRequest status to Processed
       await BookingRequest.findByIdAndUpdate(bookingRequest._id, { status: "Processed" });
+      console.log(`[BOOKING WH] Updated BookingRequest.status = "Processed"`);
       // Ensure Payment record is marked Success (double-check)
       if (paymentRecord) {
         paymentRecord.status = "Success";
         paymentRecord.paymentDate = paymentRecord.paymentDate || new Date();
         await paymentRecord.save();
       }
-      console.log(`[SEPAY WEBHOOK] BookingRequest ${bookingRequest._id} successfully processed into Contract.`);
+      console.log(`[BOOKING WH] ✅ SUCCESS - BookingRequest ${bookingRequest._id} processed into Contract`);
+      console.log(`[BOOKING WH] ===== END handleSepayWebhook =====`);
       return res.status(200).json({ success: true, message: "Booking Request converted to Contract" });
     } else {
-      console.error(`[SEPAY WEBHOOK] Failed to convert BookingRequest. Data:`, contractResponseData);
+      console.error(`[BOOKING WH] ❌ FAILED - createContract returned ${contractResponseStatus}`);
+      console.error(`[BOOKING WH] Error detail:`, contractResponseData);
       // Payment đã nhận nhưng tạo hợp đồng lỗi → giữ paymentStatus = Paid nhưng status vẫn "Awaiting Payment" để admin xử lý thủ công
       return res.status(200).json({ success: true, message: "Payment received but contract creation failed", errorDetail: contractResponseData });
     }
   } catch (error) {
-    console.error("[SEPAY WEBHOOK] Error processing BookingRequest payment:", error);
+    console.error("[BOOKING WH] ❌ FATAL ERROR:", error);
+    console.error("[BOOKING WH] Stack:", error.stack);
+    console.log(`[BOOKING WH] ===== END handleSepayWebhook (ERROR) =====`);
     return res.status(200).json({ success: false, message: "Internal Server Error", error: error.stack });
   }
 };
@@ -605,6 +643,131 @@ exports.getPaymentStatus = async (req, res) => {
     return res.status(500).json({ success: false, message: "Lỗi máy chủ." });
   }
 };
+
+// =============================================
+// POST /api/booking-requests/:id/simulate-payment
+// Tự động mô phỏng thanh toán Sepay (sau khi Manager gửi QR)
+// Dùng trong mode phát triển hoặc khi chưa có webhook thật từ Sepay
+// =============================================
+exports.simulatePayment = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // 1. Tìm booking request
+    const bookingRequest = await BookingRequest.findById(id);
+    if (!bookingRequest) {
+      return res.status(404).json({ success: false, message: "Không tìm thấy yêu cầu đặt phòng." });
+    }
+
+    // 2. Kiểm tra trạng thái
+    if (bookingRequest.status !== "Awaiting Payment") {
+      return res.status(400).json({ success: false, message: `Yêu cầu đang ở trạng thái "${bookingRequest.status}", cần trạng thái "Awaiting Payment".` });
+    }
+
+    if (!bookingRequest.transactionCode) {
+      return res.status(400).json({ success: false, message: "Yêu cầu chưa có transactionCode. Vui lòng gửi thanh toán trước." });
+    }
+
+    // 3. Log thông tin
+    console.log(`\n[SIMULATE PAYMENT] ====================================`);
+    console.log(`[SIMULATE PAYMENT] 🎯 Bắt đầu mô phỏng thanh toán cho BookingRequest: ${id}`);
+    console.log(`[SIMULATE PAYMENT] 📋 Room: ${bookingRequest.name}`);
+    console.log(`[SIMULATE PAYMENT] 💰 Amount: ${bookingRequest.totalAmount}`);
+    console.log(`[SIMULATE PAYMENT] 🔖 TransactionCode: ${bookingRequest.transactionCode}`);
+    console.log(`[SIMULATE PAYMENT] ====================================\n`);
+
+    // 4. Gọi handleSepayWebhook với mock data
+    const mockReq = {
+      body: {
+        content: bookingRequest.transactionCode,
+        transferAmount: bookingRequest.totalAmount,
+        transferType: "in"
+      }
+    };
+
+    // 5. Gọi webhook handler
+    await exports.handleSepayWebhook(mockReq, res);
+
+    console.log(`\n[SIMULATE PAYMENT] ✅ Hoàn tất mô phỏng thanh toán!\n`);
+
+  } catch (error) {
+    console.error("[SIMULATE PAYMENT] ❌ Lỗi:", error);
+    res.status(500).json({ success: false, message: "Lỗi máy chủ khi mô phỏng thanh toán." });
+  }
+};
+
+// =============================================
+// Helper nội bộ: Xử lý thanh toán BookingRequest (dùng chung webhook & simulate)
+// =============================================
+async function _processBookingPayment(bookingRequest, transferAmount) {
+  const contractController = require("./contract.controller");
+
+  // Update Payment record
+  const Payment = require("../../invoice-management/models/payment.model");
+  let paymentRecord = await Payment.findOne({ bookingRequestId: bookingRequest._id });
+
+  if (paymentRecord) {
+    paymentRecord.amount = transferAmount;
+    paymentRecord.status = "Success";
+    paymentRecord.paymentDate = new Date();
+    await paymentRecord.save();
+  } else {
+    paymentRecord = new Payment({
+      bookingRequestId: bookingRequest._id,
+      amount: transferAmount,
+      transactionCode: bookingRequest.transactionCode,
+      status: "Success",
+      paymentDate: new Date(),
+    });
+    await paymentRecord.save();
+  }
+
+  // Mark as Paid
+  bookingRequest.paymentStatus = "Paid";
+  await bookingRequest.save();
+
+  // Build mock request for createContract
+  const mockReq = {
+    body: {
+      roomId: bookingRequest.roomId._id || bookingRequest.roomId,
+      bookingRequestId: bookingRequest._id,
+      tenantInfo: {
+        fullName: bookingRequest.name,
+        cccd: bookingRequest.idCard,
+        phone: bookingRequest.phone,
+        email: bookingRequest.email,
+        dob: bookingRequest.dob,
+        address: bookingRequest.address,
+        gender: bookingRequest.gender || "Other"
+      },
+      coResidents: bookingRequest.coResidents || [],
+      contractDetails: {
+        startDate: bookingRequest.startDate,
+        duration: bookingRequest.duration
+      },
+      bookServices: bookingRequest.servicesInfo || [],
+      prepayMonths: parseInt(bookingRequest.prepayMonths, 10) || bookingRequest.duration
+    }
+  };
+
+  const mockRes = {
+    status: (code) => { mockRes._status = code; return mockRes; },
+    json: (data) => { mockRes._data = data; }
+  };
+
+  // Call createContract
+  await contractController.createContract(mockReq, mockRes);
+
+  // Update status to Processed
+  if (mockRes._status === 201 || mockRes._status === 200) {
+    await BookingRequest.findByIdAndUpdate(bookingRequest._id, { status: "Processed" });
+    console.log(`[_PROCESS BOOKING] ✅ Contract created for BookingRequest ${bookingRequest._id}`);
+    return { success: true, contractCreated: true, data: mockRes._data };
+  } else {
+    console.warn(`[_PROCESS BOOKING] ⚠️ createContract returned ${mockRes._status}`);
+    return { success: true, contractCreated: false, data: mockRes._data };
+  }
+}
 
 // =============================================
 // Helper nội bộ: Tạo hợp đồng từ BookingRequest (dùng chung webhook & polling)

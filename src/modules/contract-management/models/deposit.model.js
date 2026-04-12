@@ -72,6 +72,18 @@ const depositSchema = new Schema(
       type: String,
       default: null,
     },
+    dob: {
+      type: Date,
+      default: null,
+    },
+    address: {
+      type: String,
+      default: null,
+    },
+    gender: {
+      type: String,
+      default: "Other",
+    },
     startDate: {
       type: Date,
       default: null,

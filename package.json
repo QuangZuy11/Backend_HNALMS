@@ -26,6 +26,7 @@
   "dependencies": {
     "@cloudinary/react": "^1.14.3",
     "@cloudinary/url-gen": "^1.22.0",
+    "axios": "^1.15.0",
     "bcryptjs": "^3.0.3",
     "body-parser": "^2.2.2",
     "cloudinary": "^1.41.3",

@@ -17,5 +17,9 @@ router.get("/:id", authenticate, authorize("manager", "admin", "owner"), booking
 router.patch("/:id/status", authenticate, authorize("manager", "admin", "owner"), bookingRequestController.updateBookingRequestStatus);
 router.post("/:id/send-payment", authenticate, authorize("manager", "admin", "owner"), bookingRequestController.sendPaymentInfo);
 
+// POST /api/booking-requests/:id/simulate-payment — Tự động mô phỏng thanh toán Sepay (sau khi Manager gửi QR)
+// Dùng trong mode phát triển hoặc khi chưa có webhook thật từ Sepay
+router.post("/:id/simulate-payment", authenticate, authorize("manager", "admin", "owner"), bookingRequestController.simulatePayment);
+
 module.exports = router;
 
