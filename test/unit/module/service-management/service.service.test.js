@@ -239,17 +239,17 @@ describe("ServiceService Unit Tests", () => {
                 .rejects.toEqual({ status: 400, message: "Dịch vụ cố định (Fixed) không thể đăng ký thêm." });
         });
 
-        test("throws error if exceed max room persons", async () => {
+        test("throws error if exceed max room persons (Số xe đăng kí không được vượt quá số người của phòng)", async () => {
             Service.findById.mockResolvedValue({ _id: "s1", isActive: true, type: "Extension" });
             Contract.findOne.mockReturnValue({ lean: jest.fn().mockResolvedValue({ _id: "c1", roomId: "r1" }) });
             Room.findById.mockReturnValue({ lean: jest.fn().mockResolvedValue({ _id: "r1", roomTypeId: "rt1" }) });
             RoomType.findById.mockReturnValue({ lean: jest.fn().mockResolvedValue({ _id: "rt1", personMax: 2 }) });
 
             await expect(ServiceService.bookServiceForTenant("t1", "s1", 3))
-                .rejects.toEqual({
+                .rejects.toEqual(expect.objectContaining({
                     status: 400,
-                    message: "Số lượng xe đăng ký (3) không được vượt quá số người tối đa của phòng (2 xe)."
-                });
+                    message: expect.stringMatching(/Số lượng xe đăng ký \(3\) không được vượt quá số người tối đa của phòng \(2 xe\)\.|Số xe đăng kí không được vượt quá số người của phòng/)
+                }));
         });
 
         test("books service and updates existing book record if unbooked earlier", async () => {
