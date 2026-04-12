@@ -21,14 +21,14 @@ const buildViolationCode = async () => {
   const lastSeq = lastInvoice?.invoiceCode?.split('-')?.[2];
   const nextSeq = String((parseInt(lastSeq || '0', 10) + 1)).padStart(4, '0');
   return `VP-${datePrefix}-${nextSeq}`;
-}; 
+};
 
 class InvoiceIncurredService {
-  
+
   async getNextViolationCode() {
     return buildViolationCode();
   }
-  
+
   // 1. LẤY DANH SÁCH HÓA ĐƠN PHÁT SINH
   async getInvoices({ status, page = 1, limit = 10, type, from, to } = {}) {
     const parsedPage = Number(page) || 1;
@@ -171,24 +171,33 @@ class InvoiceIncurredService {
         path: "contractId",
         select: "contractCode startDate endDate tenantId roomId",
         populate: [
-          { path: "roomId", select: "name roomCode floorId" },
-          { path: "tenantId", select: "username email phoneNumber" }
+          { path: "roomId", select: "name roomCode floorId roomTypeId", populate: [
+            { path: "floorId", select: "name" },
+            { path: "roomTypeId", select: "typeName currentPrice" },
+          ]},
         ]
       })
       .populate({
         path: "repairRequestId",
         select: "description devicesId status",
-        populate: { path: "devicesId", select: "name" } // Trích xuất tên thiết bị bị hỏng
+        populate: { path: "devicesId", select: "name" }
       })
-      // .populate("receiptTicketId") // Nếu bạn muốn lấy thông tin Phiếu Thu
       .lean();
 
     if (!invoice) throw new Error("Không tìm thấy hóa đơn phát sinh này.");
 
+    // Parse currentPrice nếu là Decimal128
+    if (invoice.contractId?.roomId?.roomTypeId?.currentPrice != null) {
+      invoice.contractId.roomId.roomTypeId.currentPrice =
+        parseFloat(invoice.contractId.roomId.roomTypeId.currentPrice.toString());
+    }
+
     // Flatten data ra ngoài để Frontend cũ vẫn hiển thị bình thường mà không cần sửa code
     return {
       ...invoice,
-      roomId: invoice.contractId?.roomId || null, 
+      invoiceType: "Incurred",
+      roomId: invoice.contractId?.roomId || null,
+      roomName: invoice.contractId?.roomId?.name || null,
       tenant: invoice.contractId?.tenantId || null,
       contractCode: invoice.contractId?.contractCode || null,
       deviceName: invoice.repairRequestId?.devicesId?.name || null,
@@ -199,7 +208,7 @@ class InvoiceIncurredService {
   // 5. XÁC NHẬN THANH TOÁN (Logic móc nối 2 Module)
   async payIncurredInvoice(invoiceId) {
     const invoice = await InvoiceIncurred.findById(invoiceId);
-    
+
     if (!invoice) throw new Error("Không tìm thấy hóa đơn phát sinh.");
     if (invoice.status !== "Unpaid") {
       throw new Error(`Hóa đơn này không ở trạng thái chờ thanh toán (trạng thái hiện tại: ${invoice.status}).`);
@@ -239,7 +248,10 @@ class InvoiceIncurredService {
       .populate({
         path: "contractId",
         select: "roomId contractCode",
-        populate: { path: "roomId", select: "name" }
+        populate: { path: "roomId", select: "name floorId roomTypeId", populate: [
+          { path: "floorId", select: "name" },
+          { path: "roomTypeId", select: "typeName currentPrice" },
+        ]}
       })
       .populate("repairRequestId", "description")
       .sort({ createdAt: -1 })
@@ -248,12 +260,24 @@ class InvoiceIncurredService {
       .lean();
 
     // Flatten roomId ra ngoài cho App Frontend dễ render
-    const formattedInvoices = invoices.map(inv => ({
-      ...inv,
-      roomId: inv.contractId?.roomId || null,
-      contractCode: inv.contractId?.contractCode || null,
-      repairDescription: inv.repairRequestId?.description || null
-    }));
+    const formattedInvoices = invoices.map(inv => {
+      const rawRoom = inv.contractId?.roomId;
+      let roomTypeId = rawRoom?.roomTypeId || null;
+      if (roomTypeId?.currentPrice != null) {
+        roomTypeId = {
+          ...roomTypeId,
+          currentPrice: parseFloat(roomTypeId.currentPrice.toString()),
+        };
+      }
+      return {
+        ...inv,
+        roomId: rawRoom ? { _id: rawRoom._id, name: rawRoom.name, floorId: rawRoom.floorId, roomTypeId } : null,
+        roomName: rawRoom?.name || null,
+        invoiceType: "Incurred",
+        contractCode: inv.contractId?.contractCode || null,
+        repairDescription: inv.repairRequestId?.description || null
+      };
+    });
 
     return {
       invoices: formattedInvoices,
@@ -265,7 +289,7 @@ class InvoiceIncurredService {
   async getMyInvoiceById(tenantId, invoiceId) {
     const contracts = await Contract.find({ tenantId }).select("_id");
     if (contracts.length === 0) throw new Error("Bạn không có hợp đồng thuê nào.");
-    
+
     const contractIds = contracts.map(c => c._id.toString());
     const invoice = await this.getInvoiceById(invoiceId);
 

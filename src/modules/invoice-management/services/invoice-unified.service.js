@@ -118,7 +118,10 @@ class InvoiceUnifiedService {
       .populate({
         path: "contractId",
         select: "roomId contractCode",
-        populate: { path: "roomId", select: "name" }
+        populate: { path: "roomId", select: "name floorId roomTypeId", populate: [
+          { path: "floorId", select: "name" },
+          { path: "roomTypeId", select: "typeName currentPrice" },
+        ]}
       })
       .populate("repairRequestId", "description")
       .sort({ createdAt: -1 })
@@ -126,13 +129,29 @@ class InvoiceUnifiedService {
       .limit(limit)
       .lean();
 
-    const formattedInvoices = invoices.map(inv => ({
-        ...inv,
-        roomId: inv.contractId?.roomId || null,
-        contractCode: inv.contractId?.contractCode || null,
-        repairDescription: inv.repairRequestId?.description || null,
-        invoiceType: "Incurred"
-      }));
+    const formattedInvoices = invoices.map(inv => {
+        const rawRoom = inv.contractId?.roomId;
+        let roomTypeId = rawRoom?.roomTypeId || null;
+        if (roomTypeId?.currentPrice != null) {
+            roomTypeId = {
+                ...roomTypeId,
+                currentPrice: parseFloat(roomTypeId.currentPrice.toString()),
+            };
+        }
+        return {
+            ...inv,
+            roomId: rawRoom ? {
+                _id: rawRoom._id,
+                name: rawRoom.name,
+                floorId: rawRoom.floorId,
+                roomTypeId,
+            } : null,
+            roomName: rawRoom?.name || null,
+            contractCode: inv.contractId?.contractCode || null,
+            repairDescription: inv.repairRequestId?.description || null,
+            invoiceType: "Incurred"
+        };
+    });
 
     return { invoices: formattedInvoices, total };
   }
