@@ -233,6 +233,59 @@ EMAIL_TEMPLATES.LIQUIDATION_SETTLEMENT = {
   }
 };
 
+// Template thông báo hoàn tác thanh lý (xin lỗi vì thanh lý nhầm)
+EMAIL_TEMPLATES.LIQUIDATION_RESTORED = {
+  subject: "Thông báo: Hợp đồng thuê nhà đã được khôi phục - HNALMS",
+  getHtml: (tenantName, roomName, liquidationType, liquidationDate) => `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background: #10B981; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; color: white; }
+        .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 8px 8px; }
+        .info-box { background: white; padding: 15px; border-left: 4px solid #10B981; margin: 20px 0; border-radius: 4px; }
+        .info-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee; }
+        .info-row:last-child { border-bottom: none; }
+        .label { color: #6B7280; font-size: 14px; }
+        .value { font-weight: bold; color: #1F2937; }
+        .notice { background: #DCFCE7; border-left: 4px solid #16A34A; padding: 12px 15px; border-radius: 4px; margin-top: 15px; font-size: 14px; }
+        .footer { text-align: center; margin-top: 20px; color: #666; font-size: 12px; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="header">
+          <h1 style="margin: 0;">HNALMS</h1>
+          <p style="margin: 5px 0 0 0;">Thông báo khôi phục hợp đồng</p>
+        </div>
+        <div class="content">
+          <h2>Xin chào ${tenantName},</h2>
+          <p>Chúng tôi xin gửi đến bạn lời xin lỗi chân thành nhất.</p>
+          <p>Việc thanh lý hợp đồng thuê phòng <strong>${roomName}</strong> trước đó (ngày thanh lý: <strong>${liquidationDate}</strong>, lý do: <strong>${liquidationType}</strong>) là do nhầm lẫn từ phía ban quản lý.</p>
+          <p>Hợp đồng thuê của bạn đã được <strong>khôi phục hoàn toàn</strong>. Bạn vẫn tiếp tục thuê phòng bình thường.</p>
+          <div class="info-box">
+            <div class="info-row"><span class="label">Phòng</span><span class="value">${roomName}</span></div>
+            <div class="info-row"><span class="label">Trạng thái hợp đồng</span><span class="value">Đã khôi phục - Hoạt động</span></div>
+            <div class="info-row"><span class="label">Ngày thanh lý cũ</span><span class="value">${liquidationDate}</span></div>
+          </div>
+          <div class="notice">
+            <strong>✅ Đã khôi phục:</strong><br/>
+            Hợp đồng của bạn đã trở lại trạng thái hoạt động bình thường. Mọi thông tin về hóa đơn thanh lý trước đó đã được hủy bỏ.
+          </div>
+          <p style="margin-top: 20px;">Một lần nữa, chúng tôi rất xin lỗi vì sự bất tiện này. Nếu bạn có bất kỳ thắc mắc nào, vui lòng liên hệ ban quản lý.</p>
+          <p style="margin-top: 20px;">Trân trọng,<br><strong>Ban Quản Lý Tòa Nhà</strong></p>
+        </div>
+        <div class="footer">
+          <p>&copy; ${new Date().getFullYear()} HNALMS. All rights reserved.</p>
+        </div>
+      </div>
+    </body>
+    </html>
+  `
+};
+
 module.exports = {
   EMAIL_CONFIG,
   EMAIL_TEMPLATES
