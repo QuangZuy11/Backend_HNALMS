@@ -40,5 +40,8 @@ router.get("/preflight/:contractId", liquidationController.getPreflightData);
 // Lấy chi tiết 1 liquidation
 router.get("/:id", liquidationController.getLiquidationById);
 
+// Hoàn tác thanh lý hợp đồng (khôi phục hợp đồng về active)
+router.post("/restore/:id", liquidationController.restoreLiquidation);
+
 
 module.exports = router;

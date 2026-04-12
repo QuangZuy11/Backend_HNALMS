@@ -460,6 +460,122 @@ exports.getLiquidationById = async (req, res) => {
 };
 
 // ─────────────────────────────────────────────
+// POST /liquidations/restore/:id — Hoàn tác thanh lý hợp đồng
+// ─────────────────────────────────────────────
+exports.restoreLiquidation = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { id } = req.params;
+
+    const liquidation = await ContractLiquidation.findById(id)
+      .populate({
+        path: "contractId",
+        populate: [
+          { path: "roomId" },
+          { path: "tenantId", select: "username email phoneNumber status" },
+          { path: "depositId" },
+        ],
+      })
+      .session(session);
+
+    if (!liquidation) {
+      throw new Error("Không tìm thấy bản ghi thanh lý.");
+    }
+
+    const contract = liquidation.contractId;
+    if (!contract) {
+      throw new Error("Không tìm thấy hợp đồng liên kết.");
+    }
+
+    // Chỉ cho phép hoàn tác nếu hợp đồng đang ở trạng thái terminated
+    if (contract.status !== "terminated") {
+      throw new Error(
+        `Hợp đồng đang ở trạng thái "${contract.status}", không thể hoàn tác thanh lý.`
+      );
+    }
+
+    const room = contract.roomId;
+
+    // ── 1. Xóa FinancialTicket liên quan ──
+    if (liquidation.invoiceId) {
+      await mongoose.model("FinancialTicket").findByIdAndDelete(liquidation.invoiceId, { session });
+    }
+
+    // ── 2. Xóa MeterReading records ──
+    if (liquidation.meterReadingIds && liquidation.meterReadingIds.length > 0) {
+      await MeterReading.deleteMany({ _id: { $in: liquidation.meterReadingIds } }, { session });
+    }
+
+    // ── 3. Khôi phục trạng thái hợp đồng → active ──
+    contract.status = "active";
+    await contract.save({ session });
+
+    // ── 4. Khôi phục trạng thái phòng → Occupied ──
+    if (room) {
+      await Room.findByIdAndUpdate(room._id, { status: "Occupied" }, { session });
+    }
+
+    // ── 5. Khôi phục trạng thái đặt cọc ──
+    if (contract.depositId) {
+      const deposit = await Deposit.findById(contract.depositId._id || contract.depositId).session(session);
+      if (deposit) {
+        if (liquidation.liquidationType === "force_majeure") {
+          deposit.status = "Held";
+          deposit.refundDate = null;
+        } else {
+          deposit.status = "Held";
+          deposit.forfeitedDate = null;
+        }
+        await deposit.save({ session });
+      }
+    }
+
+    // ── 6. Xóa bản ghi liquidation ──
+    await ContractLiquidation.findByIdAndDelete(id, { session });
+
+    await session.commitTransaction();
+    session.endSession();
+
+    // Gửi email xin lỗi thông báo khôi phục hợp đồng
+    try {
+      const tenantEmail = contract.tenantId?.email;
+      if (tenantEmail && EMAIL_TEMPLATES.LIQUIDATION_RESTORED) {
+        const liqTypeLabel = liquidation.liquidationType === "force_majeure"
+          ? "Bất khả kháng"
+          : "Vi phạm hợp đồng";
+        await sendEmail(
+          tenantEmail,
+          EMAIL_TEMPLATES.LIQUIDATION_RESTORED.subject,
+          EMAIL_TEMPLATES.LIQUIDATION_RESTORED.getHtml(
+            contract.tenantId?.username || "Quý khách",
+            room?.name || "—",
+            liqTypeLabel,
+            liquidation.liquidationDate
+              ? new Date(liquidation.liquidationDate).toLocaleDateString("vi-VN")
+              : "—"
+          )
+        );
+      }
+    } catch (e) { console.error("[RESTORE_LIQUIDATION] Email error:", e.message); }
+
+    res.status(200).json({
+      success: true,
+      message: "Đã hoàn tác thanh lý hợp đồng thành công. Hợp đồng đã được khôi phục về trạng thái Hoạt động.",
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
+    console.error("[RESTORE_LIQUIDATION] Error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Lỗi server khi hoàn tác thanh lý.",
+    });
+  }
+};
+
+// ─────────────────────────────────────────────
 // GET /liquidations — Lấy tất cả liquidations
 // ─────────────────────────────────────────────
 exports.getAllLiquidations = async (req, res) => {
