@@ -44,7 +44,7 @@ const MoveOutRequestSchema = new Schema({
   // === Kiểm tra điều kiện hoàn cọc ===
   isEarlyNotice: {
     type: Boolean,
-    default: false // true khi ngày trả phòng cách ngày kết thúc hợp đồng dưới 30 ngày
+    default: false // true khi khoảng cách từ requestDate đến endDate < 30 ngày
   },
   isUnderMinStay: {
     type: Boolean,
@@ -53,6 +53,14 @@ const MoveOutRequestSchema = new Schema({
   isDepositForfeited: {
     type: Boolean,
     default: false // true → mất cọc (không đủ điều kiện hoàn)
+  },
+
+  // === Thông tin gap contract ===
+  // 🆕 Cờ xác định yêu cầu trả phòng này thuộc gap contract
+  // Gap contract = người thuê trong khoảng trống, LUÔN được hoàn cọc
+  isGapContract: {
+    type: Boolean,
+    default: false
   },
 
   // === Thông tin hóa đơn cuối ===

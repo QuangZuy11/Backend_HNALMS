@@ -1,4 +1,7 @@
 const Contract = require("../models/contract.model");
+const {
+  hasBookedSuccessorAfterDeclinedLease,
+} = require("../services/declinedRenewalSuccessor.service");
 const BookService = require("../models/bookservice.model");
 const Room = require("../../room-floor-management/models/room.model");
 const User = require("../../authentication/models/user.model");
@@ -51,19 +54,46 @@ exports.createContract = async (req, res) => {
       .populate("roomTypeId")
       .session(session);
     if (!room) throw new Error("Room not found");
-    if (room.status !== "Available" && room.status !== "Deposited") {
+
+    if (await hasBookedSuccessorAfterDeclinedLease(room._id, session)) {
+      throw new Error(
+        "Đã có hợp đồng kế tiếp cho phòng sau kỳ thuê hiện tại. Không thể tạo thêm hợp đồng.",
+      );
+    }
+
+    // 1.0 Check if room is Occupied but renewalStatus = "declined" → allow new contract
+    // Người thuê hiện tại đã từ chối gia hạn, phòng có thể được ký hợp đồng mới
+    let isRenewalDeclined = false;
+    let occupiedDeclinedContract = null;
+    if (room.status === "Occupied") {
+      occupiedDeclinedContract = await Contract.findOne({
+        roomId: room._id,
+        status: "active",
+        isActivated: true,
+      }).session(session).sort({ startDate: -1 });
+      if (occupiedDeclinedContract?.renewalStatus === "declined") {
+        isRenewalDeclined = true;
+      }
+    }
+
+    if (room.status !== "Available" && room.status !== "Deposited" && !isRenewalDeclined) {
       if (room.status === "Occupied")
         throw new Error("Room is currently occupied.");
     }
 
-    // 1.2 Check for Future Contract if room is Deposited
+    // 1.2 HĐ "khách kế tiếp" khi phòng Deposited: chỉ các HĐ active bắt đầu SAU ngày bắt đầu HĐ đang tạo.
+    // Trước đây dùng startDate > new Date() nên lẫn HĐ cũ (vd. 8/4) dù HĐ mới bắt đầu 10/5 → báo lỗi sai.
     let futureContract = null;
-    if (room.status === "Deposited") {
+    if (room.status === "Deposited" && contractDetails?.startDate) {
+      const newContractStart = new Date(contractDetails.startDate);
+      newContractStart.setHours(0, 0, 0, 0);
       futureContract = await Contract.findOne({
         roomId: room._id,
         status: "active",
-        startDate: { $gt: new Date() }
-      }).session(session).sort({ startDate: 1 });
+        startDate: { $gt: newContractStart },
+      })
+        .session(session)
+        .sort({ startDate: 1 });
     }
 
     // 1.5. Validate startDate: >= ngày cọc, và <= 6 tháng kể từ ngày cọc (nếu có deposit)
@@ -102,6 +132,44 @@ exports.createContract = async (req, res) => {
         throw new Error(
           `Phòng đã có người cọc trước. Thời hạn thuê của bạn kết thúc vào ngày ${newContractEndDate.toLocaleDateString("vi-VN")} vượt quá ngày bắt đầu của khách kế tiếp (${futureStartDate.toLocaleDateString("vi-VN")}). Vui lòng giảm thời hạn thuê xuống.`
         );
+      }
+    }
+
+    // HĐ mới (khách B) phải bắt đầu sau ngày kết thúc HĐ hiện tại (khách A đã declined)
+    if (isRenewalDeclined && occupiedDeclinedContract) {
+      const newStart = new Date(contractDetails.startDate);
+      newStart.setHours(0, 0, 0, 0);
+      const prevEnd = new Date(occupiedDeclinedContract.endDate);
+      prevEnd.setHours(0, 0, 0, 0);
+      if (newStart <= prevEnd) {
+        throw new Error(
+          `Ngày bắt đầu hợp đồng mới phải sau ngày kết thúc hợp đồng hiện tại (${prevEnd.toLocaleDateString("vi-VN")}).`,
+        );
+      }
+
+      // Validate thêm: HĐ mới phải kết thúc trước ngày bắt đầu của HĐ chưa kích hoạt (vd HĐ 464)
+      // Tìm HĐ active chưa kích hoạt có startDate > newStart
+      const upcomingInactiveContract = await Contract.findOne({
+        roomId: room._id,
+        isActivated: false,
+        status: { $nin: ["terminated", "expired"] },
+        startDate: { $gt: newStart },
+        _id: { $ne: occupiedDeclinedContract._id },
+      }).session(session).sort({ startDate: 1 }).lean();
+
+      if (upcomingInactiveContract) {
+        const inactiveStart = new Date(upcomingInactiveContract.startDate);
+        inactiveStart.setHours(0, 0, 0, 0);
+        // newContractEndDate đã được tính ở dòng 125
+        const checkEnd = new Date(contractDetails.startDate);
+        checkEnd.setMonth(checkEnd.getMonth() + contractDetails.duration);
+        checkEnd.setDate(checkEnd.getDate() - 1);
+        checkEnd.setHours(0, 0, 0, 0);
+        if (checkEnd >= inactiveStart) {
+          throw new Error(
+            `Thời hạn hợp đồng mới phải kết thúc trước ngày bắt đầu hợp đồng tiếp theo (${inactiveStart.toLocaleDateString("vi-VN")}). Vui lòng giảm thời hạn thuê.`,
+          );
+        }
       }
     }
 
@@ -478,7 +546,17 @@ exports.createContract = async (req, res) => {
 
 exports.getAllContracts = async (req, res) => {
   try {
-    const contracts = await Contract.find()
+    const { status } = req.query;
+
+    const query = {};
+    if (status) {
+      // Handle case-insensitive status match (frontend sends "Active", DB stores "active")
+      const statusMap = { Active: "active", Expired: "expired", Terminated: "terminated", Pending: "pending" };
+      const mappedStatus = statusMap[status] || status.toLowerCase();
+      query.status = mappedStatus;
+    }
+
+    const contracts = await Contract.find(query)
       .populate({
         path: "roomId",
         select: "name customId status roomTypeId",
@@ -503,6 +581,15 @@ exports.getAllContracts = async (req, res) => {
 
 exports.getContractById = async (req, res) => {
   try {
+    const rawIds = await Contract.findById(req.params.id)
+      .select("tenantId depositId")
+      .lean();
+    if (!rawIds) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Contract not found" });
+    }
+
     const contract = await Contract.findById(req.params.id)
       .populate({
         path: "roomId",
@@ -521,10 +608,12 @@ exports.getContractById = async (req, res) => {
         .json({ success: false, message: "Contract not found" });
     }
 
-    // Fetch tenant's UserInfo separately
-    const tenantInfo = await UserInfo.findOne({
-      userId: contract.tenantId._id,
-    });
+    // ObjectId gốc vẫn còn trên document khi populate tenantId trả null (User đã xóa / ref hỏng)
+    const tenantUserId =
+      contract.tenantId?._id ?? contract.tenantId ?? rawIds.tenantId;
+    let tenantInfo = tenantUserId
+      ? await UserInfo.findOne({ userId: tenantUserId })
+      : null;
 
     // Fetch BookService for this contract (with populated service names/prices)
     const bookServiceRecord = await BookService.findOne({
@@ -539,6 +628,55 @@ exports.getContractById = async (req, res) => {
 
     // Convert to plain object and fix Decimal128 fields
     const contractData = contract.toObject();
+
+    // Thông tin Bên B: nếu không còn User/UserInfo, lấy từ phiếu cọc (đã nhập lúc đặt cọc)
+    let depositSnapshot =
+      contractData.depositId &&
+      typeof contractData.depositId === "object" &&
+      contractData.depositId.name
+        ? contractData.depositId
+        : null;
+    if (!depositSnapshot && rawIds.depositId) {
+      depositSnapshot = await Deposit.findById(rawIds.depositId)
+        .select("name phone email")
+        .lean();
+    }
+
+    let tenantInfoOut = tenantInfo ? tenantInfo.toObject() : null;
+    if (!tenantInfoOut && depositSnapshot?.name) {
+      tenantInfoOut = {
+        fullname: depositSnapshot.name,
+        cccd: null,
+        dob: null,
+        gender: null,
+        address: null,
+      };
+    }
+
+    let tenantIdOut = contractData.tenantId
+      ? { ...contractData.tenantId }
+      : null;
+    if (tenantIdOut && depositSnapshot) {
+      if (!tenantIdOut.phoneNumber && depositSnapshot.phone) {
+        tenantIdOut.phoneNumber = depositSnapshot.phone;
+      }
+      if (!tenantIdOut.email && depositSnapshot.email) {
+        tenantIdOut.email = depositSnapshot.email;
+      }
+    }
+    if (!tenantIdOut && depositSnapshot?.name) {
+      tenantIdOut = {
+        username: depositSnapshot.name,
+        phoneNumber: depositSnapshot.phone || null,
+        email: depositSnapshot.email || null,
+      };
+    } else if (!tenantIdOut && tenantInfoOut?.fullname) {
+      tenantIdOut = {
+        username: tenantInfoOut.fullname,
+        phoneNumber: depositSnapshot?.phone || null,
+        email: depositSnapshot?.email || null,
+      };
+    }
 
     // Fix roomType currentPrice (Decimal128 → Number)
     if (contractData.roomId?.roomTypeId?.currentPrice) {
@@ -580,7 +718,8 @@ exports.getContractById = async (req, res) => {
       success: true,
       data: {
         ...contractData,
-        tenantInfo: tenantInfo ? tenantInfo.toObject() : null,
+        tenantId: tenantIdOut,
+        tenantInfo: tenantInfoOut,
         bookServices,
         assets,
       },

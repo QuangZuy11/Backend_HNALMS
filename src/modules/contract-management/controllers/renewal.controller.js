@@ -16,7 +16,16 @@ exports.getRenewalPreview = async (req, res) => {
     }
     const { contractId } = req.params;
     const data = await getRenewalPreviewForTenant(contractId, tenantId);
-    res.status(200).json({ success: true, data });
+    res.status(200).json({
+      success: true,
+      data,
+      // Thêm thông tin mô tả trạng thái
+      message: data.hasAction
+        ? `Hợp đồng đã có quyết định: ${data.renewalStatus}`
+        : data.canRenew
+        ? "Bạn có thể gia hạn hoặc từ chối gia hạn."
+        : data.blockingReason || "Không thể thực hiện thao tác."
+    });
   } catch (error) {
     console.error("Get Renewal Preview Error:", error);
     const msg = error.message || "";
