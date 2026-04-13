@@ -61,6 +61,90 @@ const calculateProration = (oldPrice, newPrice, transferDate) => {
 };
 
 /**
+ * Helper: Kiểm tra phòng có trống trong khoảng thời gian hay không
+ * @param {string} targetRoomId - ID phòng muốn chuyển đến
+ * @param {Date} startDate - Ngày bắt đầu cần kiểm tra (transferDate)
+ * @param {Date} endDate - Ngày kết thúc cần kiểm tra (endDate hợp đồng)
+ * @returns {Object} { isAvailable, conflictingContract, conflictingRequest }
+ */
+const checkRoomAvailabilityInPeriod = async (targetRoomId, startDate, endDate) => {
+  const roomIdObj = new mongoose.Types.ObjectId(targetRoomId);
+
+  // Ngày cần trống: từ startDate (transferDate) đến hết endDate (contractEndDate)
+  // Chuyển endDate thành 23:59:59.999 để check inclusive
+  const periodEnd = new Date(endDate);
+  periodEnd.setHours(23, 59, 59, 999);
+
+  // 1. Kiểm tra hợp đồng active/pending → check OVERLAP (startDate AND endDate)
+  // Overlap khi: contractStart < periodEnd AND contractEnd > periodStart
+  const conflictingActiveContract = await Contract.findOne({
+    roomId: roomIdObj,
+    status: { $in: ["active", "pending"] },
+    startDate: { $lt: periodEnd },
+    endDate: { $gt: startDate },
+  }).lean();
+
+  if (conflictingActiveContract) {
+    return {
+      isAvailable: false,
+      conflictingContract: conflictingActiveContract,
+      conflictingRequest: null,
+    };
+  }
+
+  // 2. Kiểm tra hợp đồng inactive → chỉ check startDate
+  // Vì endDate đã qua, nhưng nếu startDate nằm trong khoảng kiểm tra → có người sẽ chuyển vào
+  const conflictingInactiveContract = await Contract.findOne({
+    roomId: roomIdObj,
+    status: { $nin: ["active", "pending"] },
+    startDate: { $gte: startDate, $lte: periodEnd },
+  }).lean();
+
+  if (conflictingInactiveContract) {
+    return {
+      isAvailable: false,
+      conflictingContract: conflictingInactiveContract,
+      conflictingRequest: null,
+    };
+  }
+
+  // 3. Kiểm tra yêu cầu chuyển phòng đã Approved (chưa Completed)
+  // Approved = phòng đã được đặt chỗ cho người khác chuyển vào
+  const conflictingRequest = await TransferRequest.findOne({
+    targetRoomId: roomIdObj,
+    status: "Approved",
+    $or: [
+      // transferDate nằm trong khoảng cần kiểm tra
+      { transferDate: { $gte: startDate, $lte: periodEnd } },
+      // transferDate trước khoảng nhưng chưa completed → vẫn đang chiếm phòng
+      { transferDate: { $lt: startDate } },
+    ],
+  })
+    .populate({
+      path: "currentRoomId",
+      select: "name roomCode",
+      populate: { path: "floorId", select: "name" },
+    })
+    .populate({
+      path: "targetRoomId",
+      select: "name roomCode",
+      populate: { path: "floorId", select: "name" },
+    })
+    .populate("tenantId", "username email")
+    .lean();
+
+  if (conflictingRequest) {
+    return {
+      isAvailable: false,
+      conflictingContract: null,
+      conflictingRequest,
+    };
+  }
+
+  return { isAvailable: true, conflictingContract: null, conflictingRequest: null };
+};
+
+/**
  * [TENANT] Lấy danh sách phòng trống để chọn chuyển đến
  */
 const getAvailableRoomsForTransfer = async (tenantId) => {
@@ -97,7 +181,27 @@ const getAvailableRoomsForTransfer = async (tenantId) => {
     return room;
   });
 
-  return { currentContract: contract, availableRooms: data };
+  // Lọc phòng trống thực sự trong khoảng thời gian còn lại của hợp đồng
+  // Phòng phải trống từ ngày mai đến hết endDate của hợp đồng
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  tomorrow.setHours(0, 0, 0, 0);
+
+  const contractEndDate = new Date(contract.endDate);
+
+  const availableRooms = [];
+  for (const room of data) {
+    const availability = await checkRoomAvailabilityInPeriod(
+      room._id.toString(),
+      tomorrow,
+      contractEndDate,
+    );
+    if (availability.isAvailable) {
+      availableRooms.push(room);
+    }
+  }
+
+  return { currentContract: contract, availableRooms };
 };
 
 /**
@@ -180,6 +284,33 @@ const createTransferRequest = async (tenantId, body) => {
   }
   if (!targetRoom.isActive) {
     throw { status: 400, message: "Phòng muốn chuyển đến đang bị tạm ngưng." };
+  }
+
+  // 4.5. Kiểm tra phòng mới có trống trong khoảng thời gian còn lại của hợp đồng
+  // (sử dụng transferDate từ body, chưa parse ở bước 7)
+  const checkTransferDate = new Date(body.transferDate);
+  const contractEndDate = new Date(contract.endDate);
+  const availability = await checkRoomAvailabilityInPeriod(
+    targetRoomId,
+    checkTransferDate,
+    contractEndDate,
+  );
+  if (!availability.isAvailable) {
+    let conflictInfo = "";
+    if (availability.conflictingContract) {
+      const c = availability.conflictingContract;
+      const startStr = c.startDate ? new Date(c.startDate).toLocaleDateString("vi-VN") : "N/A";
+      const endStr = c.endDate ? new Date(c.endDate).toLocaleDateString("vi-VN") : "N/A";
+      conflictInfo = `Phòng đã có hợp đồng (${c.contractCode || "không mã"}) từ ${startStr} đến ${endStr}.`;
+    } else if (availability.conflictingRequest) {
+      const r = availability.conflictingRequest;
+      const transferStr = r.transferDate ? new Date(r.transferDate).toLocaleDateString("vi-VN") : "N/A";
+      conflictInfo = `Phòng đã có yêu cầu chuyển phòng được duyệt vào ngày ${transferStr} (${r.tenantId?.username || "không xác định"}).`;
+    }
+    throw {
+      status: 400,
+      message: `Phòng muốn chuyển đến không trống trong toàn bộ thời gian còn lại của hợp đồng (đến ${contractEndDate.toLocaleDateString("vi-VN")}). ${conflictInfo} Vui lòng chọn phòng khác hoặc chọn ngày chuyển phù hợp.`,
+    };
   }
 
   // 5. Không cho chuyển vào chính phòng hiện tại
@@ -564,6 +695,31 @@ const updateTransferRequest = async (requestId, tenantId, body) => {
         throw { status: 400, message: "Phòng muốn chuyển đến đang bị tạm ngưng." };
       }
 
+      // Kiểm tra phòng mới có trống trong khoảng thời gian còn lại của hợp đồng
+      const contractEndDate = new Date(contract.endDate);
+      const updateAvailability = await checkRoomAvailabilityInPeriod(
+        targetRoomId,
+        newTransferDate,
+        contractEndDate,
+      );
+      if (!updateAvailability.isAvailable) {
+        let conflictInfo = "";
+        if (updateAvailability.conflictingContract) {
+          const c = updateAvailability.conflictingContract;
+          const startStr = c.startDate ? new Date(c.startDate).toLocaleDateString("vi-VN") : "N/A";
+          const endStr = c.endDate ? new Date(c.endDate).toLocaleDateString("vi-VN") : "N/A";
+          conflictInfo = `Phòng đã có hợp đồng (${c.contractCode || "không mã"}) từ ${startStr} đến ${endStr}.`;
+        } else if (updateAvailability.conflictingRequest) {
+          const r = updateAvailability.conflictingRequest;
+          const transferStr = r.transferDate ? new Date(r.transferDate).toLocaleDateString("vi-VN") : "N/A";
+          conflictInfo = `Phòng đã có yêu cầu chuyển phòng được duyệt vào ngày ${transferStr} (${r.tenantId?.username || "không xác định"}).`;
+        }
+        throw {
+          status: 400,
+          message: `Phòng muốn chuyển đến không trống trong toàn bộ thời gian còn lại của hợp đồng (đến ${contractEndDate.toLocaleDateString("vi-VN")}). ${conflictInfo} Vui lòng chọn phòng khác hoặc chọn ngày chuyển phù hợp.`,
+        };
+      }
+
       const personMax = targetRoom.roomTypeId?.personMax || 1;
       const totalPeople = (contract.coResidents ? contract.coResidents.length : 0) + 1;
       if (totalPeople > personMax) {
@@ -578,6 +734,31 @@ const updateTransferRequest = async (requestId, tenantId, body) => {
       newProration = calculateProration(oldPrice, newPrice, newTransferDate);
       request.targetRoomId = targetRoomId;
     } else {
+      // Chỉ đổi ngày → kiểm tra phòng hiện tại (targetRoomId đã chọn) có trống đến endDate với ngày mới không
+      const contractEndDate = new Date(contract.endDate);
+      const dateChangeAvailability = await checkRoomAvailabilityInPeriod(
+        request.targetRoomId.toString(),
+        newTransferDate,
+        contractEndDate,
+      );
+      if (!dateChangeAvailability.isAvailable) {
+        let conflictInfo = "";
+        if (dateChangeAvailability.conflictingContract) {
+          const c = dateChangeAvailability.conflictingContract;
+          const startStr = c.startDate ? new Date(c.startDate).toLocaleDateString("vi-VN") : "N/A";
+          const endStr = c.endDate ? new Date(c.endDate).toLocaleDateString("vi-VN") : "N/A";
+          conflictInfo = `Phòng đã có hợp đồng (${c.contractCode || "không mã"}) từ ${startStr} đến ${endStr}.`;
+        } else if (dateChangeAvailability.conflictingRequest) {
+          const r = dateChangeAvailability.conflictingRequest;
+          const transferStr = r.transferDate ? new Date(r.transferDate).toLocaleDateString("vi-VN") : "N/A";
+          conflictInfo = `Phòng đã có yêu cầu chuyển phòng được duyệt vào ngày ${transferStr} (${r.tenantId?.username || "không xác định"}).`;
+        }
+        throw {
+          status: 400,
+          message: `Với ngày chuyển mới, phòng đã chọn không còn trống trong toàn bộ thời gian còn lại của hợp đồng (đến ${contractEndDate.toLocaleDateString("vi-VN")}). ${conflictInfo} Vui lòng chọn ngày khác hoặc chọn phòng khác.`,
+        };
+      }
+
       // Chỉ đổi phòng hoặc ngày → tính lại proration với phòng hiện tại
       const currentTargetRoom = await Room.findById(request.targetRoomId).populate(
         "roomTypeId",
