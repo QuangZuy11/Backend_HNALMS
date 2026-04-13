@@ -28,6 +28,9 @@ router.post("/cancel/:transactionCode", depositRoomController.cancelDeposit);
 // GET /api/deposits — Lấy tất cả deposits
 router.get("/", depositAdminController.getAllDeposits);
 
+// POST /api/deposits — Tạo cọc trực tiếp (không qua thanh toán Sepay)
+router.post("/", depositAdminController.createDeposit);
+
 // GET /api/deposits/:id — Lấy deposit theo ID
 router.get("/:id", depositAdminController.getDepositById);
 
