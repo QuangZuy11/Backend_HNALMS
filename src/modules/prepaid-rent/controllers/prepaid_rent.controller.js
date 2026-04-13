@@ -1,7 +1,6 @@
 const PrepaidRentService = require("../services/prepaid_rent.service");
 const PrepaidRentRequest = require("../models/prepaid_rent.model");
 const Payment = require("../../invoice-management/models/payment.model");
-const InvoiceIncurred = require("../../invoice-management/models/invoice_incurred.model");
 const Contract = require("../../contract-management/models/contract.model");
 
 const handleError = (res, error) => {

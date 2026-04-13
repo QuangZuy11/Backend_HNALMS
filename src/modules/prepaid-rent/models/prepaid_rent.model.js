@@ -26,10 +26,10 @@ const prepaidRentRequestSchema = new Schema(
       type: Number,
       required: true,
     },
-    // ID hóa đơn trả trước (InvoiceIncurred) được tạo khi thanh toán thành công
-    invoiceIncurredId: {
+    // ID hóa đơn trả trước (InvoicePeriodic) được tạo khi thanh toán thành công
+    invoicePeriodicId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "InvoiceIncurred",
+      ref: "InvoicePeriodic",
       default: null,
     },
     // Payment record (sepay)

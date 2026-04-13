@@ -1,5 +1,5 @@
 const PrepaidRentRequest = require("../models/prepaid_rent.model");
-const InvoiceIncurred = require("../../invoice-management/models/invoice_incurred.model");
+const InvoicePeriodic = require("../../invoice-management/models/invoice_periodic.model");
 const Payment = require("../../invoice-management/models/payment.model");
 const Contract = require("../../contract-management/models/contract.model");
 const Room = require("../../room-floor-management/models/room.model");
@@ -242,15 +242,30 @@ exports.createPrepaidRentRequest = async (tenantId, contractId, prepaidMonths) =
 exports.getPrepaidRentPaymentStatus = async (transactionCode) => {
   const request = await PrepaidRentRequest.findOne({ transactionCode })
     .populate("contractId", "contractCode roomId")
-    .populate("paymentId")
     .lean();
 
   if (!request) {
     throw { status: 404, message: "Không tìm thấy yêu cầu trả trước." };
   }
 
-  const payment = await Payment.findById(request.paymentId);
+  // Tìm payment qua transactionCode (ưu tiên) hoặc paymentId (fallback)
+  let payment = await Payment.findOne({ transactionCode }).lean();
+  if (!payment && request.paymentId) {
+    payment = await Payment.findById(request.paymentId).lean();
+  }
+
   if (!payment) {
+    // Nếu không tìm thấy payment nhưng request đã paid (webhook đã xử lý)
+    if (request.status === "paid") {
+      return {
+        status: "Success",
+        requestId: request._id,
+        requestStatus: "paid",
+        transactionCode,
+        amount: request.totalAmount,
+        invoiceCode: request.invoicePeriodicId,
+      };
+    }
     throw { status: 404, message: "Không tìm thấy giao dịch thanh toán." };
   }
 
@@ -259,9 +274,7 @@ exports.getPrepaidRentPaymentStatus = async (transactionCode) => {
     const expireAt = new Date(new Date(payment.createdAt).getTime() + 5 * 60 * 1000);
     if (new Date() > expireAt) {
       // Tự động hủy request & payment hết hạn
-      payment.status = "Failed";
-      await payment.save();
-      request.status = "expired";
+      await Payment.findByIdAndUpdate(payment._id, { status: "Failed" });
       await PrepaidRentRequest.findByIdAndUpdate(request._id, { status: "expired" });
 
       return {
@@ -306,6 +319,8 @@ exports.confirmPrepaidRentPayment = async (transactionCode) => {
 
   if (!request) return null; // Không tìm thấy hoặc đã xử lý
 
+  const contractId = request.contractId._id || request.contractId;
+
   // Cập nhật payment
   const payment = await Payment.findByIdAndUpdate(
     request.paymentId,
@@ -313,52 +328,83 @@ exports.confirmPrepaidRentPayment = async (transactionCode) => {
     { new: true }
   );
 
-  // Tạo hóa đơn trả trước tiền phòng (InvoiceIncurred type = prepaid, status = Paid)
-  const contract = await Contract.findById(request.contractId).lean();
+  // Tạo hóa đơn trả trước tiền phòng (InvoicePeriodic, status = "Paid")
+  const contractDoc = await Contract.findById(contractId)
+    .populate({ path: "roomId", populate: { path: "roomTypeId" } })
+    .lean();
   const now = new Date();
+
+  // Tính prepaidFrom (tháng bắt đầu) và prepaidTo (tháng kết thúc)
+  const currentRentPaidUntil = contractDoc.rentPaidUntil
+    ? new Date(contractDoc.rentPaidUntil)
+    : new Date(contractDoc.startDate);
+  const prepaidFromDate = new Date(currentRentPaidUntil);
+  prepaidFromDate.setMonth(prepaidFromDate.getMonth() + 1);
+  // Bắt đầu từ ngày 1 của tháng tiếp theo
+  const actualPrepaidFrom = new Date(prepaidFromDate.getFullYear(), prepaidFromDate.getMonth(), 1);
+
+  const prepaidToDate = new Date(actualPrepaidFrom.getFullYear(), actualPrepaidFrom.getMonth() + request.prepaidMonths, 0);
+
+  const formatVN = (d) => {
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const yyyy = d.getFullYear();
+    return `${dd}/${mm}/${yyyy}`;
+  };
+
+  const roomPrice = contractDoc.roomId?.roomTypeId?.currentPrice || 0;
+  const itemNameDesc = `Tiền thuê phòng trả trước ${request.prepaidMonths} tháng (từ ${formatVN(actualPrepaidFrom)} đến ${formatVN(prepaidToDate)})`;
+
   const datePrefix = `${String(now.getDate()).padStart(2, "0")}${String(now.getMonth() + 1).padStart(2, "0")}${now.getFullYear()}`;
   const nextSeq = String(Math.floor(Math.random() * 10000)).padStart(4, "0");
   const invoiceCode = `HD-PREPAID-${datePrefix}-${nextSeq}`;
 
-  const invoiceIncurred = new InvoiceIncurred({
+  const invoicePeriodic = new InvoicePeriodic({
     invoiceCode,
-    contractId: request.contractId,
-    repairRequestId: null,
+    contractId: contractId,
     title: `Thanh toán tiền phòng trả trước (${request.prepaidMonths} tháng)`,
+    items: [
+      {
+        itemName: itemNameDesc,
+        oldIndex: 0,
+        newIndex: 0,
+        usage: request.prepaidMonths,
+        unitPrice: roomPrice,
+        amount: request.totalAmount,
+        isIndex: false,
+      },
+    ],
     totalAmount: request.totalAmount,
     status: "Paid",
-    type: "prepaid",
     dueDate: now,
-    images: [],
   });
-  await invoiceIncurred.save();
+  await invoicePeriodic.save();
 
-  // Cập nhật rentPaidUntil trong contract (không vượt quá endDate — trùng kỳ với HĐ)
-  const currentRentPaidUntil = contract.rentPaidUntil ? new Date(contract.rentPaidUntil) : new Date(contract.startDate);
+  // Cập nhật rentPaidUntil trong contract (không vượt quá endDate)
   const newRentPaidUntil = new Date(currentRentPaidUntil);
   newRentPaidUntil.setMonth(newRentPaidUntil.getMonth() + request.prepaidMonths);
-  const contractEnd = new Date(contract.endDate);
+  const contractEnd = new Date(contractDoc.endDate);
   if (newRentPaidUntil > contractEnd) {
     newRentPaidUntil.setTime(contractEnd.getTime());
   }
 
-  await Contract.findByIdAndUpdate(request.contractId, {
+  await Contract.findByIdAndUpdate(contractId, {
     rentPaidUntil: newRentPaidUntil,
   });
 
   // Cập nhật request
   request.status = "paid";
-  request.invoiceIncurredId = invoiceIncurred._id;
+  request.invoicePeriodicId = invoicePeriodic._id;
   await PrepaidRentRequest.findByIdAndUpdate(request._id, {
     status: "paid",
-    invoiceIncurredId: invoiceIncurred._id,
+    invoicePeriodicId: invoicePeriodic._id,
   });
 
   return {
     success: true,
     requestId: request._id,
-    invoiceIncurredId: invoiceIncurred._id,
-    invoiceCode: invoiceIncurred.invoiceCode,
+    invoicePeriodicId: invoicePeriodic._id,
+    invoiceCode: invoicePeriodic.invoiceCode,
     totalAmount: request.totalAmount,
     prepaidMonths: request.prepaidMonths,
     newRentPaidUntil,
@@ -397,7 +443,7 @@ exports.getPrepaidRentHistory = async (tenantId) => {
       select: "contractCode roomId",
       populate: { path: "roomId", select: "name" },
     })
-    .populate("invoiceIncurredId", "invoiceCode title totalAmount status")
+    .populate("invoicePeriodicId", "invoiceCode title totalAmount status")
     .sort({ createdAt: -1 })
     .lean();
 
@@ -409,7 +455,7 @@ exports.getPrepaidRentHistory = async (tenantId) => {
     totalAmount: r.totalAmount,
     status: r.status,
     transactionCode: r.transactionCode,
-    invoiceCode: r.invoiceIncurredId?.invoiceCode,
+    invoiceCode: r.invoicePeriodicId?.invoiceCode,
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
   }));
