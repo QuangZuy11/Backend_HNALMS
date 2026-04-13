@@ -223,6 +223,8 @@ const createDeposit = async (req, res) => {
       amount,
       status: "Held",
       activationStatus: null,
+      expireAt: req.body.expireAt ? new Date(req.body.expireAt) : null,
+      createdAt: req.body.createdDate ? new Date(req.body.createdDate) : new Date(),
     });
 
     await newDeposit.save();
