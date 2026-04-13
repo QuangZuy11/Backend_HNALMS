@@ -143,65 +143,42 @@ class MoveOutRequestService {
   //  HELPER – Kiểm tra gap contract
   // ============================================================
   /**
-   * Kiểm tra gap contract (hai kiểu):
+   * Kiểm tra gap contract theo nghiệp vụ:
    * - Type 1: startDate sau hợp đồng khác có startDate sớm nhất trên phòng (gap sau “chuỗi” sớm).
-   * - Type 2: có hợp đồng khác bắt đầu sau endDate của mình, khe ≥ MIN_GAP_DAYS_AFTER_CONTRACT_END
-   *   (người lấp khoảng trống trước HĐ tương lai — ví dụ B 4–9 trước A 10).
+   * Gap = HĐ bắt đầu SAU Primary. Primary = HĐ startDate sớm nhất trên phòng.
+   * (người lấp khoảng trống trước HĐ tương lai — ví dụ B 4–9 trước A 10).
    *
    * @param {Object} contract - Contract document
-   * @returns {Object} { isGapContract, primaryContract } — primaryContract: neo xử lý phòng (Type2: HĐ kế sau end; Type1: HĐ start sớm nhất trong các HĐ khác)
+   * @returns {Object} { isGapContract, primaryContract }
    */
   async _checkIfGapContract(contract) {
     if (!contract?.roomId) {
       return { isGapContract: false, primaryContract: null };
     }
 
-    const others = await Contract.find({
+    const allContracts = await Contract.find({
       roomId: contract.roomId,
-      _id: { $ne: contract._id },
       status: { $in: ["active", "inactive"] }
     })
       .select("_id startDate endDate tenantId status")
       .lean();
 
-    if (!others.length) {
+    if (allContracts.length <= 1) {
       return { isGapContract: false, primaryContract: null };
     }
 
-    const myStart = this._toDateOnly(contract.startDate);
+    // 1. Tìm Primary Contract = HĐ có startDate MUỘN NHẤT
+    let primaryContract = allContracts[0];
+    for (const c of allContracts) {
+      if (this._toDateOnly(c.startDate) > this._toDateOnly(primaryContract.startDate)) {
+        primaryContract = c;
+      }
+    }
+
+    // 2. Gap Contract = HĐ có endDate ≤ startDate của Primary (thuê trong khoảng trống trước primary)
     const myEnd = this._toDateOnly(contract.endDate);
-
-    let primaryEarliest = others[0];
-    for (const o of others) {
-      if (this._toDateOnly(o.startDate) < this._toDateOnly(primaryEarliest.startDate)) {
-        primaryEarliest = o;
-      }
-    }
-    const type1 = myStart > this._toDateOnly(primaryEarliest.startDate);
-
-    const minGap = MOVEOUT_POLICY.MIN_GAP_DAYS_AFTER_CONTRACT_END;
-    let nextAfterEnd = null;
-    for (const o of others) {
-      const oStart = this._toDateOnly(o.startDate);
-      if (oStart.getTime() <= myEnd.getTime()) {
-        continue;
-      }
-      const gapDays = this._getCalendarDaysDiff(contract.endDate, o.startDate);
-      if (gapDays < minGap) {
-        continue;
-      }
-      const candStart = this._toDateOnly(o.startDate);
-      if (
-        !nextAfterEnd ||
-        candStart.getTime() < this._toDateOnly(nextAfterEnd.startDate).getTime()
-      ) {
-        nextAfterEnd = o;
-      }
-    }
-    const type2 = Boolean(nextAfterEnd);
-
-    const isGapContract = type1 || type2;
-    const primaryContract = type2 && nextAfterEnd ? nextAfterEnd : type1 ? primaryEarliest : null;
+    const primaryStart = this._toDateOnly(primaryContract.startDate);
+    const isGapContract = myEnd <= primaryStart;
 
     return { isGapContract, primaryContract };
   }
@@ -285,7 +262,7 @@ class MoveOutRequestService {
     }
   }
 
-  async _findDepositForContract(contract) {
+  async   _findDepositForContract(contract) {
     if (!contract) {
       return null;
     }
@@ -322,6 +299,48 @@ class MoveOutRequestService {
     }
 
     return null;
+  }
+
+  /**
+   * Tính số tiền phòng trả trước dư khi trả phòng sớm.
+   * Ví dụ: HĐ endDate = 30/06, rentPaidUntil = 30/04 → đã trả trước 2 tháng → dư
+   * Công thức: (rentPaidUntil - endDate) × (giá phòng / 30)
+   *
+   * @param {Object} contract - Contract document (đã populate roomId.roomTypeId)
+   * @param {Date|string} moveOutDate - Ngày trả phòng thực tế
+   * @returns {number} Số tiền prepaid dư (>= 0)
+   */
+  _calculatePrepaidRentOverpay(contract, moveOutDate) {
+    if (!contract || !moveOutDate) return 0;
+
+    const endDate = this._toDateOnly(contract.endDate);
+    const rentPaidUntil = contract.rentPaidUntil ? this._toDateOnly(contract.rentPaidUntil) : null;
+
+    // Không có prepaid → không có dư
+    if (!rentPaidUntil) return 0;
+
+    // rentPaidUntil <= endDate → không dư (đã trả đến đúng/hết hạn)
+    if (rentPaidUntil <= endDate) return 0;
+
+    // Tính số ngày dư: rentPaidUntil - endDate
+    const daysOverpay = Math.max(0, Math.floor((rentPaidUntil - endDate) / DAY_IN_MS));
+
+    // Lấy giá phòng từ roomTypeId (nằm trên room, không phải contract)
+    let roomPrice = 0;
+    if (contract.roomId?.roomTypeId) {
+      const priceRaw = contract.roomId.roomTypeId.currentPrice;
+      if (priceRaw) {
+        roomPrice = typeof priceRaw === 'object' && priceRaw.$numberDecimal
+          ? parseFloat(priceRaw.$numberDecimal)
+          : Number(priceRaw) || 0;
+      }
+    }
+
+    if (roomPrice <= 0) return 0;
+
+    // Tiền dư = số ngày dư × (giá phòng / 30)
+    const overpayAmount = daysOverpay * (roomPrice / 30);
+    return Math.max(0, Math.round(overpayAmount));
   }
 
   _buildTodayPaymentVoucherPrefix() {
@@ -482,7 +501,7 @@ class MoveOutRequestService {
       const paidRefundTicket = await FinancialTicket.findOne({
         referenceId: moveOutRequestId,
         status: "Paid",
-        title: { $regex: /^Hoàn cọc trả phòng/i }
+        title: { $in: [/^Hoàn cọc trả phòng/i, /^Hoàn tiền trả phòng/i] }
       })
         .select("_id referenceId title status")
         .sort({ createdAt: -1 })
@@ -834,44 +853,14 @@ class MoveOutRequestService {
     const formatVN = (d) => `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
 
     // ─── 1. Tiền phòng còn lại tới ngày xuất phòng ───────────────────────
-    const startBilling = contract.rentPaidUntil
-      ? new Date(new Date(contract.rentPaidUntil).getTime() + 24 * 60 * 60 * 1000)
-      : new Date(contract.startDate);
-    startBilling.setHours(0, 0, 0, 0);
-
-    const endBilling = new Date(moveOutDate);
-    endBilling.setHours(23, 59, 59, 0);
-
-    if (startBilling <= endBilling) {
-      let tempStart = new Date(startBilling);
-      let fullMonths = 0;
-      while (true) {
-        const nextMonth = new Date(tempStart);
-        nextMonth.setMonth(nextMonth.getMonth() + 1);
-        const endOfCycle = new Date(nextMonth);
-        endOfCycle.setDate(endOfCycle.getDate() - 1);
-        if (endOfCycle <= endBilling) {
-          fullMonths++;
-          tempStart = nextMonth;
-        } else {
-          break;
-        }
-      }
-      const oddDays = Math.round((endBilling - tempStart) / (1000 * 60 * 60 * 24)) + 1;
-      const daysInTargetMonth = new Date(endBilling.getFullYear(), endBilling.getMonth() + 1, 0).getDate();
-      const pricePerDay = parsedPrice / daysInTargetMonth;
-      const roomRentAmount = (fullMonths * parsedPrice) + (oddDays * pricePerDay);
-
-      let periodText = "";
-      if (fullMonths > 0 && oddDays > 0) periodText = `${fullMonths} tháng và ${oddDays} ngày lẻ`;
-      else if (fullMonths > 0) periodText = `${fullMonths} tháng`;
-      else if (oddDays > 0) periodText = `${oddDays} ngày lẻ`;
-
-      invoiceItems.push({ itemName: `Tiền thuê phòng xuất phòng (${periodText} từ ${formatVN(startBilling)} đến ${formatVN(endBilling)})`, usage: 1, unitPrice: roomRentAmount, amount: roomRentAmount, isIndex: false });
-      totalAmount += roomRentAmount;
-    } else {
-      invoiceItems.push({ itemName: `Tiền thuê phòng (Đã thanh toán trước đến ${contract.rentPaidUntil ? formatVN(new Date(contract.rentPaidUntil)) : formatVN(endBilling)})`, usage: 1, unitPrice: 0, amount: 0, isIndex: false });
-    }
+    // Tiền phòng KHÔNG tính vào hóa đơn cuối (đã thanh toán qua rentPaidUntil)
+    invoiceItems.push({
+      itemName: `Tiền thuê phòng (đã thanh toán qua tiền cọc)`,
+      usage: 1,
+      unitPrice: 0,
+      amount: 0,
+      isIndex: false
+    });
 
     // ─── 2. Điện / Nước + Các dịch vụ có chỉ số – Lấy từ MeterReading ────
     const startOfMonth = new Date(year, month - 1, 1);
@@ -1074,23 +1063,34 @@ class MoveOutRequestService {
 
     const finalInvoice = await InvoicePeriodic.findOne({ invoiceCode, contractId: contract._id });
 
-    // ─── Xử lý cọc riêng ──────────────────────────────────────────────────
+    // ─── Xử lý cọc + tiền phòng trả trước dư ─────────────────────────────
     const isDepositForfeited = Boolean(moveOutRequest.isDepositForfeited);
     const deposit = await this._findDepositForContract(contract);
+
+    // Tiền phòng trả trước dư: endDate < rentPaidUntil → hoàn phần trả thừa
+    const prepaidRentOverpay = this._calculatePrepaidRentOverpay(contract, now);
+
+    // Tiền cọc hoàn (nếu không bị tịch thu)
     const depositRefundAmount = deposit && !isDepositForfeited ? Math.max(Number(deposit.amount) || 0, 0) : 0;
+
+    // Tổng hoàn = cọc + prepaid dư (gộp 1 phiếu chi)
+    const totalRefundAmount = depositRefundAmount + prepaidRentOverpay;
+
+    console.log(`[MOVEOUT] 💰 depositRefundAmount=${depositRefundAmount} | prepaidRentOverpay=${prepaidRentOverpay} | totalRefundAmount=${totalRefundAmount}`);
 
     moveOutRequest.finalInvoiceId = finalInvoice._id;
     moveOutRequest.managerInvoiceNotes = managerInvoiceNotes;
-    moveOutRequest.depositRefundAmount = depositRefundAmount;
+    moveOutRequest.depositRefundAmount = totalRefundAmount;
+    moveOutRequest.prepaidRentOverpay = prepaidRentOverpay;
     moveOutRequest.status = "InvoiceReleased";
     moveOutRequest.paymentDate = null;
     await moveOutRequest.save();
 
-    // Cọc sẽ được xử lý (hoàn/mất) ở STEP 3 — khi trạng thái là Paid (completeMoveOut)
-
     // ─── Notification ─────────────────────────────────────────────────────
     const invoiceText = (finalInvoice?.totalAmount || 0).toLocaleString('vi-VN');
-    const refundText = depositRefundAmount.toLocaleString('vi-VN');
+    const depositRefundText = depositRefundAmount.toLocaleString('vi-VN');
+    const prepaidRefundText = prepaidRentOverpay.toLocaleString('vi-VN');
+    const totalRefundText = totalRefundAmount.toLocaleString('vi-VN');
 
     let noticeContent = `Quản lý đã kiểm tra phòng ${contract?.roomId?.name || ''} và phát hành hóa đơn cuối.\n` +
       `Tổng chi phí chốt: ${invoiceText} VND.\n\n` +
@@ -1098,8 +1098,14 @@ class MoveOutRequestService {
 
     if (isDepositForfeited) {
       noticeContent += `\nTiền cọc sẽ không được hoàn do không đủ điều kiện.`;
-    } else if (depositRefundAmount > 0) {
-      noticeContent += `\nTiền cọc sẽ được hoàn sau khi thanh toán: ${refundText} VND.`;
+    } else if (totalRefundAmount > 0) {
+      if (prepaidRentOverpay > 0) {
+        noticeContent += `\nTiền hoàn khi trả phòng (gộp cọc + tiền trả trước dư): ${totalRefundText} VND.\n` +
+          `  • Tiền cọc: ${depositRefundText} VND\n` +
+          `  • Tiền phòng trả trước dư: ${prepaidRefundText} VND`;
+      } else {
+        noticeContent += `\nTiền cọc sẽ được hoàn sau khi thanh toán: ${depositRefundText} VND.`;
+      }
     }
 
     await this._notifyTenant(moveOutRequest.tenantId, `📄 Hóa đơn cuối đã được phát hành`, noticeContent);
@@ -1110,8 +1116,10 @@ class MoveOutRequestService {
       settlement: {
         invoiceAmount: finalInvoice?.totalAmount || 0,
         depositRefundAmount,
+        prepaidRentOverpay,
+        totalRefundAmount,
         isDepositForfeited,
-        refundTicket: null, // sẽ tạo ở STEP 3 (Paid)
+        refundTicket: null, // sẽ tạo ở STEP 4 (Paid)
       },
     };
   }
@@ -1142,7 +1150,7 @@ class MoveOutRequestService {
 
     const refundTicket = await FinancialTicket.findOne({
       referenceId: moveOutRequest._id,
-      title: { $regex: /^Hoàn cọc trả phòng/i }
+      title: { $in: [/^Hoàn cọc trả phòng/i, /^Hoàn tiền trả phòng/i] }
     })
       .select("_id amount status paymentVoucher transactionDate")
       .sort({ createdAt: -1 })
@@ -1154,6 +1162,7 @@ class MoveOutRequestService {
       depositAmount: deposit ? Number(deposit.amount) || 0 : 0,
       invoiceAmount: 0,
       depositRefundAmount,
+      prepaidRentOverpay: moveOutRequest.prepaidRentOverpay || 0,
       isDepositForfeited,
       refundTicket,
     };
@@ -1208,24 +1217,36 @@ class MoveOutRequestService {
           refundDate: new Date(),
           forfeitedDate: null,
         });
-        // Tạo phiếu chi hoàn cọc khi trạng thái là Paid
+        // Tạo phiếu chi hoàn tiền khi trạng thái là Paid
+        // Gộp: tiền cọc + tiền phòng trả trước dư (nếu có)
         if (moveOutRequest.depositRefundAmount > 0) {
           let refundTicket = await FinancialTicket.findOne({
             referenceId: moveOutRequest._id,
-            title: { $regex: /^Hoàn cọc trả phòng/i }
+            title: { $regex: /^Hoàn tiền trả phòng/i }
           }).select("_id amount status paymentVoucher").sort({ createdAt: -1 });
+
+          const depositAmt = deposit ? Number(deposit.amount) || 0 : 0;
+          const prepaidAmt = moveOutRequest.prepaidRentOverpay || 0;
+
+          let ticketTitle = `Hoàn tiền trả phòng - HĐ ${contract.contractCode || moveOutRequest.contractId}`;
+          if (depositAmt > 0 && prepaidAmt > 0) {
+            ticketTitle += ` (Cọc ${depositAmt.toLocaleString('vi-VN')} + Trả trước dư ${prepaidAmt.toLocaleString('vi-VN')})`;
+          } else if (prepaidAmt > 0) {
+            ticketTitle += ` (Tiền trả trước dư ${prepaidAmt.toLocaleString('vi-VN')})`;
+          }
 
           if (!refundTicket) {
             const paymentVoucher = await this._getNextMoveOutRefundVoucher();
             refundTicket = await FinancialTicket.create({
               amount: moveOutRequest.depositRefundAmount,
-              title: `Hoàn cọc trả phòng - HĐ ${contract.contractCode || moveOutRequest.contractId}`,
+              title: ticketTitle,
               referenceId: moveOutRequest._id,
               status: "Approved",
               transactionDate: new Date(),
               accountantPaidAt: null,
               paymentVoucher,
             });
+            console.log(`[MOVEOUT] ✅ Tạo phiếu chi hoàn tiền: ${ticketTitle} | Số tiền: ${moveOutRequest.depositRefundAmount.toLocaleString('vi-VN')} VND`);
           }
         }
       }
@@ -1268,10 +1289,30 @@ class MoveOutRequestService {
     moveOutRequest.managerCompletionNotes = managerCompletionNotes;
     await moveOutRequest.save();
 
+    // Gửi notification hoàn tất kèm thông tin hoàn tiền
+    const totalRefund = moveOutRequest.depositRefundAmount || 0;
+    const depositAmt = deposit ? Number(deposit.amount) || 0 : 0;
+    const prepaidAmt = moveOutRequest.prepaidRentOverpay || 0;
+
+    let completionContent = `Quản lý đã xác nhận hoàn tất quy trình trả phòng.`;
+    if (totalRefund > 0) {
+      completionContent += `\n\n💰 Tổng tiền hoàn: ${totalRefund.toLocaleString('vi-VN')} VND`;
+      if (depositAmt > 0) {
+        completionContent += `\n  • Tiền cọc: ${depositAmt.toLocaleString('vi-VN')} VND`;
+      }
+      if (prepaidAmt > 0) {
+        completionContent += `\n  • Tiền phòng trả trước dư: ${prepaidAmt.toLocaleString('vi-VN')} VND`;
+      }
+      completionContent += `\n\nPhiếu chi đã được tạo. Kế toán sẽ liên hệ chi tiền.`;
+    }
+    if (managerCompletionNotes) {
+      completionContent += `\n\nGhi chú: ${managerCompletionNotes}`;
+    }
+
     await this._notifyTenant(
       moveOutRequest.tenantId,
       `✅ Trả phòng đã hoàn tất`,
-      `Quản lý đã xác nhận hoàn tất quy trình trả phòng.${managerCompletionNotes ? `\nGhi chú: ${managerCompletionNotes}` : ""}`
+      completionContent
     );
 
     return moveOutRequest;
