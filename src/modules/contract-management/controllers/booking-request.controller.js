@@ -4,6 +4,9 @@ const { sendEmail } = require("../../notification-management/services/email.serv
 const Service = require("../../service-management/models/service.model");
 const RoomDevice = require("../../room-floor-management/models/roomdevices.model");
 const Payment = require("../../invoice-management/models/payment.model");
+const UserInfo = require("../../authentication/models/userInfor.model");
+const User = require("../../authentication/models/user.model");
+const Contract = require("../models/contract.model");
 
 
 exports.createBookingRequest = async (req, res) => {
@@ -51,6 +54,144 @@ exports.createBookingRequest = async (req, res) => {
     });
   } catch (error) {
     console.error("Error creating booking request:", error);
+    res.status(500).json({ success: false, message: "Lỗi máy chủ." });
+  }
+};
+
+// =============================================
+// POST /api/booking-requests/check-duplicate
+// Check trùng lặp CCCD/Phone/Email cho booking online
+// =============================================
+exports.checkDuplicateTenant = async (req, res) => {
+  try {
+    const { cccd, phone, email } = req.body;
+
+    if (!cccd && !phone && !email) {
+      return res.status(400).json({ success: false, message: "Cần cung cấp ít nhất 1 trường để kiểm tra." });
+    }
+
+    // Query song song để tăng tốc
+    const [existingByCCCD, existingByPhone, existingByEmail] = await Promise.all([
+      cccd ? UserInfo.findOne({ cccd }) : Promise.resolve(null),
+      phone ? UserInfo.findOne({ phone }) : Promise.resolve(null),
+      email ? UserInfo.findOne({ email }) : Promise.resolve(null),
+    ]);
+
+    // Tất cả 3 trùng khớp → cùng 1 người
+    if (existingByCCCD && existingByPhone && existingByEmail &&
+        existingByCCCD._id.equals(existingByPhone._id) &&
+        existingByCCCD._id.equals(existingByEmail._id)) {
+
+      const existingUser = await User.findById(existingByCCCD.userId);
+      let existingContracts = [];
+      if (existingUser) {
+        existingContracts = await Contract.find({
+          tenantId: existingUser._id,
+          status: { $in: ["active", "inactive"] },
+        });
+      }
+
+      if (existingContracts.length >= 2) {
+        return res.status(409).json({
+          success: false,
+          type: "same_person_max_contracts",
+          message: "Thông tin CCCD, SĐT và email trùng với tài khoản đã có. Bạn đã có nhiều HĐ. Không thể đặt phòng mới. Vui lòng liên hệ Ban quản lý.",
+          data: { contractsCount: existingContracts.length },
+        });
+      }
+
+      return res.status(409).json({
+        success: false,
+        type: "same_person",
+        message: "Thông tin CCCD, SĐT và email trùng với tài khoản đã có. Hệ thống sẽ sử dụng tài khoản cũ để tạo hợp đồng.",
+        data: { reuseExisting: true, contractsCount: existingContracts.length },
+      });
+    }
+
+    // Trùng 1 trong 3 → báo lỗi cụ thể
+    const onlyCCCD = existingByCCCD &&
+      (!existingByPhone || !existingByCCCD._id.equals(existingByPhone._id)) &&
+      (!existingByEmail || !existingByCCCD._id.equals(existingByEmail._id));
+
+    const onlyPhone = existingByPhone &&
+      (!existingByCCCD || !existingByCCCD._id.equals(existingByPhone._id)) &&
+      (!existingByEmail || !existingByEmail._id.equals(existingByPhone._id));
+
+    const onlyEmail = existingByEmail &&
+      (!existingByCCCD || !existingByCCCD._id.equals(existingByEmail._id)) &&
+      (!existingByPhone || !existingByPhone._id.equals(existingByEmail._id));
+
+    // Trùng phone + email nhưng không trùng CCCD
+    const phoneAndEmailOnly = existingByPhone && existingByEmail &&
+      existingByPhone._id.equals(existingByEmail._id) &&
+      (!existingByCCCD || !existingByCCCD._id.equals(existingByPhone._id));
+
+    // Trùng CCCD + phone nhưng không trùng email
+    const cccdAndPhoneOnly = existingByCCCD && existingByPhone &&
+      existingByCCCD._id.equals(existingByPhone._id) &&
+      (!existingByEmail || !existingByCCCD._id.equals(existingByEmail._id));
+
+    // Trùng CCCD + email nhưng không trùng phone
+    const cccdAndEmailOnly = existingByCCCD && existingByEmail &&
+      existingByCCCD._id.equals(existingByEmail._id) &&
+      (!existingByPhone || !existingByCCCD._id.equals(existingByPhone._id));
+
+    if (onlyCCCD) {
+      return res.status(409).json({
+        success: false,
+        type: "duplicate_cccd",
+        field: "cccd",
+        message: "Số CCCD đã thuộc sở hữu của người khác. Vui lòng kiểm tra lại.",
+      });
+    }
+    if (onlyPhone) {
+      return res.status(409).json({
+        success: false,
+        type: "duplicate_phone",
+        field: "phone",
+        message: "Số điện thoại đã được đăng ký trước đó. Vui lòng kiểm tra lại.",
+      });
+    }
+    if (onlyEmail) {
+      return res.status(409).json({
+        success: false,
+        type: "duplicate_email",
+        field: "email",
+        message: "Email đã được đăng ký trước đó. Vui lòng kiểm tra lại.",
+      });
+    }
+    if (phoneAndEmailOnly) {
+      return res.status(409).json({
+        success: false,
+        type: "duplicate_phone_email",
+        field: "phone_email",
+        message: "Số điện thoại và email đã thuộc về cùng một người khác. Vui lòng kiểm tra lại.",
+      });
+    }
+    if (cccdAndPhoneOnly) {
+      return res.status(409).json({
+        success: false,
+        type: "duplicate_cccd_phone",
+        field: "cccd_phone",
+        message: "Số CCCD và SĐT đã thuộc về cùng một người khác. Vui lòng kiểm tra lại.",
+      });
+    }
+    if (cccdAndEmailOnly) {
+      return res.status(409).json({
+        success: false,
+        type: "duplicate_cccd_email",
+        field: "cccd_email",
+        message: "Số CCCD và email đã thuộc về cùng một người khác. Vui lòng kiểm tra lại.",
+      });
+    }
+
+    // Không trùng → cho phép
+    return res.status(200).json({
+      success: true,
+      message: "Thông tin hợp lệ, có thể tiếp tục đặt phòng.",
+    });
+  } catch (error) {
+    console.error("Error checkDuplicateTenant:", error);
     res.status(500).json({ success: false, message: "Lỗi máy chủ." });
   }
 };

@@ -7,6 +7,9 @@ const { authorize } = require("../../authentication/middlewares/authorize");
 // Public route for creating a request
 router.post("/", bookingRequestController.createBookingRequest);
 
+// Public check duplicate: POST /api/booking-requests/check-duplicate
+router.post("/check-duplicate", bookingRequestController.checkDuplicateTenant);
+
 // Public polling: FE gọi để kiểm tra trạng thái thanh toán (giống /deposits/status/:transactionCode)
 // GET /api/booking-requests/payment-status/:transactionCode
 router.get("/payment-status/:transactionCode", bookingRequestController.getPaymentStatus);
