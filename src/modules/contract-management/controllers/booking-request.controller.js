@@ -437,16 +437,6 @@ exports.sendPaymentInfo = async (req, res) => {
     svHtml += `</ul>`;
 
     let optSvHtml = "";
-    if (optionalServices.length > 0) {
-       optSvHtml += `<p><strong>b) Dịch vụ tùy chọn:</strong></p><ul>`;
-       optionalServices.forEach(opt => {
-         const foundS = servicesList.find(x => x._id.toString() === opt.serviceId.toString());
-         if (foundS) {
-           optSvHtml += `<li>${foundS.name} – ${foundS.currentPrice.toLocaleString("vi-VN")} VNĐ/tháng (Số lượng: ${opt.quantity}) = <strong>${(foundS.currentPrice * opt.quantity).toLocaleString("vi-VN")}</strong> VNĐ/tháng</li>`;
-         }
-       });
-       optSvHtml += `</ul>`;
-    }
 
     const qrBlockHtml = `
       <div style="border: 2px dashed #007bff; padding: 20px; text-align: center; margin-top: 30px; border-radius: 8px; background: #f0f7ff;">
@@ -506,7 +496,6 @@ exports.sendPaymentInfo = async (req, res) => {
 
         <p><strong>Điều 3: Các dịch vụ hàng tháng đi kèm:</strong></p>
         ${svHtml}
-        ${optSvHtml}
 
         ${qrBlockHtml}
       </div>
