@@ -46,7 +46,7 @@ const transferRequestSchema = new mongoose.Schema(
     // Trạng thái yêu cầu
     status: {
       type: String,
-      enum: ["Pending", "Approved", "Rejected", "Completed", "Cancelled"],
+      enum: ["Pending", "Approved", "InvoiceReleased", "Paid", "Rejected", "Completed", "Cancelled"],
       default: "Pending",
     },
     // Lý do từ chối (nếu có)
@@ -58,6 +58,12 @@ const transferRequestSchema = new mongoose.Schema(
     managerNote: {
       type: String,
       default: "",
+    },
+    // [MỚI] Hóa đơn chuyển phòng (nếu có)
+    transferInvoiceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "InvoicePeriodic",
+      default: null,
     },
     // [MỚI] Thời gian hoàn tất chuyển phòng
     completedAt: {
