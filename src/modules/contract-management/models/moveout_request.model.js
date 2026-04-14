@@ -73,22 +73,15 @@ const MoveOutRequestSchema = new Schema({
   // === Thông tin hoàn/bù cọc ===
   depositRefundAmount: {
     type: Number,
-    default: 0 // Số tiền cọc được hoàn lại cho tenant (sau khi trừ hóa đơn nếu có)
+    default: 0 // Tổng tiền hoàn (cọc + prepaid dư) — 0 nếu mất cọc và không có prepaid
   },
-
-  // === Thông tin thanh toán ===
-  paymentMethod: {
-    type: String,
-    enum: ['online', 'offline', null],
-    default: null
+  prepaidRentOverpay: {
+    type: Number,
+    default: 0 // Số tiền phòng trả trước dư cần hoàn (tháng tiếp theo đến rentPaidUntil)
   },
-  paymentTransactionCode: {
-    type: String,
-    default: null
-  },
-  paymentDate: {
-    type: Date,
-    default: null
+  prepaidMonths: {
+    type: Number,
+    default: 0 // Số tháng tiền phòng trả trước cần hoàn
   },
 
   // === Ghi chú từng bước ===
