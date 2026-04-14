@@ -66,7 +66,9 @@ exports.handleWebhook = async (req, res) => {
         }
 
         // 3. Trả trước tiền phòng: nội dung chứa "PREPAID"
-        if (/PREPAID\s+\S+\s+\d{8}/.test(upperContent)) {
+        // Hỗ trợ format cũ: "PREPAID [code] [DDMMYYYY]"
+        // Và format mới: "BIDV;...;PREPAID [code] [DDMMYY] [HHMMSSmmm]"
+        if (/PREPAID\s+\S+\s+\d{6,8}(?:\s+\d+)?/.test(upperContent)) {
             console.log("[SEPAY WEBHOOK] 💰 Detected PREPAID RENT transaction");
             return prepaidRentController.sepayWebhookForPrepaidRent(req, res);
         }

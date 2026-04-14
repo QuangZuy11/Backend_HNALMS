@@ -6,21 +6,27 @@ const Room = require("../../room-floor-management/models/room.model");
 
 // ============================================================
 // Helper: Sinh mã giao dịch cho yêu cầu trả trước
-// Format: PREPAID [ContractCode rút gọn] [DDMMYYYY]
+// Format: PREPAID [ContractCode rút gọn] [DDMMYYYY] [HHMMSSmmm]
 // ============================================================
 const generatePrepaidTransactionCode = (contractCode) => {
   const now = new Date();
   const day = String(now.getDate()).padStart(2, "0");
   const month = String(now.getMonth() + 1).padStart(2, "0");
-  const year = now.getFullYear();
+  const year = String(now.getFullYear()).slice(-2);
   const dateStr = `${day}${month}${year}`;
+
+  const hours = String(now.getHours()).padStart(2, "0");
+  const minutes = String(now.getMinutes()).padStart(2, "0");
+  const seconds = String(now.getSeconds()).padStart(2, "0");
+  const ms = String(now.getMilliseconds()).padStart(3, "0");
+  const timeStr = `${hours}${minutes}${seconds}${ms}`;
 
   const shortCode = (contractCode || "UNKNOWN")
     .replace(/[^a-zA-Z0-9]/g, "")
     .slice(0, 10)
     .toUpperCase();
 
-  return `PREPAID ${shortCode} ${dateStr}`;
+  return `PREPAID ${shortCode} ${dateStr} ${timeStr}`;
 };
 
 // Thời hạn hợp đồng (start → end), tính theo tháng lịch
@@ -46,6 +52,7 @@ const getMinPrepaidMonthsByDuration = (durationMonths) =>
  */
 const maxPrepaidMonthsFromPaidThrough = (paidThrough, endDate) => {
   const base = new Date(paidThrough);
+  base.setDate(1); // normalize về ngày 1 để tránh overflow khi paidThrough là ngày cuối tháng
   const end = new Date(endDate);
   let m = 0;
   const cap = 240;
@@ -335,14 +342,17 @@ exports.confirmPrepaidRentPayment = async (transactionCode) => {
   const now = new Date();
 
   // Tính prepaidFrom (tháng bắt đầu) và prepaidTo (tháng kết thúc)
+  // rentPaidUntil có nghĩa là "đã trả tiền đến hết tháng X"
+  // prepaidFrom = tháng tiếp theo tháng rentPaidUntil (ngày 1)
+  // prepaidTo = ngày cuối cùng của tháng cuối cùng trong kỳ prepaid
   const currentRentPaidUntil = contractDoc.rentPaidUntil
     ? new Date(contractDoc.rentPaidUntil)
     : new Date(contractDoc.startDate);
   const prepaidFromDate = new Date(currentRentPaidUntil);
   prepaidFromDate.setMonth(prepaidFromDate.getMonth() + 1);
-  // Bắt đầu từ ngày 1 của tháng tiếp theo
-  const actualPrepaidFrom = new Date(prepaidFromDate.getFullYear(), prepaidFromDate.getMonth(), 1);
-
+  prepaidFromDate.setDate(1);
+  const actualPrepaidFrom = prepaidFromDate;
+  // prepaidTo = ngày cuối của tháng cuối cùng (prepaidFrom + prepaidMonths - 1)
   const prepaidToDate = new Date(actualPrepaidFrom.getFullYear(), actualPrepaidFrom.getMonth() + request.prepaidMonths, 0);
 
   const formatVN = (d) => {
@@ -381,8 +391,7 @@ exports.confirmPrepaidRentPayment = async (transactionCode) => {
   await invoicePeriodic.save();
 
   // Cập nhật rentPaidUntil trong contract (không vượt quá endDate)
-  const newRentPaidUntil = new Date(currentRentPaidUntil);
-  newRentPaidUntil.setMonth(newRentPaidUntil.getMonth() + request.prepaidMonths);
+  const newRentPaidUntil = new Date(prepaidToDate);
   const contractEnd = new Date(contractDoc.endDate);
   if (newRentPaidUntil > contractEnd) {
     newRentPaidUntil.setTime(contractEnd.getTime());

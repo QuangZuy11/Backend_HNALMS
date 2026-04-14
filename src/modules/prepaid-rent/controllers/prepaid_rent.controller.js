@@ -155,7 +155,7 @@ exports.sepayWebhookForPrepaidRent = async (req, res) => {
     console.log("[PREPAID RENT WEBHOOK] 📥 Raw content:", content);
     console.log("[PREPAID RENT WEBHOOK] 💰 Transfer amount:", transferAmount);
 
-    const matchCode = content.match(/PREPAID\s+\S+\s+\d{8}/i);
+    const matchCode = content.match(/PREPAID\s+\S+\s+\d{6,8}(?:\s+\d+)?/i);
     if (!matchCode) {
       console.warn("[PREPAID RENT WEBHOOK] ⚠️ Không tìm thấy mã PREPAID trong nội dung:", content);
       return res.status(200).json({ success: true, message: "No matching prepaid transaction code" });
