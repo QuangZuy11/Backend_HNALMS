@@ -357,6 +357,35 @@ exports.sendPaymentInfo = async (req, res) => {
     // Lock the room so nobody else can take it
     await Room.findByIdAndUpdate(request.roomId._id, { status: "Deposited" });
 
+    // ─── Auto-reject competing Pending requests for the same room ───
+    const competingRequests = await BookingRequest.find({
+      roomId: request.roomId._id,
+      _id: { $ne: request._id },
+      status: { $in: ["Pending"] },
+    });
+    if (competingRequests.length > 0) {
+      await BookingRequest.updateMany(
+        { _id: { $in: competingRequests.map((r) => r._id) } },
+        { status: "Rejected", rejectionReason: "room_taken" },
+      );
+      // Send cancellation email to each loser
+      for (const cr of competingRequests) {
+        try {
+          await sendEmail(
+            cr.email,
+            "Yêu cầu đặt phòng của bạn đã bị từ chối - Hoàng Nam",
+            `<p>Chào <strong>${cr.name}</strong>,</p>
+             <p>Rất tiếc, yêu cầu đặt phòng <strong>${request.roomId.name}</strong> của bạn đã bị hủy vì phòng vừa được chốt bởi một khách hàng khác.</p>
+             <p>Bạn có thể đặt phòng khác tại hệ thống của chúng tôi. Xin lỗi vì sự bất tiện này!</p>
+             <p>Trân trọng,<br/>Quản lý Tòa nhà Hoàng Nam</p>`,
+          );
+        } catch (emailErr) {
+          console.error("[sendPaymentInfo] Failed to send rejection email to", cr.email, emailErr.message);
+        }
+      }
+    }
+    // ────────────────────────────────────────────────────────────────
+
     // Send email to guest with the QR code
     const emailSubject = "Yêu cầu thanh toán giữ phòng và Hợp đồng - Hoàng Nam";
 
@@ -651,6 +680,16 @@ exports.handleSepayWebhook = async (req, res) => {
       // Successfully converted → update BookingRequest status to Processed
       await BookingRequest.findByIdAndUpdate(bookingRequest._id, { status: "Processed" });
       console.log(`[BOOKING WH] Updated BookingRequest.status = "Processed"`);
+
+      // Also reject any remaining Pending requests for the same room
+      await BookingRequest.updateMany(
+        {
+          roomId: bookingRequest.roomId._id,
+          _id: { $ne: bookingRequest._id },
+          status: { $in: ["Pending", "Awaiting Payment"] },
+        },
+        { status: "Rejected", rejectionReason: "room_taken" },
+      );
       // Ensure Payment record is marked Success (double-check)
       if (paymentRecord) {
         paymentRecord.status = "Success";

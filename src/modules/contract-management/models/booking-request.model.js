@@ -79,6 +79,7 @@ const bookingRequestSchema = new mongoose.Schema({
     enum: ["Pending", "Processed", "Rejected", "Awaiting Payment", "Expired"],
     default: "Pending",
   },
+  rejectionReason: { type: String, default: null }, // "room_taken" | "manual" | null
 }, { timestamps: true });
 
 module.exports = mongoose.model("BookingRequest", bookingRequestSchema);
