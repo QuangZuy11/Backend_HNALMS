@@ -206,34 +206,166 @@ exports.createContract = async (req, res) => {
     const contractInitialStatus = isFutureLong ? "inactive" : "active";
 
     // 2. Handle Tenant Account
-    // Check by CCCD first (primary identity document in VN)
+    // Check by CCCD + Phone + Email (all 3 must match = same person)
+    // If only 1 of 3 fields matches → error: field already registered
     let isNewUser = false;
     let passwordRaw = null;
     let user = null;
 
-    const existingUserInfo = tenantInfo.cccd
+    // Find existing UserInfo by CCCD (primary key)
+    const existingUserInfoByCCCD = tenantInfo.cccd
       ? await UserInfo.findOne({ cccd: tenantInfo.cccd }).session(session)
       : null;
 
-    if (existingUserInfo) {
-      user = await User.findById(existingUserInfo.userId).session(session);
-      if (!user) {
-        // User account bị xóa khỏi hệ thống → tạo mới User, reuse UserInfo cũ
-        isNewUser = true;
-        console.log(`[CREATE CONTRACT] UserInfo exists but User deleted. Creating new account for CCCD=${tenantInfo.cccd}`);
-      } else if (user.status === "inactive") {
-        // User account đang inactive (hợp đồng cũ đã thanh lý) → tạo tài khoản mới, reuse UserInfo cũ
-        isNewUser = true;
-        console.log(`[CREATE CONTRACT] Found inactive account for CCCD=${tenantInfo.cccd}. Creating new account, reusing existing UserInfo.`);
+    // Also check by phone and email to detect partial matches
+    const existingUserInfoByPhone = tenantInfo.phone
+      ? await UserInfo.findOne({ phone: tenantInfo.phone }).session(session)
+      : null;
+
+    const existingUserInfoByEmail = tenantInfo.email
+      ? await UserInfo.findOne({ email: tenantInfo.email }).session(session)
+      : null;
+
+    // Check if ALL 3 fields match the same person (same UserInfo)
+    const allThreeMatch =
+      existingUserInfoByCCCD &&
+      existingUserInfoByPhone &&
+      existingUserInfoByEmail &&
+      existingUserInfoByCCCD._id.equals(existingUserInfoByPhone._id) &&
+      existingUserInfoByCCCD._id.equals(existingUserInfoByEmail._id);
+
+    // Check if only CCCD matches (but phone/email mismatch → partial match → error)
+    const onlyCccdMatch = existingUserInfoByCCCD &&
+      (!existingUserInfoByPhone || !existingUserInfoByCCCD._id.equals(existingUserInfoByPhone._id)) &&
+      (!existingUserInfoByEmail || !existingUserInfoByCCCD._id.equals(existingUserInfoByEmail._id));
+
+    // Check if only Phone matches (but CCCD/email mismatch → partial match → error)
+    const onlyPhoneMatch = existingUserInfoByPhone &&
+      (!existingUserInfoByCCCD || !existingUserInfoByCCCD._id.equals(existingUserInfoByPhone._id)) &&
+      (!existingUserInfoByEmail || !existingUserInfoByEmail._id.equals(existingUserInfoByPhone._id));
+
+    // Check if only Email matches (but CCCD/phone mismatch → partial match → error)
+    const onlyEmailMatch = existingUserInfoByEmail &&
+      (!existingUserInfoByCCCD || !existingUserInfoByCCCD._id.equals(existingUserInfoByEmail._id)) &&
+      (!existingUserInfoByPhone || !existingUserInfoByPhone._id.equals(existingUserInfoByEmail._id));
+
+    // Also check if phone + email match each other but not CCCD
+    const phoneAndEmailMatch =
+      existingUserInfoByPhone &&
+      existingUserInfoByEmail &&
+      existingUserInfoByPhone._id.equals(existingUserInfoByEmail._id) &&
+      (!existingUserInfoByCCCD || !existingUserInfoByCCCD._id.equals(existingUserInfoByPhone._id));
+
+    // Also check if CCCD + phone match but email differs
+    const cccdAndPhoneMatch =
+      existingUserInfoByCCCD &&
+      existingUserInfoByPhone &&
+      existingUserInfoByCCCD._id.equals(existingUserInfoByPhone._id) &&
+      (!existingUserInfoByEmail || !existingUserInfoByCCCD._id.equals(existingUserInfoByEmail._id));
+
+    // Also check if CCCD + email match but phone differs
+    const cccdAndEmailMatch =
+      existingUserInfoByCCCD &&
+      existingUserInfoByEmail &&
+      existingUserInfoByCCCD._id.equals(existingUserInfoByEmail._id) &&
+      (!existingUserInfoByPhone || !existingUserInfoByCCCD._id.equals(existingUserInfoByPhone._id));
+
+    // Determine which specific field caused the partial match error
+    if (onlyCccdMatch) {
+      throw new Error(`Số CCCD đã thuộc sở hữu của người khác. Vui lòng kiểm tra lại.`);
+    }
+    if (onlyPhoneMatch) {
+      throw new Error(`Số điện thoại đã được đăng ký trước đó. Vui lòng kiểm tra lại.`);
+    }
+    if (onlyEmailMatch) {
+      throw new Error(`Email đã được đăng ký trước đó. Vui lòng kiểm tra lại.`);
+    }
+    if (phoneAndEmailMatch) {
+      throw new Error(`Số điện thoại và email đã thuộc về cùng một người khác. Vui lòng kiểm tra lại.`);
+    }
+    if (cccdAndPhoneMatch) {
+      throw new Error(`Số CCCD và số điện thoại đã thuộc về cùng một người khác. Vui lòng kiểm tra lại.`);
+    }
+    if (cccdAndEmailMatch) {
+      throw new Error(`Số CCCD và email đã thuộc về cùng một người khác. Vui lòng kiểm tra lại.`);
+    }
+
+    // ALL 3 match → same person. Check if they already have 2 contracts for different rooms
+    if (allThreeMatch) {
+      const existingUser = await User.findById(existingUserInfoByCCCD.userId).session(session);
+      if (existingUser) {
+        // Count active/inactive contracts for this user
+        const userContracts = await Contract.find({
+          tenantId: existingUser._id,
+          status: { $in: ["active", "inactive"] },
+        }).session(session);
+
+        if (userContracts.length >= 2) {
+          // Get room info for existing contracts
+          const roomIds = [...new Set(userContracts.map(c => c.roomId.toString()))];
+          const rooms = await Room.find({ _id: { $in: roomIds } }).session(session);
+          const roomNames = rooms.map(r => r.name || r.roomCode || r._id).join(", ");
+
+          // Send notification email
+          const samePersonEmailSubject = "Thông báo: Phát hiện đăng ký trùng thông tin - HNALMS";
+          const samePersonEmailContent = `
+            <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+              <div style="background: #FEF3C7; padding: 20px; text-align: center; border-radius: 8px 8px 0 0;">
+                <h1 style="margin: 0; color: #92400E;">⚠️ Thông Báo Quan Trọng</h1>
+              </div>
+              <div style="background: #fff; padding: 30px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 8px 8px;">
+                <h2 style="color: #1F2937;">Xin chào ${tenantInfo.fullName},</h2>
+                <p>Chúng tôi phát hiện rằng thông tin CCCD, số điện thoại và email bạn vừa đăng ký <strong>trùng khớp với một tài khoản đã có trong hệ thống</strong>.</p>
+                <div style="background: #f3f4f6; padding: 15px; border-radius: 6px; margin: 15px 0;">
+                  <p style="margin: 0;"><strong>📋 Thông tin được phát hiện trùng:</strong></p>
+                  <ul style="margin: 10px 0 0 20px; padding: 0;">
+                    <li>CCCD: <strong>${tenantInfo.cccd}</strong></li>
+                    <li>Số điện thoại: <strong>${tenantInfo.phone}</strong></li>
+                    <li>Email: <strong>${tenantInfo.email}</strong></li>
+                  </ul>
+                </div>
+                <div style="background: #fee2e2; padding: 15px; border-radius: 6px; margin: 15px 0;">
+                  <p style="margin: 0; color: #991B1B;"><strong>⚠️ Hệ thống phát hiện bạn đã có ${userContracts.length} hợp đồng thuê phòng:</strong></p>
+                  <p style="margin: 10px 0 0 0; color: #991B1B;">Phòng: <strong>${roomNames}</strong></p>
+                  <p style="margin: 5px 0 0 0; color: #991B1B;">Nếu đây là cùng một người và bạn muốn thuê thêm phòng mới, vui lòng liên hệ trực tiếp với Ban quản lý để được hỗ trợ.</p>
+                </div>
+                <p>Không tạo tài khoản mới. Tài khoản của bạn đã có sẵn trong hệ thống.</p>
+                <p style="margin-top: 20px;">Trân trọng,<br><strong>Ban Quản Lý Tòa Nhà Hoàng Nam</strong></p>
+              </div>
+              <div style="text-align: center; margin-top: 20px; color: #6b7280; font-size: 12px;">
+                <p>&copy; ${new Date().getFullYear()} HNALMS. All rights reserved.</p>
+              </div>
+            </div>
+          `;
+          try {
+            await sendEmail(tenantInfo.email, samePersonEmailSubject, samePersonEmailContent);
+          } catch (emailErr) {
+            console.error("Failed to send same-person notification email:", emailErr);
+          }
+
+          throw new Error(`Thông tin CCCD, SĐT và email trùng với tài khoản đã có. Bạn đã có ${userContracts.length} HĐ tại ${roomNames}. Không thể tạo tài khoản mới. Vui lòng liên hệ Ban quản lý.`);
+        }
+
+        // Same person but less than 2 contracts → reuse existing account
+        if (user && user.status === "active") {
+          isNewUser = false;
+          console.log(`[CREATE CONTRACT] Same person (all 3 fields match) found: User=${user._id}, cccd=${tenantInfo.cccd}, has ${userContracts.length} contract(s). Reusing account.`);
+        } else {
+          // Account inactive or deleted → create new one, reuse UserInfo
+          isNewUser = true;
+          user = null; // will be created below
+          console.log(`[CREATE CONTRACT] Same person but account inactive/deleted. Creating new account, reusing UserInfo. existingUser=${user ? user._id : 'null'}`);
+        }
       } else {
-        // User account đang active → reuse như cũ
-        isNewUser = false;
-        console.log(`[CREATE CONTRACT] Existing active User found by CCCD: ID=${user._id}, cccd=${tenantInfo.cccd}`);
+        // No User account at all → create new
+        isNewUser = true;
+        user = null;
+        console.log(`[CREATE CONTRACT] UserInfo exists but User account deleted. Creating new account for all 3 fields match.`);
       }
     } else {
-      // CCCD chưa tồn tại → tạo tài khoản mới ngay
+      // No existing person found at all → create new account
       isNewUser = true;
-      console.log(`[CREATE CONTRACT] CCCD=${tenantInfo.cccd} not found. Creating new account.`);
+      console.log(`[CREATE CONTRACT] No existing person found by CCCD/Phone/Email. Creating new account. cccd=${tenantInfo.cccd}, phone=${tenantInfo.phone}, email=${tenantInfo.email}`);
     }
 
     if (isNewUser) {
@@ -272,14 +404,16 @@ exports.createContract = async (req, res) => {
       await user.save({ session });
       console.log(`[CREATE USER] ✅ New Tenant created with ID: ${user._id}`);
 
-      if (existingUserInfo) {
+      if (existingUserInfoByCCCD) {
         // UserInfo đã tồn tại (CCCD cũ) → cập nhật liên kết userId mới
-        existingUserInfo.userId = user._id;
-        existingUserInfo.fullname = tenantInfo.fullName;
-        existingUserInfo.address = tenantInfo.address;
-        existingUserInfo.dob = tenantInfo.dob;
-        existingUserInfo.gender = tenantInfo.gender || "Other";
-        await existingUserInfo.save({ session });
+        existingUserInfoByCCCD.userId = user._id;
+        existingUserInfoByCCCD.fullname = tenantInfo.fullName;
+        existingUserInfoByCCCD.address = tenantInfo.address;
+        existingUserInfoByCCCD.dob = tenantInfo.dob;
+        existingUserInfoByCCCD.gender = tenantInfo.gender || "Other";
+        if (tenantInfo.phone) existingUserInfoByCCCD.phone = tenantInfo.phone;
+        if (tenantInfo.email) existingUserInfoByCCCD.email = tenantInfo.email;
+        await existingUserInfoByCCCD.save({ session });
         console.log(`[CREATE USER] ✅ Reused existing UserInfo for CCCD=${tenantInfo.cccd}, linked to new user=${user._id}`);
       } else {
         // Tạo UserInfo hoàn toàn mới
@@ -287,6 +421,8 @@ exports.createContract = async (req, res) => {
           userId: user._id,
           fullname: tenantInfo.fullName,
           cccd: tenantInfo.cccd,
+          phone: tenantInfo.phone,
+          email: tenantInfo.email,
           address: tenantInfo.address,
           dob: tenantInfo.dob,
           gender: tenantInfo.gender || "Other",
