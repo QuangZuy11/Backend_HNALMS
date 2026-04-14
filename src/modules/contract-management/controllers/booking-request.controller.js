@@ -79,8 +79,8 @@ exports.checkDuplicateTenant = async (req, res) => {
 
     // Tất cả 3 trùng khớp → cùng 1 người
     if (existingByCCCD && existingByPhone && existingByEmail &&
-        existingByCCCD._id.equals(existingByPhone._id) &&
-        existingByCCCD._id.equals(existingByEmail._id)) {
+      existingByCCCD._id.equals(existingByPhone._id) &&
+      existingByCCCD._id.equals(existingByEmail._id)) {
 
       const existingUser = await User.findById(existingByCCCD.userId);
       let existingContracts = [];
@@ -295,15 +295,15 @@ exports.sendPaymentInfo = async (req, res) => {
       request.gender = updateData.tenantInfo.gender || "Male";
       request.contactRef = updateData.tenantInfo.contactRef;
     }
-    
+
     if (updateData.startDate) request.startDate = new Date(updateData.startDate);
     if (updateData.duration) request.duration = parseInt(updateData.duration, 10);
     if (updateData.prepayMonths) request.prepayMonths = updateData.prepayMonths;
     if (updateData.coResidents) request.coResidents = updateData.coResidents;
     if (updateData.bookServices) request.servicesInfo = updateData.bookServices;
-    
+
     const roomPrice = parseFloat(request.roomId.roomTypeId?.currentPrice || 0);
-    
+
     // Deposit amount default to 1 month rent (or you can adjust logic)
     const depositAmount = roomPrice;
     request.depositAmount = depositAmount;
@@ -317,7 +317,7 @@ exports.sendPaymentInfo = async (req, res) => {
     request.totalAmount = totalAmount;
 
     // Generate VietQR / Sepay QR URL using COC format (same as normal deposits)
-    const bankBin = process.env.BANK_BIN || "970422"; 
+    const bankBin = process.env.BANK_BIN || "970422";
     const bankAccount = process.env.BANK_ACCOUNT || "0372051662";
     const bankAccountName = encodeURIComponent(process.env.BANK_ACCOUNT_NAME || "HOANG NAM ALMS");
 
@@ -331,7 +331,7 @@ exports.sendPaymentInfo = async (req, res) => {
 
     // Generate Sepay QR link format
     const qrUrl = `https://qr.sepay.vn/img?acc=${bankAccount}&bank=${bankBin}&amount=${totalAmount}&des=${encodedCode}`;
-    
+
     // Set expiry to 12 hours from now
     const expiresAt = new Date();
     expiresAt.setHours(expiresAt.getHours() + 12);
@@ -351,7 +351,7 @@ exports.sendPaymentInfo = async (req, res) => {
     request.paymentStatusId = paymentRecord._id;
     request.status = "Awaiting Payment";
     request.paymentExpiresAt = expiresAt;
-    
+
     await request.save();
 
     // Lock the room so nobody else can take it
@@ -359,10 +359,10 @@ exports.sendPaymentInfo = async (req, res) => {
 
     // Send email to guest with the QR code
     const emailSubject = "Yêu cầu thanh toán giữ phòng và Hợp đồng - Hoàng Nam";
-    
+
     // Fetch Services and Assets
     const servicesList = await Service.find({ isActive: true });
-    
+
     let roomAssets = [];
     if (request.roomId && request.roomId.roomTypeId) {
       roomAssets = await RoomDevice.find({
@@ -374,19 +374,19 @@ exports.sendPaymentInfo = async (req, res) => {
     const dStr = String(today.getDate()).padStart(2, "0");
     const mStr = String(today.getMonth() + 1).padStart(2, "0");
     const yStr = today.getFullYear();
-    
+
     const dobObj = request.dob ? new Date(request.dob) : null;
     const dobStr = dobObj ? `${String(dobObj.getDate()).padStart(2, "0")}/${String(dobObj.getMonth() + 1).padStart(2, "0")}/${dobObj.getFullYear()}` : "";
-    
+
     const startObj = request.startDate ? new Date(request.startDate) : null;
     const startStr = startObj ? `${String(startObj.getDate()).padStart(2, "0")}/${String(startObj.getMonth() + 1).padStart(2, "0")}/${startObj.getFullYear()}` : "";
-    
+
     let endStr = "";
     if (startObj && request.duration) {
       let endObj = new Date(startObj);
       endObj.setMonth(endObj.getMonth() + request.duration);
       endObj.setDate(endObj.getDate() - 1);
-      endStr = `${String(endObj.getDate()).padStart(2,"0")}/${String(endObj.getMonth()+1).padStart(2,"0")}/${endObj.getFullYear()}`;
+      endStr = `${String(endObj.getDate()).padStart(2, "0")}/${String(endObj.getMonth() + 1).padStart(2, "0")}/${endObj.getFullYear()}`;
     }
 
     // Prepare CoResidents HTML
@@ -396,7 +396,7 @@ exports.sendPaymentInfo = async (req, res) => {
       coResHtml += `<table border="1" style="border-collapse: collapse; width: 100%; margin-top: 10px;">
         <tr><th>STT</th><th>Họ và tên</th><th>Số CCCD/CMND</th></tr>`;
       request.coResidents.forEach((cr, idx) => {
-        coResHtml += `<tr><td style="text-align:center">${idx+1}</td><td>${cr.fullName}</td><td>${cr.cccd}</td></tr>`;
+        coResHtml += `<tr><td style="text-align:center">${idx + 1}</td><td>${cr.fullName}</td><td>${cr.cccd}</td></tr>`;
       });
       coResHtml += `</table>`;
       if (request.coResidents.length + 1 >= maxPersons) {
@@ -411,9 +411,9 @@ exports.sendPaymentInfo = async (req, res) => {
       <tr><th>STT</th><th>Tên thiết bị</th><th>Số lượng</th><th>Đơn vị</th></tr>`;
     if (roomAssets.length > 0) {
       roomAssets.forEach((asset, idx) => {
-        const dName = asset.deviceId ? `${asset.deviceId.name} ${asset.deviceId.brand ? "("+asset.deviceId.brand+")" : ""}` : "Thiết bị vô danh";
+        const dName = asset.deviceId ? `${asset.deviceId.name} ${asset.deviceId.brand ? "(" + asset.deviceId.brand + ")" : ""}` : "Thiết bị vô danh";
         const dUnit = asset.deviceId?.unit || "cái";
-        assetsHtml += `<tr><td style="text-align:center">${idx+1}</td><td>${dName}</td><td style="text-align:center">${asset.quantity}</td><td style="text-align:center">${dUnit}</td></tr>`;
+        assetsHtml += `<tr><td style="text-align:center">${idx + 1}</td><td>${dName}</td><td style="text-align:center">${asset.quantity}</td><td style="text-align:center">${dUnit}</td></tr>`;
       });
     } else {
       assetsHtml += `<tr><td colspan="4" style="text-align:center; font-style: italic;">Chưa có thiết bị nào được ghi nhận.</td></tr>`;
@@ -421,18 +421,18 @@ exports.sendPaymentInfo = async (req, res) => {
     assetsHtml += `</table>`;
 
     // Services HTML
-    const fixedServices = servicesList.filter(s => s.name === "Điện" || s.name === "Nước" || s.name === "Internet" || s.name === "Vệ Sinh"); 
+    const fixedServices = servicesList.filter(s => s.name === "Điện" || s.name === "Nước" || s.name === "Internet" || s.name === "Vệ Sinh");
     const optionalServices = request.servicesInfo || [];
-    
+
     let svHtml = `<p><strong>a) Dịch vụ cố định hàng tháng:</strong></p><ul>`;
     fixedServices.forEach((s, idx) => {
-       const isPerPerson = (s.name === "Internet" || s.name === "Vệ Sinh");
-       const pCount = Math.max(1, (request.coResidents?.length || 0) + 1);
-       let calc = "";
-       if (isPerPerson) {
-         calc = `× ${pCount} người = ${(s.currentPrice * pCount).toLocaleString("vi-VN")} VNĐ/tháng `;
-       }
-       svHtml += `<li>${idx+1}. ${s.name}: <strong>${s.currentPrice.toLocaleString("vi-VN")}</strong> ${s.unit || "VNĐ/tháng"} ${calc}(Bắt buộc)</li>`;
+      const isPerPerson = (s.name === "Internet" || s.name === "Vệ Sinh");
+      const pCount = Math.max(1, (request.coResidents?.length || 0) + 1);
+      let calc = "";
+      if (isPerPerson) {
+        calc = `× ${pCount} người = ${(s.currentPrice * pCount).toLocaleString("vi-VN")} VNĐ/tháng `;
+      }
+      svHtml += `<li>${idx + 1}. ${s.name}: <strong>${s.currentPrice.toLocaleString("vi-VN")}</strong> ${s.unit || "VNĐ/tháng"} ${calc}(Bắt buộc)</li>`;
     });
     svHtml += `</ul>`;
 
@@ -488,7 +488,7 @@ exports.sendPaymentInfo = async (req, res) => {
           <li>Trả trước tiền phòng: <strong>${prepayMonthsNum}</strong> tháng.</li>
           <li style="list-style: none;"><em>*Lưu ý: Thời hạn tính tiền phòng đã trả sẽ bắt đầu từ ngày đầu tiên của tháng tiếp theo (nếu tạo hợp đồng vào ngày lẻ trong tháng).</em></li>
           <li>Giá thuê phòng là: <strong>${roomPrice.toLocaleString("vi-VN")}</strong> VNĐ/tháng. (Giá này cố định theo loại phòng).</li>
-          <li>Tiền đặt cọc: <strong>${depositAmount.toLocaleString("vi-VN")}</strong> VNĐ <em>(Tương đương 01 tháng tiền phòng). ✓ Đã cọc</em></li>
+          <li>Tiền đặt cọc: <strong>${depositAmount.toLocaleString("vi-VN")}</strong> VNĐ <em>(Tương đương 01 tháng tiền phòng). Chưa cọc (Thanh toán để xác nhận)</em></li>
         </ul>
 
         <p><strong>Điều 2: Các trang thiết bị, tài sản bàn giao kèm theo phòng:</strong></p>
@@ -520,10 +520,10 @@ exports.sendPaymentInfo = async (req, res) => {
 exports.handleSepayWebhook = async (req, res) => {
   try {
     const { content, transferAmount } = req.body;
-    
+
     console.log(`[BOOKING WH] ===== START handleSepayWebhook =====`);
     console.log(`[BOOKING WH] content: "${content}", transferAmount: ${transferAmount}`);
-    
+
     // Parse transactionCode from content – format: "Coc <RoomCode> <8digits>"
     // Ví dụ: Coc P112A 89358552
     const matchCode = content.match(/Coc\s+\S+\s+\d{8}/i);
@@ -571,18 +571,18 @@ exports.handleSepayWebhook = async (req, res) => {
         roomId: bookingRequest.roomId._id,
         bookingRequestId: bookingRequest._id,
         tenantInfo: {
-           fullName: bookingRequest.name,
-           cccd: bookingRequest.idCard,
-           phone: bookingRequest.phone,
-           email: bookingRequest.email,
-           dob: bookingRequest.dob,
-           address: bookingRequest.address,
-           gender: bookingRequest.gender || "Other"
+          fullName: bookingRequest.name,
+          cccd: bookingRequest.idCard,
+          phone: bookingRequest.phone,
+          email: bookingRequest.email,
+          dob: bookingRequest.dob,
+          address: bookingRequest.address,
+          gender: bookingRequest.gender || "Other"
         },
         coResidents: bookingRequest.coResidents || [],
         contractDetails: {
-           startDate: bookingRequest.startDate,
-           duration: bookingRequest.duration
+          startDate: bookingRequest.startDate,
+          duration: bookingRequest.duration
         },
         bookServices: bookingRequest.servicesInfo || [],
         prepayMonths: parseInt(bookingRequest.prepayMonths, 10) || bookingRequest.duration
@@ -617,7 +617,7 @@ exports.handleSepayWebhook = async (req, res) => {
       _id: paymentRecord._id,
       status: paymentRecord.status
     } : "NOT FOUND");
-    
+
     if (paymentRecord) {
       paymentRecord.amount = transferAmount;
       paymentRecord.status = "Success";
@@ -643,7 +643,7 @@ exports.handleSepayWebhook = async (req, res) => {
     // Call createContract
     console.log(`[BOOKING WH] Calling contractController.createContract...`);
     await contractController.createContract(mockReq, mockRes);
-    
+
     console.log(`[BOOKING WH] createContract returned - status: ${contractResponseStatus}`);
     console.log(`[BOOKING WH] createContract response data:`, JSON.stringify(contractResponseData, null, 2));
 
@@ -932,7 +932,7 @@ async function _triggerCreateContract(bookingRequest) {
     let contractResponseStatus = 200;
     const mockRes = {
       status: (code) => { contractResponseStatus = code; return mockRes; },
-      json: () => {}
+      json: () => { }
     };
 
     await contractController.createContract(mockReq, mockRes);
