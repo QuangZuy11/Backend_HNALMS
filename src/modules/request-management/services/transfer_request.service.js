@@ -124,14 +124,15 @@ const checkRoomAvailabilityInPeriod = async (targetRoomId, startDate, endDate) =
  */
 const getAvailableRoomsForTransfer = async (tenantId) => {
   // Kiểm tra tenant có hợp đồng active không
-  const contract = await Contract.findOne({ tenantId, status: "active" });
-  if (!contract) {
+  const activeContracts = await Contract.find({ tenantId, status: { $in: ["active", "inactive"] } }).sort({ createdAt: -1 });
+  if (activeContracts.length === 0) {
     throw {
       status: 400,
       message:
         "Bạn không có hợp đồng hiệu lực. Không thể yêu cầu chuyển phòng.",
     };
   }
+  const contract = activeContracts[0];
 
   // Lấy danh sách phòng Available (loại trừ phòng hiện tại)
   const rooms = await Room.find({
@@ -193,17 +194,24 @@ const createTransferRequest = async (tenantId, body) => {
   const { roomId, targetRoomId, transferDate, reason } = body;
 
   // 1. Kiểm tra tenant có hợp đồng active
-  const contract = await Contract.findOne({
-    tenantId,
-    status: "active",
-  });
-
-  if (!contract) {
+  const activeContracts = await Contract.find({ tenantId, status: { $in: ["active", "inactive"] } });
+  if (activeContracts.length === 0) {
     throw {
       status: 400,
-      message:
-        "Bạn không có hợp đồng hiệu lực. Không thể yêu cầu chuyển phòng.",
+      message: "Bạn không có hợp đồng hiệu lực. Không thể yêu cầu chuyển phòng.",
     };
+  }
+
+  // Xác định hợp đồng theo roomId nếu được truyền
+  let contract = activeContracts[0];
+  if (roomId) {
+    contract = activeContracts.find(c => c.roomId.toString() === roomId.toString());
+    if (!contract) {
+      throw {
+        status: 400,
+        message: "Phòng hiện tại (roomId) không thuộc hợp đồng có hiệu lực của bạn (hoặc hợp đồng đã kết thúc).",
+      };
+    }
   }
 
   // 2. Kiểm tra tenant không có yêu cầu chuyển phòng đang Pending
@@ -862,10 +870,18 @@ const updateTransferRequest = async (requestId, tenantId, body) => {
       if (!currentRoomNew) {
         throw { status: 404, message: "Phòng hiện tại (roomId) không tồn tại." };
       }
+      
+      const newContract = await Contract.findOne({ tenantId, roomId, status: { $in: ["active", "inactive"] } });
+      if(!newContract) {
+         throw { status: 400, message: "Phòng hiện tại không thuộc hợp đồng có hiệu lực của bạn (hoặc hợp đồng đã kết thúc)." };
+      }
+
       if (!currentRoomNew.isActive) {
         throw { status: 400, message: "Phòng hiện tại đang bị tạm ngưng." };
       }
       request.currentRoomId = roomId;
+      // Cập nhật lại contract để logic checkAvailability chạy chuẩn theo hợp đồng mới
+      contract.endDate = newContract.endDate;
     }
 
     if (targetRoomId) {
