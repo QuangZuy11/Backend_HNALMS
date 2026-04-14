@@ -52,13 +52,13 @@ const getMinPrepaidMonthsByDuration = (durationMonths) =>
  */
 const maxPrepaidMonthsFromPaidThrough = (paidThrough, endDate) => {
   const base = new Date(paidThrough);
-  base.setDate(1); // normalize về ngày 1 để tránh overflow khi paidThrough là ngày cuối tháng
+  base.setUTCDate(1); // normalize về ngày 1 UTC để tránh overflow
   const end = new Date(endDate);
   let m = 0;
   const cap = 240;
   for (let tryM = 1; tryM <= cap; tryM++) {
     const d = new Date(base);
-    d.setMonth(d.getMonth() + tryM);
+    d.setUTCMonth(d.getUTCMonth() + tryM);
     if (d > end) break;
     m = tryM;
   }
@@ -348,17 +348,28 @@ exports.confirmPrepaidRentPayment = async (transactionCode) => {
   const currentRentPaidUntil = contractDoc.rentPaidUntil
     ? new Date(contractDoc.rentPaidUntil)
     : new Date(contractDoc.startDate);
-  const prepaidFromDate = new Date(currentRentPaidUntil);
-  prepaidFromDate.setMonth(prepaidFromDate.getMonth() + 1);
-  prepaidFromDate.setDate(1);
+  // Normalize về ngày 1 UTC để tránh timezone overflow
+  const normalizedRentPaidUntil = new Date(currentRentPaidUntil);
+  normalizedRentPaidUntil.setUTCDate(1);
+  normalizedRentPaidUntil.setUTCHours(0, 0, 0, 0);
+  const prepaidFromDate = new Date(normalizedRentPaidUntil);
+  prepaidFromDate.setUTCMonth(prepaidFromDate.getUTCMonth() + 1);
+  prepaidFromDate.setUTCDate(1);
   const actualPrepaidFrom = prepaidFromDate;
   // prepaidTo = ngày cuối của tháng cuối cùng (prepaidFrom + prepaidMonths - 1)
-  const prepaidToDate = new Date(actualPrepaidFrom.getFullYear(), actualPrepaidFrom.getMonth() + request.prepaidMonths, 0);
+  // day=0 → ngày cuối cùng của tháng trước đó → ngày cuối của tháng prepaid cuối cùng
+  // Strip time về 00:00:00.000Z để tránh timezone shift khi hiển thị trên mobile
+  const prepaidToDate = new Date(Date.UTC(
+    actualPrepaidFrom.getUTCFullYear(),
+    actualPrepaidFrom.getUTCMonth() + request.prepaidMonths,
+    0
+  ));
+  prepaidToDate.setUTCHours(0, 0, 0, 0);
 
   const formatVN = (d) => {
-    const dd = String(d.getDate()).padStart(2, '0');
-    const mm = String(d.getMonth() + 1).padStart(2, '0');
-    const yyyy = d.getFullYear();
+    const dd = String(d.getUTCDate()).padStart(2, '0');
+    const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const yyyy = d.getUTCFullYear();
     return `${dd}/${mm}/${yyyy}`;
   };
 
@@ -394,8 +405,16 @@ exports.confirmPrepaidRentPayment = async (transactionCode) => {
   const newRentPaidUntil = new Date(prepaidToDate);
   const contractEnd = new Date(contractDoc.endDate);
   if (newRentPaidUntil > contractEnd) {
-    newRentPaidUntil.setTime(contractEnd.getTime());
+    newRentPaidUntil.setUTCDate(contractEnd.getUTCDate());
+    newRentPaidUntil.setUTCHours(contractEnd.getUTCHours(), contractEnd.getUTCMinutes(), 0, 0);
   }
+
+  console.log("[DEBUG] currentRentPaidUntil:", contractDoc.rentPaidUntil?.toISOString?.() ?? contractDoc.rentPaidUntil);
+  console.log("[DEBUG] normalizedRentPaidUntil:", normalizedRentPaidUntil.toISOString());
+  console.log("[DEBUG] actualPrepaidFrom:", actualPrepaidFrom.toISOString());
+  console.log("[DEBUG] prepaidToDate:", prepaidToDate.toISOString());
+  console.log("[DEBUG] newRentPaidUntil (to DB):", newRentPaidUntil.toISOString());
+  console.log("[DEBUG] prepaidMonths:", request.prepaidMonths);
 
   await Contract.findByIdAndUpdate(contractId, {
     rentPaidUntil: newRentPaidUntil,
