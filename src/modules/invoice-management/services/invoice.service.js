@@ -422,7 +422,10 @@ class InvoiceService {
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
-      .lean();
+      .lean()
+      .then((invoices) =>
+        invoices.map((inv) => ({ ...inv, invoiceType: "Periodic" }))
+      );
 
     const incurredInvoices = await InvoiceIncurred.find(incurredQuery)
       .populate({
@@ -438,6 +441,7 @@ class InvoiceService {
     const normalizedIncurred = incurredInvoices.map((inv) => ({
       ...inv,
       type: "Incurred",
+      invoiceType: "Incurred",
       roomId: inv.contractId?.roomId || null,
     }));
 

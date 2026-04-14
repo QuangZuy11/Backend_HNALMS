@@ -146,6 +146,31 @@ exports.createContract = async (req, res) => {
           `Ngày bắt đầu hợp đồng mới phải sau ngày kết thúc hợp đồng hiện tại (${prevEnd.toLocaleDateString("vi-VN")}).`,
         );
       }
+
+      // Validate thêm: HĐ mới phải kết thúc trước ngày bắt đầu của HĐ chưa kích hoạt (vd HĐ 464)
+      // Tìm HĐ active chưa kích hoạt có startDate > newStart
+      const upcomingInactiveContract = await Contract.findOne({
+        roomId: room._id,
+        isActivated: false,
+        status: { $nin: ["terminated", "expired"] },
+        startDate: { $gt: newStart },
+        _id: { $ne: occupiedDeclinedContract._id },
+      }).session(session).sort({ startDate: 1 }).lean();
+
+      if (upcomingInactiveContract) {
+        const inactiveStart = new Date(upcomingInactiveContract.startDate);
+        inactiveStart.setHours(0, 0, 0, 0);
+        // newContractEndDate đã được tính ở dòng 125
+        const checkEnd = new Date(contractDetails.startDate);
+        checkEnd.setMonth(checkEnd.getMonth() + contractDetails.duration);
+        checkEnd.setDate(checkEnd.getDate() - 1);
+        checkEnd.setHours(0, 0, 0, 0);
+        if (checkEnd >= inactiveStart) {
+          throw new Error(
+            `Thời hạn hợp đồng mới phải kết thúc trước ngày bắt đầu hợp đồng tiếp theo (${inactiveStart.toLocaleDateString("vi-VN")}). Vui lòng giảm thời hạn thuê.`,
+          );
+        }
+      }
     }
 
     // Get room price and deposit from roomType

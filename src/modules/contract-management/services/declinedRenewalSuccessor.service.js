@@ -10,6 +10,7 @@ async function findSuccessorContractAfterDeclined(declinedLease, roomId, session
     roomId,
     _id: { $ne: declinedLease._id },
     status: { $nin: ["terminated", "expired"] },
+    isActivated: true,
     startDate: { $gt: declinedLease.endDate },
   });
   if (session) q = q.session(session);
@@ -25,7 +26,7 @@ async function hasBookedSuccessorAfterDeclinedLease(roomId, session = null) {
     status: "active",
     isActivated: true,
     renewalStatus: "declined",
-  }).sort({ startDate: -1 });
+  }).sort({ startDate: -1 }); // decliningLease is the currently activated+declined contract
   if (session) decliningQ = decliningQ.session(session);
   const decliningLease = await decliningQ;
   if (!decliningLease) return false;
@@ -67,9 +68,12 @@ async function successorLeaseBookedByRoomIds(roomIds) {
     (k) => new mongoose.Types.ObjectId(k),
   );
 
+  // Chỉ tính các HĐ đã được kích hoạt (isActivated: true) là successor thật sự.
+  // HĐ chưa kích hoạt (isActivated: false, vd HĐ 464) không chặn đặt cọc mới.
   const candidates = await Contract.find({
     roomId: { $in: decliningRoomObjIds },
     status: { $nin: ["terminated", "expired"] },
+    isActivated: true,
   })
     .select("roomId startDate _id")
     .lean();
