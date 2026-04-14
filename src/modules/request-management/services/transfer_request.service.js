@@ -62,6 +62,12 @@ const calculateProration = (oldPrice, newPrice, transferDate) => {
 
 /**
  * Helper: Kiểm tra phòng có trống trong khoảng thời gian hay không
+ * Logic:
+ *   - Phòng NOT available nếu có hợp đồng active đang chiếm (overlap)
+ *   - Phòng NOT available nếu có hợp đồng tương lai (inactive/pending) bắt đầu
+ *     TRƯỚC hoặc ĐÚNG ngày kết thúc hợp đồng tenant hiện tại (periodEnd)
+ *   - Phòng AVAILABLE nếu hợp đồng tương lai bắt đầu SAU periodEnd
+ *     (tenant rời trước khi người mới vào)
  * @param {string} targetRoomId - ID phòng muốn chuyển đến
  * @param {Date} startDate - Ngày bắt đầu cần kiểm tra (transferDate)
  * @param {Date} endDate - Ngày kết thúc cần kiểm tra (endDate hợp đồng)
@@ -70,16 +76,13 @@ const calculateProration = (oldPrice, newPrice, transferDate) => {
 const checkRoomAvailabilityInPeriod = async (targetRoomId, startDate, endDate) => {
   const roomIdObj = new mongoose.Types.ObjectId(targetRoomId);
 
-  // Ngày cần trống: từ startDate (transferDate) đến hết endDate (contractEndDate)
-  // Chuyển endDate thành 23:59:59.999 để check inclusive
   const periodEnd = new Date(endDate);
   periodEnd.setHours(23, 59, 59, 999);
 
-  // 1. Kiểm tra hợp đồng active/pending → check OVERLAP (startDate AND endDate)
-  // Overlap khi: contractStart < periodEnd AND contractEnd > periodStart
+  // 1. Kiểm tra hợp đồng active đang chiếm phòng (overlap check)
   const conflictingActiveContract = await Contract.findOne({
     roomId: roomIdObj,
-    status: { $in: ["active", "pending"] },
+    status: "active",
     startDate: { $lt: periodEnd },
     endDate: { $gt: startDate },
   }).lean();
@@ -92,18 +95,25 @@ const checkRoomAvailabilityInPeriod = async (targetRoomId, startDate, endDate) =
     };
   }
 
-  // 2. Kiểm tra hợp đồng inactive → chỉ check startDate
-  // Vì endDate đã qua, nhưng nếu startDate nằm trong khoảng kiểm tra → có người sẽ chuyển vào
-  const conflictingInactiveContract = await Contract.findOne({
-    roomId: roomIdObj,
-    status: { $nin: ["active", "pending"] },
-    startDate: { $gte: startDate, $lte: periodEnd },
-  }).lean();
+  // 2. Kiểm tra hợp đồng tương lai (inactive/pending) chưa bắt đầu
+  // Tìm hợp đồng gần nhất với startDate trong tương lai
+  // → Conflict nếu futureContract.startDate <= periodEnd (người mới vào trước khi tenant hiện tại rời)
+  // → Available nếu futureContract.startDate > periodEnd (tenant rời trước khi người mới đến)
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
 
-  if (conflictingInactiveContract) {
+  const nearestFutureContract = await Contract.findOne({
+    roomId: roomIdObj,
+    status: { $in: ["inactive", "pending"] },
+    startDate: { $gt: today, $lte: periodEnd }, // Bắt đầu tương lai nhưng <= ngày hết hợp đồng tenant
+  })
+    .sort({ startDate: 1 })
+    .lean();
+
+  if (nearestFutureContract) {
     return {
       isAvailable: false,
-      conflictingContract: conflictingInactiveContract,
+      conflictingContract: nearestFutureContract,
       conflictingRequest: null,
     };
   }
@@ -114,9 +124,7 @@ const checkRoomAvailabilityInPeriod = async (targetRoomId, startDate, endDate) =
     targetRoomId: roomIdObj,
     status: "Approved",
     $or: [
-      // transferDate nằm trong khoảng cần kiểm tra
       { transferDate: { $gte: startDate, $lte: periodEnd } },
-      // transferDate trước khoảng nhưng chưa completed → vẫn đang chiếm phòng
       { transferDate: { $lt: startDate } },
     ],
   })
@@ -146,6 +154,10 @@ const checkRoomAvailabilityInPeriod = async (targetRoomId, startDate, endDate) =
 
 /**
  * [TENANT] Lấy danh sách phòng trống để chọn chuyển đến
+ * Logic:
+ *   - Phòng status="Available" không có hợp đồng tương lai → trống hoàn toàn
+ *   - Phòng status="Available" có hợp đồng tương lai (inactive/pending) nhưng startDate > contractEndDate
+ *     → tenant hiện tại rời trước khi người mới đến → vẫn available
  */
 const getAvailableRoomsForTransfer = async (tenantId) => {
   // Kiểm tra tenant có hợp đồng active không
@@ -181,25 +193,32 @@ const getAvailableRoomsForTransfer = async (tenantId) => {
     return room;
   });
 
-  // Lọc phòng trống thực sự trong khoảng thời gian còn lại của hợp đồng
-  // Phòng phải trống từ ngày mai đến hết endDate của hợp đồng
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  tomorrow.setHours(0, 0, 0, 0);
-
+  // Ngày kết thúc hợp đồng tenant hiện tại (23:59:59 để so sánh inclusive)
   const contractEndDate = new Date(contract.endDate);
+  contractEndDate.setHours(23, 59, 59, 999);
 
-  const availableRooms = [];
-  for (const room of data) {
-    const availability = await checkRoomAvailabilityInPeriod(
-      room._id.toString(),
-      tomorrow,
-      contractEndDate,
-    );
-    if (availability.isAvailable) {
-      availableRooms.push(room);
-    }
-  }
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const roomIds = data.map((r) => r._id);
+
+  // Batch query: tìm các phòng BỊ CHẶN bởi hợp đồng tương lai
+  // Phòng bị chặn khi: có hợp đồng inactive/pending với startDate > today
+  // VÀ startDate <= contractEndDate (người mới đến trước khi tenant hiện tại rời)
+  const blockingContracts = await Contract.find({
+    roomId: { $in: roomIds },
+    status: { $in: ["inactive", "pending"] },
+    startDate: { $gt: today, $lte: contractEndDate },
+  }).lean();
+
+  const blockedRoomIds = new Set(
+    blockingContracts.map((c) => c.roomId.toString())
+  );
+
+  // Phòng không bị chặn bởi hợp đồng tương lai → available
+  const availableRooms = data.filter(
+    (room) => !blockedRoomIds.has(room._id.toString())
+  );
 
   return { currentContract: contract, availableRooms };
 };
@@ -921,7 +940,7 @@ const completeTransferRequest = async (requestId) => {
     // 7. TẠO HỢP ĐỒNG MỚI
     const newContractCode = generateNewContractCode(newRoom.name);
     const newStartDate = new Date(request.transferDate);
-    
+
     // Tính ngày kết thúc mới dựa trên duration của hợp đồng cũ
     const newEndDate = new Date(newStartDate);
     newEndDate.setMonth(newEndDate.getMonth() + oldContract.duration);
