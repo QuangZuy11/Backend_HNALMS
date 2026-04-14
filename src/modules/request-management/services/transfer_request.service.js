@@ -4,6 +4,9 @@ const Room = require("../../room-floor-management/models/room.model");
 const User = require("../../authentication/models/user.model");
 const UserInfo = require("../../authentication/models/userInfor.model");
 const BookService = require("../../contract-management/models/bookservice.model");
+const InvoicePeriodic = require("../../invoice-management/models/invoice_periodic.model");
+const MeterReading = require("../../invoice-management/models/meterreading.model");
+const Service = require("../../service-management/models/service.model");
 const mongoose = require("mongoose");
 
 /**
@@ -19,46 +22,6 @@ const generateRequestCode = () => {
   return `TR-${y}${m}${d}-${rand}`;
 };
 
-/**
- * Helper: Tính toán chênh lệch tiền thuê khi chuyển phòng giữa tháng
- * @param {Number} oldPrice - Giá phòng cũ
- * @param {Number} newPrice - Giá phòng mới
- * @param {Date} transferDate - Ngày chuyển phòng
- * @returns {Object} Thông tin proration
- */
-const calculateProration = (oldPrice, newPrice, transferDate) => {
-  const transfer = new Date(transferDate);
-  const dayOfMonth = transfer.getDate();
-
-  // Nếu chuyển vào ngày 1 -> không có chênh lệch tháng này
-  if (dayOfMonth === 1) {
-    return {
-      oldRoomPrice: oldPrice,
-      newRoomPrice: newPrice,
-      daysRemainingInMonth: 0,
-      oldRoomRefund: 0,
-      newRoomCharge: 0,
-      difference: 0,
-    };
-  }
-
-  // Chuyển giữa tháng
-  const daysInMonth = 30; // Quy ước 30 ngày/tháng theo business rule
-  const daysRemaining = daysInMonth - dayOfMonth + 1; // Số ngày còn lại (tính cả ngày chuyển)
-
-  const oldRoomRefund = Math.round((oldPrice / daysInMonth) * daysRemaining);
-  const newRoomCharge = Math.round((newPrice / daysInMonth) * daysRemaining);
-  const difference = newRoomCharge - oldRoomRefund; // + phải đóng thêm, - được hoàn
-
-  return {
-    oldRoomPrice: oldPrice,
-    newRoomPrice: newPrice,
-    daysRemainingInMonth: daysRemaining,
-    oldRoomRefund,
-    newRoomCharge,
-    difference,
-  };
-};
 
 /**
  * Helper: Kiểm tra phòng có trống trong khoảng thời gian hay không
@@ -233,9 +196,6 @@ const createTransferRequest = async (tenantId, body) => {
   const contract = await Contract.findOne({
     tenantId,
     status: "active",
-  }).populate({
-    path: "roomId",
-    populate: { path: "roomTypeId", select: "currentPrice typeName" },
   });
 
   if (!contract) {
@@ -275,10 +235,7 @@ const createTransferRequest = async (tenantId, body) => {
   // 3. Xác định phòng hiện tại (từ roomId nếu có, hoặc từ contract)
   let currentRoom = contract.roomId;
   if (roomId) {
-    currentRoom = await Room.findById(roomId).populate(
-      "roomTypeId",
-      "currentPrice typeName personMax",
-    );
+    currentRoom = await Room.findById(roomId);
     if (!currentRoom) {
       throw { status: 404, message: "Phòng hiện tại (roomId) không tồn tại." };
     }
@@ -362,16 +319,7 @@ const createTransferRequest = async (tenantId, body) => {
     };
   }
 
-  // 8. Tính toán chênh lệch tiền thuê (proration)
-  const oldPrice = parseFloat(
-    currentRoom.roomTypeId?.currentPrice?.toString() || "0",
-  );
-  const newPrice = parseFloat(
-    targetRoom.roomTypeId?.currentPrice?.toString() || "0",
-  );
-  const proration = calculateProration(oldPrice, newPrice, transferDateObj);
-
-  // 9. Tạo yêu cầu
+  // 8. Tạo yêu cầu
   const transferRequest = new TransferRequest({
     requestCode: generateRequestCode(),
     tenantId,
@@ -381,7 +329,6 @@ const createTransferRequest = async (tenantId, body) => {
     transferDate: transferDateObj,
     reason,
     status: "Pending",
-    proration,
   });
 
   await transferRequest.save();
@@ -414,9 +361,29 @@ const createTransferRequest = async (tenantId, body) => {
 };
 
 /**
+ * Helper: Đồng bộ TransferRequest với trạng thái hóa đơn
+ * Giúp tự động chuyển TransferRequest từ InvoiceReleased sang Paid nếu hóa đơn tương ứng đã được thanh toán.
+ */
+const _syncPendingTransferRequestsWithPaidInvoices = async () => {
+  const pendingRequests = await TransferRequest.find({
+    status: "InvoiceReleased",
+    transferInvoiceId: { $ne: null }
+  }).populate('transferInvoiceId', 'status');
+
+  for (const req of pendingRequests) {
+    if (req.transferInvoiceId && req.transferInvoiceId.status === "Paid") {
+      req.status = "Paid";
+      await req.save();
+      console.log(`[TRANSFER_SYNC] ✅ Cập nhật TransferRequest ${req._id} sang Paid do hóa đơn đã thanh toán.`);
+    }
+  }
+};
+
+/**
  * [TENANT] Xem danh sách yêu cầu chuyển phòng của mình
  */
 const getMyTransferRequests = async (tenantId) => {
+  await _syncPendingTransferRequestsWithPaidInvoices();
   const requests = await TransferRequest.find({ tenantId })
     .populate({
       path: "currentRoomId",
@@ -450,6 +417,7 @@ const getMyTransferRequests = async (tenantId) => {
  * @param {Object} filters - { status, search, page, limit }
  */
 const getAllTransferRequestsForManager = async (filters = {}) => {
+  await _syncPendingTransferRequestsWithPaidInvoices();
   const { status, search, page = 1, limit = 10 } = filters;
 
   const query = {};
@@ -527,6 +495,7 @@ const getAllTransferRequestsForManager = async (filters = {}) => {
  * [MANAGER] Lấy chi tiết một yêu cầu chuyển phòng
  */
 const getTransferRequestById = async (requestId) => {
+  await _syncPendingTransferRequestsWithPaidInvoices();
   const request = await TransferRequest.findById(requestId)
     .populate({ path: "tenantId", select: "username email phoneNumber" })
     .populate({
@@ -629,6 +598,223 @@ const cancelTransferRequest = async (tenantId, requestId) => {
 };
 
 /**
+ * [MANAGER] Phát hành hóa đơn tính phí chuyển phòng (tiền điện, nước, dịch vụ phòng cũ)
+ * Được gọi sau khi duyệt yêu cầu (trước khi thanh toán).
+ * @param {string} requestId - ID yêu cầu chuyển phòng
+ * @param {string} managerInvoiceNotes - Ghi chú
+ * @param {number} electricIndex - Chỉ số điện
+ * @param {number} waterIndex - Chỉ số nước
+ */
+const releaseTransferInvoice = async (requestId, managerInvoiceNotes = "", electricIndex, waterIndex) => {
+  console.log(`[TRANSFER] 📄 Manager phát hành hóa đơn chuyển phòng: ${requestId}`);
+
+  const request = await TransferRequest.findById(requestId);
+  if (!request) throw { status: 404, message: "Không tìm thấy yêu cầu chuyển phòng." };
+  
+  if (request.status !== "Approved") {
+    throw { status: 400, message: `Chỉ có thể phát hành hóa đơn khi yêu cầu đã được Approved (hiện tại: ${request.status}).` };
+  }
+
+  const contract = await Contract.findById(request.contractId).populate({ path: 'roomId', populate: { path: 'roomTypeId' } });
+  if (!contract) throw { status: 404, message: "Không tìm thấy hợp đồng." };
+  
+  const room = contract.roomId;
+  if (!room) throw { status: 404, message: "Hợp đồng không có thông tin phòng cũ." };
+
+  const parsedElectricIndex = electricIndex !== undefined && electricIndex !== null ? Number(electricIndex) : undefined;
+  const parsedWaterIndex = waterIndex !== undefined && waterIndex !== null ? Number(waterIndex) : undefined;
+
+  const now = new Date();
+  const month = now.getMonth() + 1;
+  const year = now.getFullYear();
+  const dueDate = new Date(year, month, 5);
+  const invoiceCode = `INV-TR-${contract.contractCode}-${month}${year}`;
+  const invoiceTitle = `Hóa đơn điện, nước, dịch vụ tới ngày chuyển phòng tháng ${month}/${year}`;
+
+  const existingInvoice = await InvoicePeriodic.findOne({ invoiceCode, contractId: contract._id });
+  if (existingInvoice?.status === 'Paid') {
+    throw { status: 400, message: 'Hóa đơn đã được thanh toán, không thể cập nhật.' };
+  }
+
+  const invoiceItems = [];
+  let totalAmount = 0;
+
+  const startOfMonth = new Date(year, month - 1, 1);
+  const endOfMonth = new Date(year, month, 0, 23, 59, 59);
+  const METER_MAX = 99999;
+
+  const [electricService, waterService] = await Promise.all([
+    Service.findOne({ name: { $regex: /^(điện|dien)$/i } }),
+    Service.findOne({ name: { $regex: /^(nước|nuoc)$/i } }),
+  ]);
+  const electricServiceId = electricService?._id?.toString();
+  const waterServiceId = waterService?._id?.toString();
+
+  // Nhập chỉ số đồng hồ mới nếu có
+  if (parsedElectricIndex !== undefined || parsedWaterIndex !== undefined) {
+    const manualInputs = [
+      { type: 'electric', label: 'điện', inputIndex: parsedElectricIndex, utilityDoc: electricService },
+      { type: 'water', label: 'nước', inputIndex: parsedWaterIndex, utilityDoc: waterService },
+    ].filter(item => item.inputIndex !== undefined && item.utilityDoc?._id);
+
+    for (const manualInput of manualInputs) {
+      const latestUtilityReading = await MeterReading.findOne({ roomId: room._id, utilityId: manualInput.utilityDoc._id })
+        .sort({ readingDate: -1, createdAt: -1 }).populate('utilityId');
+      
+      const previousIndex = Number(latestUtilityReading?.newIndex) || 0;
+      const finalNewIndex = Number(manualInput.inputIndex);
+      
+      const TWO_MINUTES = 2 * 60 * 1000;
+      const isRecentReading = latestUtilityReading?.createdAt && (Date.now() - new Date(latestUtilityReading.createdAt).getTime()) < TWO_MINUTES;
+
+      if (isRecentReading) {
+        latestUtilityReading.newIndex = finalNewIndex;
+        latestUtilityReading.usageAmount = finalNewIndex - previousIndex;
+        await latestUtilityReading.save();
+        console.log(`[TRANSFER] 🔄 Sửa chỉ số ${manualInput.label}: ${previousIndex} → ${finalNewIndex}`);
+      } else {
+        const usage = finalNewIndex - previousIndex;
+        await MeterReading.create({
+          roomId: room._id,
+          utilityId: manualInput.utilityDoc._id,
+          oldIndex: previousIndex,
+          newIndex: finalNewIndex,
+          usageAmount: Math.max(0, usage),
+          readingDate: new Date()
+        });
+        console.log(`[TRANSFER] 📝 Ghi chỉ số ${manualInput.label} mới: ${previousIndex} → ${finalNewIndex}`);
+      }
+    }
+  }
+
+  // Tính tiền điện nước từ MeterReading
+  const recentReadingsForAll = await MeterReading.find({
+    roomId: room._id,
+    createdAt: { $gte: startOfMonth, $lte: endOfMonth }
+  }).sort({ createdAt: -1 }).populate('utilityId');
+
+  const allReadings = recentReadingsForAll.length > 0
+    ? recentReadingsForAll
+    : await MeterReading.find({ roomId: room._id }).sort({ createdAt: -1 }).limit(20).populate('utilityId');
+
+  const latestReadings = {};
+  allReadings.forEach((reading) => {
+    if (!reading.utilityId) return;
+    const uId = reading.utilityId._id.toString();
+    if (!latestReadings[uId]) {
+      latestReadings[uId] = { current: reading, previous: null, count: 1 };
+    } else if (latestReadings[uId].count === 1) {
+      latestReadings[uId].previous = reading;
+      latestReadings[uId].count = 2;
+    }
+  });
+
+  Object.values(latestReadings).forEach(({ current, previous }) => {
+    const newIndex = Number(current.newIndex) || 0;
+    let oldIndex, usage;
+
+    if (previous) {
+      oldIndex = Number(previous.newIndex) || 0;
+      usage = newIndex - oldIndex;
+      if (usage < 0) usage = (METER_MAX - oldIndex) + newIndex;
+    } else {
+      oldIndex = Number(current.oldIndex) || 0;
+      usage = newIndex - oldIndex;
+      if (usage < 0) usage = (METER_MAX - oldIndex) + newIndex;
+    }
+
+    if (usage <= 0) return;
+
+    let servicePrice = current.utilityId.currentPrice || current.utilityId.price || 0;
+    servicePrice = typeof servicePrice === 'object' && servicePrice.$numberDecimal ? parseFloat(servicePrice.$numberDecimal) : Number(servicePrice) || 0;
+
+    const amount = usage * servicePrice;
+    totalAmount += amount;
+    const serviceName = current.utilityId.name || current.utilityId.serviceName || "Dịch vụ";
+    
+    invoiceItems.push({
+      itemName: `Tiền ${serviceName.toLowerCase()}`,
+      oldIndex,
+      newIndex,
+      usage,
+      unitPrice: servicePrice,
+      amount,
+      isIndex: true
+    });
+  });
+
+  // Tính tiền dịch vụ mở rộng từ BookService của phòng cũ
+  const contractBookServices = await BookService.find({ contractId: contract._id }).populate('services.serviceId');
+  const bookServiceItems = contractBookServices.flatMap(doc => Array.isArray(doc.services) ? doc.services : []);
+
+  if (bookServiceItems.length > 0) {
+    const transferDay = new Date(request.transferDate);
+    transferDay.setHours(23, 59, 59, 999);
+    const serviceChargeMap = new Map();
+
+    bookServiceItems.forEach((srvItem) => {
+      if (!srvItem?.serviceId) return;
+      const startDate = srvItem.startDate ? new Date(srvItem.startDate) : null;
+      const endDate = srvItem.endDate ? new Date(srvItem.endDate) : null;
+
+      if (startDate) { startDate.setHours(0, 0, 0, 0); if (startDate > transferDay) return; }
+      if (endDate) { endDate.setHours(23, 59, 59, 999); if (endDate < transferDay) return; }
+
+      const srvItemName = srvItem.serviceId.name || srvItem.serviceId.serviceName || "Dịch vụ";
+      const srvItemId = srvItem.serviceId._id?.toString();
+      if (srvItemId === electricServiceId || srvItemId === waterServiceId) return;
+
+      let srvPrice = srvItem.serviceId.currentPrice || srvItem.serviceId.price || 0;
+      srvPrice = typeof srvPrice === 'object' && srvPrice.$numberDecimal ? parseFloat(srvPrice.$numberDecimal) : Number(srvPrice) || 0;
+      if (!Number.isFinite(srvPrice) || srvPrice < 0) return;
+
+      const finalQty = Number(srvItem.quantity) || 1;
+      const serviceKey = srvItem.serviceId._id ? srvItem.serviceId._id.toString() : `${srvItemName}-${finalQty}-${srvPrice}`;
+      const existing = serviceChargeMap.get(serviceKey);
+      if (!existing || ((existing.startDate || 0) > (startDate || 0))) {
+        serviceChargeMap.set(serviceKey, { itemName: srvItemName, quantity: finalQty, unitPrice: srvPrice, startDate });
+      }
+    });
+
+    for (const chargeItem of serviceChargeMap.values()) {
+      const amount = chargeItem.quantity * chargeItem.unitPrice;
+      totalAmount += amount;
+      invoiceItems.push({
+        itemName: `Dịch vụ ${chargeItem.itemName}`, 
+        oldIndex: 0, newIndex: 0, usage: chargeItem.quantity, unitPrice: chargeItem.unitPrice, amount, isIndex: false 
+      });
+    }
+  }
+
+  // Lưu hóa đơn
+  let finalInvoice;
+  if (existingInvoice) {
+    existingInvoice.title = invoiceTitle;
+    existingInvoice.items = invoiceItems;
+    existingInvoice.totalAmount = totalAmount;
+    existingInvoice.dueDate = dueDate;
+    existingInvoice.status = 'Unpaid';
+    await existingInvoice.save();
+    finalInvoice = existingInvoice;
+    console.log(`[TRANSFER] ✅ Hóa đơn cập nhật: ${existingInvoice._id} | Tổng: ${totalAmount}`);
+  } else {
+    finalInvoice = await InvoicePeriodic.create({
+      invoiceCode, contractId: contract._id, title: invoiceTitle,
+      items: invoiceItems, totalAmount, dueDate, status: 'Unpaid',
+    });
+    console.log(`[TRANSFER] ✅ Hóa đơn tạo mới: ${invoiceCode} | Tổng: ${totalAmount}`);
+  }
+
+  // Cập nhật yêu cầu chuyển phòng
+  request.transferInvoiceId = finalInvoice._id;
+  request.prorationNote = managerInvoiceNotes;
+  request.status = "InvoiceReleased";
+  await request.save();
+
+  return { request, invoice: finalInvoice };
+};
+
+/**
  * [TENANT] Cập nhật yêu cầu chuyển phòng (chỉ khi Pending)
  * @param {string} requestId
  * @param {string} tenantId
@@ -652,7 +838,7 @@ const updateTransferRequest = async (requestId, tenantId, body) => {
     throw { status: 400, message: "Vui lòng cung cấp ít nhất một trường cần cập nhật." };
   }
 
-  // Nếu đổi phòng hoặc đổi ngày → cần tính lại proration
+  // Nếu đổi phòng hoặc đổi ngày → validate lại
   const newCurrentRoomId = roomId || request.currentRoomId.toString();
   const newTargetRoomId = targetRoomId || request.targetRoomId.toString();
   const newTransferDate = transferDate ? new Date(transferDate) : request.transferDate;
@@ -666,33 +852,20 @@ const updateTransferRequest = async (requestId, tenantId, body) => {
     }
   }
 
-  let newProration = request.proration;
-
   if (roomId || targetRoomId || transferDate) {
-    // Lấy hợp đồng để biết giá phòng cũ
+    // Lấy hợp đồng để kiểm tra availability
     const contract = await Contract.findById(request.contractId);
-
-    let currentRoomForProration;
 
     if (roomId) {
       // Validate phòng hiện tại mới
-      currentRoomForProration = await Room.findById(roomId).populate(
-        "roomTypeId",
-        "currentPrice typeName personMax",
-      );
-      if (!currentRoomForProration) {
+      const currentRoomNew = await Room.findById(roomId);
+      if (!currentRoomNew) {
         throw { status: 404, message: "Phòng hiện tại (roomId) không tồn tại." };
       }
-      if (!currentRoomForProration.isActive) {
+      if (!currentRoomNew.isActive) {
         throw { status: 400, message: "Phòng hiện tại đang bị tạm ngưng." };
       }
       request.currentRoomId = roomId;
-    } else {
-      // Lấy phòng hiện tại từ request để tính proration
-      currentRoomForProration = await Room.findById(request.currentRoomId).populate(
-        "roomTypeId",
-        "currentPrice",
-      );
     }
 
     if (targetRoomId) {
@@ -702,7 +875,7 @@ const updateTransferRequest = async (requestId, tenantId, body) => {
       }
       const targetRoom = await Room.findById(targetRoomId).populate(
         "roomTypeId",
-        "currentPrice typeName personMax",
+        "typeName personMax",
       );
       if (!targetRoom) {
         throw { status: 404, message: "Phòng muốn chuyển đến không tồn tại." };
@@ -748,11 +921,8 @@ const updateTransferRequest = async (requestId, tenantId, body) => {
         };
       }
 
-      const oldPrice = parseFloat(currentRoomForProration.roomTypeId?.currentPrice?.toString() || "0");
-      const newPrice = parseFloat(targetRoom.roomTypeId?.currentPrice?.toString() || "0");
-      newProration = calculateProration(oldPrice, newPrice, newTransferDate);
       request.targetRoomId = targetRoomId;
-    } else {
+    } else if (transferDate) {
       // Chỉ đổi ngày → kiểm tra phòng hiện tại (targetRoomId đã chọn) có trống đến endDate với ngày mới không
       const contractEndDate = new Date(contract.endDate);
       const dateChangeAvailability = await checkRoomAvailabilityInPeriod(
@@ -777,21 +947,11 @@ const updateTransferRequest = async (requestId, tenantId, body) => {
           message: `Với ngày chuyển mới, phòng đã chọn không còn trống trong toàn bộ thời gian còn lại của hợp đồng (đến ${contractEndDate.toLocaleDateString("vi-VN")}). ${conflictInfo} Vui lòng chọn ngày khác hoặc chọn phòng khác.`,
         };
       }
-
-      // Chỉ đổi phòng hoặc ngày → tính lại proration với phòng hiện tại
-      const currentTargetRoom = await Room.findById(request.targetRoomId).populate(
-        "roomTypeId",
-        "currentPrice",
-      );
-      const oldPrice = parseFloat(currentRoomForProration.roomTypeId?.currentPrice?.toString() || "0");
-      const newPrice = parseFloat(currentTargetRoom.roomTypeId?.currentPrice?.toString() || "0");
-      newProration = calculateProration(oldPrice, newPrice, newTransferDate);
     }
   }
 
   if (transferDate) request.transferDate = newTransferDate;
   if (reason) request.reason = reason;
-  request.proration = newProration;
 
   await request.save();
 
@@ -877,10 +1037,10 @@ const completeTransferRequest = async (requestId) => {
       throw { status: 404, message: "Không tìm thấy yêu cầu chuyển phòng." };
     }
 
-    if (request.status !== "Approved") {
+    if (request.status !== "Paid") {
       throw {
         status: 400,
-        message: `Chỉ có thể hoàn tất yêu cầu ở trạng thái "Approved". Hiện tại: "${request.status}"`,
+        message: `Chỉ có thể hoàn tất yêu cầu khi đã thanh toán (Paid). Hiện tại: "${request.status}"`,
       };
     }
 
@@ -1121,7 +1281,6 @@ const completeTransferRequest = async (requestId) => {
     return {
       ...completed,
       message: "Chuyển phòng hoàn tất thành công",
-      proration: request.proration,
       oldContractCode: oldContract.contractCode,
       newContractCode: newContractCode,
     };
@@ -1145,6 +1304,7 @@ module.exports = {
   getTransferRequestById,
   approveTransferRequest,
   rejectTransferRequest,
+  releaseTransferInvoice,
   completeTransferRequest,
 };
 
