@@ -66,6 +66,16 @@ const registerUser = async (userData) => {
  * @returns {Object} User data and token
  */
 const loginUser = async (username, password) => {
+  if (!username && !password) {
+    throw new Error("Vui lòng nhập tên đăng nhập và mật khẩu");
+  }
+  if (!username) {
+    throw new Error("Vui lòng nhập tên đăng nhập");
+  }
+  if (!password) {
+    throw new Error("Vui lòng nhập mật khẩu");
+  }
+
   // Find user by username
   const user = await User.findOne({ username });
   if (!user) {
