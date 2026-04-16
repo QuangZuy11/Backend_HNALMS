@@ -52,8 +52,18 @@ const RoomService = require("../services/room.service");
 // Helper function để xử lý lỗi tập trung
 const handleError = (res, error) => {
   console.error("🔴 LỖI CHI TIẾT:", error);
+
+  if (error?.name === "ValidationError") {
+    const firstError = Object.values(error.errors || {})[0];
+    return res.status(400).json({
+      success: false,
+      message: "Tên phòng là bắt buộc",
+      errorDetails: firstError?.message || error.message,
+    });
+  }
+
   const status = error.status || 500;
-  const message = error.message || "Lỗi server nội bộ";
+  const message = error.message || "Lỗi máy chủ nội bộ";
   
   res.status(status).json({ 
     success: false,
@@ -64,8 +74,30 @@ const handleError = (res, error) => {
 
 exports.createRoom = async (req, res) => {
   try {
-    const newRoom = await RoomService.createRoom(req.body);
-    res.status(201).json({ message: "Tạo phòng thành công", data: newRoom });
+    const { name, roomCode, floorId, roomTypeId, description } = req.body;
+
+    // Validation - check required fields
+    if (!name || name.trim() === "") {
+      return res.status(400).json({ success: false, message: "Vui lòng nhập tên phòng" });
+    }
+    if (!roomCode || roomCode.trim() === "") {
+      return res.status(400).json({ success: false, message: "Vui lòng nhập mã phòng" });
+    }
+    if (!floorId) {
+      return res.status(400).json({ success: false, message: "Vui lòng nhập tầng" });
+    }
+    if (!roomTypeId) {
+      return res.status(400).json({ success: false, message: "Vui lòng nhập loại phòng" });
+    }
+
+    const newRoom = await RoomService.createRoom({
+      name: name.trim(),
+      roomCode: roomCode.trim(),
+      floorId,
+      roomTypeId,
+      description
+    });
+    res.status(201).json({ message: "Thêm phòng mới thành công", data: newRoom });
   } catch (error) { handleError(res, error); }
 };
 
