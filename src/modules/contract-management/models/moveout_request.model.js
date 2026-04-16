@@ -44,7 +44,7 @@ const MoveOutRequestSchema = new Schema({
   // === Kiểm tra điều kiện hoàn cọc ===
   isEarlyNotice: {
     type: Boolean,
-    default: false // true khi ngày trả phòng cách ngày kết thúc hợp đồng dưới 30 ngày
+    default: false // true khi khoảng cách từ requestDate đến endDate < 30 ngày
   },
   isUnderMinStay: {
     type: Boolean,
@@ -53,6 +53,14 @@ const MoveOutRequestSchema = new Schema({
   isDepositForfeited: {
     type: Boolean,
     default: false // true → mất cọc (không đủ điều kiện hoàn)
+  },
+
+  // === Thông tin gap contract ===
+  // 🆕 Cờ xác định yêu cầu trả phòng này thuộc gap contract
+  // Gap contract = người thuê trong khoảng trống, LUÔN được hoàn cọc
+  isGapContract: {
+    type: Boolean,
+    default: false
   },
 
   // === Thông tin hóa đơn cuối ===
@@ -65,22 +73,15 @@ const MoveOutRequestSchema = new Schema({
   // === Thông tin hoàn/bù cọc ===
   depositRefundAmount: {
     type: Number,
-    default: 0 // Số tiền cọc được hoàn lại cho tenant (sau khi trừ hóa đơn nếu có)
+    default: 0 // Tổng tiền hoàn (cọc + prepaid dư) — 0 nếu mất cọc và không có prepaid
   },
-
-  // === Thông tin thanh toán ===
-  paymentMethod: {
-    type: String,
-    enum: ['online', 'offline', null],
-    default: null
+  prepaidRentOverpay: {
+    type: Number,
+    default: 0 // Số tiền phòng trả trước dư cần hoàn (tháng tiếp theo đến rentPaidUntil)
   },
-  paymentTransactionCode: {
-    type: String,
-    default: null
-  },
-  paymentDate: {
-    type: Date,
-    default: null
+  prepaidMonths: {
+    type: Number,
+    default: 0 // Số tháng tiền phòng trả trước cần hoàn
   },
 
   // === Ghi chú từng bước ===

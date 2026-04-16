@@ -344,7 +344,7 @@ exports.updateRepairRequest = async (req, res) => {
       return res.status(401).json({ success: false, message: "Không tìm thấy thông tin người dùng" });
     }
 
-    const { type, devicesId, description } = req.body;
+    const { type, devicesId, description, roomId } = req.body;
     let images;
 
     // Nếu có file ảnh gửi kèm (multipart/form-data) → upload lên Cloudinary
@@ -381,7 +381,7 @@ exports.updateRepairRequest = async (req, res) => {
       images = req.body.images;
     }
 
-    const updated = await requestService.updateRepairRequestByTenant(requestId, tenantId, { type, devicesId, description, images });
+    const updated = await requestService.updateRepairRequestByTenant(requestId, tenantId, { type, devicesId, description, images, roomId });
 
     res.json({ success: true, message: "Cập nhật yêu cầu thành công", data: updated });
   } catch (error) {

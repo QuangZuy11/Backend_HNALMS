@@ -350,7 +350,14 @@ class InvoiceService {
       .populate({
         path: "contractId",
         select: "contractCode startDate endDate roomId",
-        populate: { path: "roomId", select: "name roomCode" },
+        populate: {
+          path: "roomId",
+          select: "name roomCode floorId roomTypeId",
+          populate: [
+            { path: "floorId", select: "name" },
+            { path: "roomTypeId", select: "typeName currentPrice" },
+          ],
+        },
       })
       .lean();
 
@@ -372,6 +379,10 @@ class InvoiceService {
       roomId: contract?.roomId || null,
       tenant: tenantInfo,
       contractCode: contract?.contractCode || null,
+      // Trích xuất số tháng đóng trước từ title (format: "Thanh toán tiền phòng trả trước (N tháng)")
+      prepaidMonths: incurredInvoice.title
+        ? parseInt(incurredInvoice.title.match(/\((\d+)\s*tháng\)/)?.[1] || "0", 10)
+        : 0,
     };
   }
 
@@ -411,7 +422,10 @@ class InvoiceService {
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
-      .lean();
+      .lean()
+      .then((invoices) =>
+        invoices.map((inv) => ({ ...inv, invoiceType: "Periodic" }))
+      );
 
     const incurredInvoices = await InvoiceIncurred.find(incurredQuery)
       .populate({
@@ -427,6 +441,7 @@ class InvoiceService {
     const normalizedIncurred = incurredInvoices.map((inv) => ({
       ...inv,
       type: "Incurred",
+      invoiceType: "Incurred",
       roomId: inv.contractId?.roomId || null,
     }));
 

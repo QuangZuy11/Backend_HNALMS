@@ -1,17 +1,96 @@
 const Deposit = require("../models/deposit.model");
+const Contract = require("../models/contract.model");
 const Room = require("../../room-floor-management/models/room.model");
+const {
+  findSuccessorContractAfterDeclined,
+} = require("../services/declinedRenewalSuccessor.service");
 const {
   sendEmail,
 } = require("../../notification-management/services/email.service");
+
+async function evaluateDeclinedRenewalNextDeposit(roomObjectId, existingHeldDeposits) {
+  const declinedContract = await Contract.findOne({
+    roomId: roomObjectId,
+    status: "active",
+    isActivated: true,
+    renewalStatus: "declined",
+  }).lean();
+  if (!declinedContract) return { next: "none" };
+
+  const successorContract = await findSuccessorContractAfterDeclined(
+    declinedContract,
+    roomObjectId,
+  );
+  if (successorContract) {
+    return {
+      next: "reject",
+      body: {
+        success: false,
+        message:
+          "Đã có hợp đồng kế tiếp cho phòng sau kỳ thuê hiện tại. Không thể đặt thêm cọc.",
+      },
+    };
+  }
+
+  const tenantADepositId = declinedContract.depositId?.toString();
+
+  // Lấy tất cả HĐ chưa kích hoạt của phòng để biết deposit nào đã bị bind bởi HĐ tương lai
+  const inactiveContracts = await Contract.find({
+    roomId: roomObjectId,
+    isActivated: false,
+    status: { $nin: ["terminated", "expired"] },
+  }).select("depositId").lean();
+
+  const depositsBoundToInactive = new Set(
+    inactiveContracts
+      .filter((c) => c.depositId)
+      .map((c) => c.depositId.toString())
+  );
+
+  // extraHeld: loại bỏ deposit của HĐ 622 (tenantA) VÀ các deposit đã bind vào HĐ chưa kích hoạt (HĐ 464)
+  const extraHeld = existingHeldDeposits.filter(
+    (d) =>
+      (!tenantADepositId || d._id.toString() !== tenantADepositId) &&
+      !depositsBoundToInactive.has(d._id.toString()),
+  );
+  if (extraHeld.length > 0) {
+    return {
+      next: "reject",
+      body: {
+        success: false,
+        message:
+          "Phòng đã có người đặt cọc cho kỳ thuê tiếp theo. Không thể tạo thêm cọc.",
+      },
+    };
+  }
+  const pendingOthers = await Deposit.countDocuments({
+    room: roomObjectId,
+    status: "Pending",
+  });
+  if (pendingOthers > 0) {
+    return {
+      next: "reject",
+      body: {
+        success: false,
+        message: "Đang có giao dịch đặt cọc chờ thanh toán cho phòng này.",
+      },
+    };
+  }
+  return { next: "allow" };
+}
 
 const getAllDeposits = async (req, res) => {
   try {
     const deposits = await Deposit.find()
       .populate({
         path: "room",
-        select: "name type price maxPersons", // Select relevant room fields
+        select: "name type price maxPersons",
       })
-      .sort({ createdDate: -1 });
+      .populate({
+        path: "contractId",
+        select: "contractCode startDate endDate status tenantId",
+      })
+      .sort({ createdAt: -1 });
 
     res.status(200).json({
       success: true,
@@ -36,7 +115,7 @@ const createDeposit = async (req, res) => {
     if (!name || !phone || !email || !room || !amount) {
       return res.status(400).json({
         success: false,
-        message: "Missing required fields: name, phone, email, room, amount",
+        message: "Nhập các trường bắt buộc: tên, số điện thoại, email, phòng, số tiền",
       });
     }
 
@@ -45,53 +124,97 @@ const createDeposit = async (req, res) => {
     if (!roomExists) {
       return res.status(404).json({
         success: false,
-        message: "Room not found",
+        message: "Không tìm thấy phòng",
       });
     }
 
-    // Check if room already has an active deposit
-    const existingDeposit = await Deposit.findOne({
+    // Lấy tất cả deposit đang Held của phòng này
+    const existingHeldDeposits = await Deposit.find({
       room: room,
       status: "Held",
     });
 
-    // Bổ sung: Nếu phòng đang 'Deposited' NHƯNG có hợp đồng tương lai > 30 ngày, 
-    // thì VẪN CHO PHÉP người mới cọc (để họ vào lấp chỗ trống ngắn hạn).
-    const Contract = require("../models/contract.model");
+    let allowDeposit = false;
     let allowShortTermDeposit = false;
-    
-    if (roomExists.status === "Deposited" && existingDeposit) {
-      const futureContract = await Contract.findOne({
+
+    if (roomExists.status === "Available") {
+      // Phòng trống hoàn toàn → cho phép đặt cọc
+      allowDeposit = true;
+    } else if (roomExists.status === "Occupied") {
+      const ev = await evaluateDeclinedRenewalNextDeposit(room, existingHeldDeposits);
+      if (ev.next === "reject") return res.status(400).json(ev.body);
+      if (ev.next === "allow") allowDeposit = true;
+    } else if (roomExists.status === "Deposited") {
+      // Phòng đang deposited → kiểm tra các hợp đồng
+      const futureContracts = await Contract.find({
         roomId: room,
         status: "active",
-        startDate: { $gt: new Date() }
+        isActivated: false,
+        startDate: { $gt: new Date() },
       }).sort({ startDate: 1 });
 
-      if (futureContract) {
-         const daysUntilStart = Math.ceil((new Date(futureContract.startDate) - new Date()) / (1000 * 60 * 60 * 24));
-         if (daysUntilStart >= 30) {
-            // Chỉ cho phép nếu không có khoản cọc nào đang "lửng lơ" (chưa kí hợp đồng)
-            const heldDeposits = await Deposit.find({ room: room, status: "Held" });
-            const activeContracts = await Contract.find({ roomId: room, status: "active" });
-            
-            const boundDepositIds = activeContracts.map(c => c.depositId?.toString()).filter(Boolean);
-            const floatingDeposits = heldDeposits.filter(d => !boundDepositIds.includes(d._id.toString()));
+      if (futureContracts.length > 0) {
+        const nearestFuture = futureContracts[0];
+        const daysUntilStart = Math.ceil(
+          (new Date(nearestFuture.startDate) - new Date()) / (1000 * 60 * 60 * 24)
+        );
 
-            if (floatingDeposits.length === 0) {
-               allowShortTermDeposit = true;
-            }
-         }
+        if (daysUntilStart < 30) {
+          return res.status(400).json({
+            success: false,
+            message: `Không thể đặt cọc: Hợp đồng mới sẽ bắt đầu vào ngày ${new Date(nearestFuture.startDate).toLocaleDateString("vi-VN")} (còn ${daysUntilStart} ngày). Thời hạn tối thiểu để đặt cọc mới là 30 ngày.`,
+          });
+        }
+
+        // >= 30 ngày → cho phép cọc ngắn hạn
+        // Reset các deposit cũ chưa active về activationStatus = false
+        for (const dep of existingHeldDeposits) {
+          if (dep.activationStatus !== true) {
+            dep.activationStatus = false;
+            await dep.save();
+          }
+        }
+        allowShortTermDeposit = true;
+      } else {
+        // Không có future contract đang chờ
+        const activeContracts = await Contract.findOne({
+          roomId: room,
+          status: "active",
+          isActivated: true,
+        }).lean();
+        if (activeContracts) {
+          if (activeContracts.renewalStatus === "declined") {
+            const ev = await evaluateDeclinedRenewalNextDeposit(
+              room,
+              existingHeldDeposits,
+            );
+            if (ev.next === "reject") return res.status(400).json(ev.body);
+            if (ev.next === "allow") allowDeposit = true;
+          } else {
+            return res.status(400).json({
+              success: false,
+              message: "Phòng đang có người thuê, không thể đặt cọc.",
+            });
+          }
+        } else {
+          // Trường hợp hy hữu: Deposited nhưng không có contract nào
+          for (const dep of existingHeldDeposits) {
+            dep.activationStatus = false;
+            await dep.save();
+          }
+          allowDeposit = true;
+        }
       }
     }
 
-    if (existingDeposit && !allowShortTermDeposit) {
+    if (roomExists.status !== "Available" && !allowDeposit && !allowShortTermDeposit) {
       return res.status(400).json({
         success: false,
-        message: "This room already has an active deposit",
+        message: `Phòng hiện không thể đặt cọc (trạng thái: ${roomExists.status})`,
       });
     }
 
-    // Create new deposit
+    // Create new deposit - activationStatus = null (chờ contract kích hoạt)
     const newDeposit = new Deposit({
       name,
       phone,
@@ -99,7 +222,9 @@ const createDeposit = async (req, res) => {
       room,
       amount,
       status: "Held",
-      createdDate: new Date(),
+      activationStatus: null,
+      expireAt: req.body.expireAt ? new Date(req.body.expireAt) : null,
+      createdAt: req.body.createdDate ? new Date(req.body.createdDate) : new Date(),
     });
 
     await newDeposit.save();
@@ -145,10 +270,10 @@ const createDeposit = async (req, res) => {
               <p>Bạn đã đặt cọc thành công phòng <span class="value">${roomExists.name || roomExists.roomCode || ""}</span> tại <span class="label">Hoàng Nam Building</span>.</p>
               <ul class="info-list">
                 <li><span class="label">Số tiền cọc:</span> <span class="value">${amount.toLocaleString("vi-VN")}đ</span></li>
-                <li><span class="label">Thời gian giữ phòng:</span> <span class="value">7 ngày</span></li>
+                <li><span class="label">Thời gian giữ phòng:</span> <span class="value">30 ngày</span></li>
                 <li><span class="label">Ngày đặt cọc:</span> <span class="value">${new Date().toLocaleDateString("vi-VN")}</span></li>
               </ul>
-              <a class="cta-btn" href="#" style="pointer-events:none;">Đến ký hợp đồng trong 7 ngày</a>
+              <a class="cta-btn" href="#" style="pointer-events:none;">Đến ký hợp đồng trong 30 ngày</a>
               <div class="note">Vui lòng đến ký hợp đồng trong thời gian giữ phòng để hoàn tất thủ tục thuê phòng.<br>Đây là email tự động, vui lòng không trả lời lại email này.</div>
             </div>
             <div class="footer">Cảm ơn bạn đã tin tưởng Hoàng Nam Building!</div>
@@ -159,12 +284,11 @@ const createDeposit = async (req, res) => {
       await sendEmail(email, subject, html);
     } catch (mailErr) {
       console.error("Gửi email xác nhận cọc thất bại:", mailErr);
-      // Không trả lỗi cho client, chỉ log
     }
 
     res.status(201).json({
       success: true,
-      message: "Deposit created successfully",
+      message: "Cọc thành công",
       data: newDeposit,
     });
   } catch (error) {

@@ -820,6 +820,16 @@ const updateRepairRequestByTenant = async (requestId, tenantId, data) => {
     const request = await RepairRequest.findById(requestId);
     if (!request) throw new Error("Yêu cầu sửa chữa không tồn tại");
 
+    // Kiểm tra room có thuộc về tenant không (bằng cách kiểm tra contract hoạt động)
+    const activeContract = await Contract.findOne({
+      roomId: request.roomId,
+      tenantId: tenantId,
+      status: "active"
+    });
+    if (!activeContract) {
+      throw new Error("Phòng không thuộc về người dùng hoặc hợp đồng không còn hoạt động");
+    }
+
     if (request.tenantId.toString() !== tenantId.toString()) {
       throw Object.assign(new Error("Bạn không có quyền cập nhật yêu cầu này"), { status: 403 });
     }
@@ -832,6 +842,18 @@ const updateRepairRequestByTenant = async (requestId, tenantId, data) => {
       const device = await Device.findById(data.devicesId);
       if (!device) throw Object.assign(new Error("Thiết bị không tồn tại"), { status: 404 });
       request.devicesId = data.devicesId;
+    }
+    if (data.roomId !== undefined) {
+      // Kiểm tra phòng mới có hợp đồng active không
+      const newActiveContract = await Contract.findOne({
+        roomId: data.roomId,
+        tenantId: tenantId,
+        status: "active"
+      });
+      if (!newActiveContract) {
+        throw new Error("Phòng mới không thuộc về người dùng hoặc hợp đồng không còn hoạt động");
+      }
+      request.roomId = data.roomId;
     }
     if (data.type !== undefined) request.type = data.type;
     if (data.description !== undefined) request.description = data.description;

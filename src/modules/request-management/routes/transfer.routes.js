@@ -98,6 +98,17 @@ router.patch(
 );
 
 /**
+ * [MANAGER] Phát hành hóa đơn chuyển phòng
+ * POST /api/requests/transfer/:id/release-invoice
+ */
+router.post(
+  "/:id/release-invoice",
+  authenticate,
+  authorize("manager"),
+  transferController.releaseTransferInvoice
+);
+
+/**
  * [TENANT] Cập nhật yêu cầu chuyển phòng (chỉ khi Pending)
  * PUT /api/requests/transfer/:id
  * Body: { roomId?, targetRoomId?, transferDate?, reason? }

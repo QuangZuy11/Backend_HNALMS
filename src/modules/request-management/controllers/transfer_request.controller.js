@@ -295,6 +295,23 @@ exports.rejectTransferRequest = async (req, res) => {
 };
 
 /**
+ * [MANAGER] Phát hành hóa đơn chuyển phòng
+ * POST /api/requests/transfer/:id/release-invoice
+ * Body: { managerInvoiceNotes, electricIndex, waterIndex }
+ */
+exports.releaseTransferInvoice = async (req, res) => {
+  try {
+    const { managerInvoiceNotes, electricIndex, waterIndex } = req.body || {};
+    const result = await transferService.releaseTransferInvoice(req.params.id, managerInvoiceNotes, electricIndex, waterIndex);
+    res.status(200).json({ success: true, message: "Đã phát hành hóa đơn chuyển phòng thành công", data: result });
+  } catch (error) {
+    console.error("Release transfer invoice error:", error);
+    const status = error.status || 500;
+    res.status(status).json({ success: false, message: error.message || "Server error" });
+  }
+};
+
+/**
  * [MANAGER] Hoàn tất chuyển phòng (Bàn giao phòng)
  * PATCH /api/requests/transfer/:id/complete
  * Thực hiện khi ngày chuyển đã tới

@@ -53,8 +53,27 @@ const contractSchema = new Schema(
     },
     status: {
       type: String,
-      enum: ["active", "expired", "terminated", "pending"],
+      enum: ["active", "inactive", "expired", "terminated"],
       default: "active",
+    },
+    // Hợp đồng đã được kích hoạt chưa (khi startDate <= today)
+    // false = chưa kích hoạt (ngày bắt đầu trong tương lai)
+    // true = đã kích hoạt (ngày bắt đầu đã đến hoặc trong quá khứ)
+    isActivated: {
+      type: Boolean,
+      default: false,
+    },
+    /**
+     * Trạng thái hành động gia hạn/từ chối của tenant trong cửa sổ gia hạn:
+     * - null: chưa thực hiện hành động nào, có thể gia hạn hoặc từ chối (1 lần duy nhất)
+     * - "renewed": đã gia hạn rồi, không thể gia hạn/từ chối nữa
+     * - "declined": đã từ chối rồi, không thể gia hạn/từ chối nữa
+     * Cửa sổ gia hạn: từ ngày còn 30 ngày đến ngày còn 7 ngày (tính cả ngày đầu và ngày cuối)
+     */
+    renewalStatus: {
+      type: String,
+      enum: ["renewed", "declined"],
+      default: null,
     },
     // Terms & Conditions (Optional snapshot or ref)
     terms: {

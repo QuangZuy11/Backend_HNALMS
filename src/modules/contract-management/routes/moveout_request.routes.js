@@ -58,4 +58,8 @@ router.put("/:moveOutRequestId/complete", authenticate, moveOutRequestController
 // GET /api/move-outs/:moveOutRequestId/deposit-vs-invoice
 router.get("/:moveOutRequestId/deposit-vs-invoice", authenticate, moveOutRequestController.getDepositVsInvoice);
 
+// Tenant xoá yêu cầu trả phòng (chỉ khi status = Requested hoặc InvoiceReleased)
+// DELETE /api/move-outs/:moveOutRequestId
+router.delete("/:moveOutRequestId", authenticate, moveOutRequestController.deleteMoveOutRequest);
+
 module.exports = router;

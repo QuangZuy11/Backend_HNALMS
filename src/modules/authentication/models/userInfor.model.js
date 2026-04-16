@@ -32,6 +32,17 @@ const userInfoSchema = new mongoose.Schema(
       type: String,
       enum: ["Male", "Female", "Other"],
     },
+
+    phone: {
+      type: String,
+      trim: true,
+    },
+
+    email: {
+      type: String,
+      trim: true,
+      lowercase: true,
+    },
   },
   {
     timestamps: true,

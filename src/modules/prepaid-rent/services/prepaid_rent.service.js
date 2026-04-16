@@ -1,0 +1,490 @@
+const PrepaidRentRequest = require("../models/prepaid_rent.model");
+const InvoicePeriodic = require("../../invoice-management/models/invoice_periodic.model");
+const Payment = require("../../invoice-management/models/payment.model");
+const Contract = require("../../contract-management/models/contract.model");
+const Room = require("../../room-floor-management/models/room.model");
+
+// ============================================================
+// Helper: Sinh mã giao dịch cho yêu cầu trả trước
+// Format: PREPAID [ContractCode rút gọn] [DDMMYYYY] [HHMMSSmmm]
+// ============================================================
+const generatePrepaidTransactionCode = (contractCode) => {
+  const now = new Date();
+  const day = String(now.getDate()).padStart(2, "0");
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const year = String(now.getFullYear()).slice(-2);
+  const dateStr = `${day}${month}${year}`;
+
+  const hours = String(now.getHours()).padStart(2, "0");
+  const minutes = String(now.getMinutes()).padStart(2, "0");
+  const seconds = String(now.getSeconds()).padStart(2, "0");
+  const ms = String(now.getMilliseconds()).padStart(3, "0");
+  const timeStr = `${hours}${minutes}${seconds}${ms}`;
+
+  const shortCode = (contractCode || "UNKNOWN")
+    .replace(/[^a-zA-Z0-9]/g, "")
+    .slice(0, 10)
+    .toUpperCase();
+
+  return `PREPAID ${shortCode} ${dateStr} ${timeStr}`;
+};
+
+// Thời hạn hợp đồng (start → end), tính theo tháng lịch
+const computeContractDurationMonths = (startDate, endDate) => {
+  const s = new Date(startDate);
+  const e = new Date(endDate);
+  let months =
+    (e.getFullYear() - s.getFullYear()) * 12 + (e.getMonth() - s.getMonth());
+  if (e.getDate() < s.getDate()) months -= 1;
+  return Math.max(1, months);
+};
+
+// Hợp đồng ≤ 6 tháng: đóng trước tối thiểu 1 tháng; > 6 tháng: tối thiểu 2 tháng
+const getMinPrepaidMonthsByDuration = (durationMonths) =>
+  durationMonths <= 6 ? 1 : 2;
+
+/**
+ * Số tháng có thể cộng thêm (setMonth) từ mốc paidThrough mà không vượt endDate.
+ * Khớp với confirmPrepaidRentPayment: newDate = paidThrough + N tháng, N <= kết quả hàm này.
+ * @param {Date|string} paidThrough — rentPaidUntil hoặc startDate
+ * @param {Date|string} endDate — ngày kết thúc HĐ
+ * @returns {number}
+ */
+const maxPrepaidMonthsFromPaidThrough = (paidThrough, endDate) => {
+  const base = new Date(paidThrough);
+  base.setUTCDate(1); // normalize về ngày 1 UTC để tránh overflow
+  const end = new Date(endDate);
+  let m = 0;
+  const cap = 240;
+  for (let tryM = 1; tryM <= cap; tryM++) {
+    const d = new Date(base);
+    d.setUTCMonth(d.getUTCMonth() + tryM);
+    if (d > end) break;
+    m = tryM;
+  }
+  return m;
+};
+
+// ============================================================
+// Bổ sung min/max prepaid + monthsRemaining cho một contract (lean)
+// ============================================================
+const enrichContractWithPrepaidFields = (contract) => {
+  if (!contract) return null;
+
+  const durationMonths = computeContractDurationMonths(
+    contract.startDate,
+    contract.endDate
+  );
+  const minPrepaidMonths = getMinPrepaidMonthsByDuration(durationMonths);
+
+  const paidThrough = contract.rentPaidUntil
+    ? new Date(contract.rentPaidUntil)
+    : new Date(contract.startDate);
+  const monthsRemaining = maxPrepaidMonthsFromPaidThrough(paidThrough, contract.endDate);
+
+  const maxPrepaidMonths = Math.min(monthsRemaining, 12);
+
+  return {
+    ...contract,
+    contractDurationMonths: durationMonths,
+    minPrepaidMonths,
+    maxPrepaidMonths,
+    monthsRemaining,
+  };
+};
+
+const activeContractPopulate = {
+  path: "roomId",
+  select: "name roomCode floorId roomTypeId",
+  populate: [
+    { path: "floorId", select: "name" },
+    { path: "roomTypeId", select: "typeName currentPrice" },
+  ],
+};
+
+// ============================================================
+// Tất cả hợp đồng active của tenant (đã populate + prepaid fields)
+// ============================================================
+exports.getActiveContractsByTenant = async (tenantId) => {
+  const list = await Contract.find({
+    tenantId,
+    status: "active",
+  })
+    .populate(activeContractPopulate)
+    .lean();
+
+  return list.map(enrichContractWithPrepaidFields).filter(Boolean);
+};
+
+// ============================================================
+// Một hợp đồng active (tương thích cũ — lấy bản đầu tiên)
+// ============================================================
+exports.getActiveContractByTenant = async (tenantId) => {
+  const contracts = await exports.getActiveContractsByTenant(tenantId);
+  return contracts[0] || null;
+};
+
+// ============================================================
+// Tạo yêu cầu trả trước + khởi tạo thanh toán QR
+// ============================================================
+exports.createPrepaidRentRequest = async (tenantId, contractId, prepaidMonths) => {
+  // 1. Validate contract
+  const contract = await Contract.findOne({ _id: contractId, tenantId, status: "active" })
+    .populate({
+      path: "roomId",
+      select: "name roomCode floorId roomTypeId",
+      populate: [
+        { path: "floorId", select: "name" },
+        { path: "roomTypeId", select: "typeName currentPrice" },
+      ],
+    })
+    .lean();
+
+  if (!contract) {
+    throw { status: 404, message: "Không tìm thấy hợp đồng đang hoạt động." };
+  }
+
+  const durationMonths = computeContractDurationMonths(
+    contract.startDate,
+    contract.endDate
+  );
+  const minPrepaidMonths = getMinPrepaidMonthsByDuration(durationMonths);
+
+  const paidThrough = contract.rentPaidUntil
+    ? new Date(contract.rentPaidUntil)
+    : new Date(contract.startDate);
+  const monthsRemaining = maxPrepaidMonthsFromPaidThrough(paidThrough, contract.endDate);
+
+  // 2. Validate prepaidMonths
+  const m = Number(prepaidMonths);
+  if (!Number.isInteger(m) || m < 1) {
+    throw { status: 400, message: "Số tháng đóng trước không hợp lệ." };
+  }
+  if (m < minPrepaidMonths) {
+    throw {
+      status: 400,
+      message:
+        minPrepaidMonths === 1
+          ? "Số tháng đóng trước tối thiểu là 1 tháng (hợp đồng ngắn hạn)."
+          : "Số tháng đóng trước tối thiểu là 2 tháng (hợp đồng trên 6 tháng).",
+    };
+  }
+
+  if (m > monthsRemaining) {
+    throw {
+      status: 400,
+      message: `Chỉ còn ${monthsRemaining} tháng đến khi hợp đồng kết thúc. Không thể đóng trước nhiều hơn.`,
+    };
+  }
+
+  // 3. Tính số tiền
+  const roomPrice = contract.roomId?.roomTypeId?.currentPrice || 0;
+  const totalAmount = m * roomPrice;
+
+  if (totalAmount <= 0) {
+    throw { status: 400, message: "Giá phòng không hợp lệ." };
+  }
+
+  // 4. Xóa request cũ đang pending (nếu có) để tránh conflict
+  await PrepaidRentRequest.deleteMany({ contractId, status: "pending" });
+
+  // 5. Tạo request record
+  const request = new PrepaidRentRequest({
+    tenantId,
+    contractId,
+    prepaidMonths: m,
+    totalAmount,
+    status: "pending",
+  });
+  await request.save();
+
+  // 6. Tạo payment record (sepay)
+  const transactionCode = generatePrepaidTransactionCode(contract.contractCode);
+  const expireAt = new Date(Date.now() + 5 * 60 * 1000); // 5 phút
+
+  const payment = new Payment({
+    amount: totalAmount,
+    transactionCode,
+    status: "Pending",
+    paymentDate: null,
+  });
+  await payment.save();
+
+  // 7. Cập nhật request với paymentId
+  request.paymentId = payment._id;
+  request.transactionCode = transactionCode;
+  await request.save();
+
+  // 8. Build VietQR URL
+  const bankBin = process.env.BANK_BIN;
+  const bankAccount = process.env.BANK_ACCOUNT;
+  const bankAccountName = process.env.BANK_ACCOUNT_NAME || "HOANG NAM ALMS";
+  const encodedContent = encodeURIComponent(transactionCode);
+  const qrUrl = `https://img.vietqr.io/image/${bankBin}-${bankAccount}-qr_only.jpg?amount=${totalAmount}&addInfo=${encodedContent}&accountName=${encodeURIComponent(bankAccountName)}`;
+
+  return {
+    requestId: request._id,
+    contractCode: contract.contractCode,
+    roomName: contract.roomId?.name,
+    roomTypeName: contract.roomId?.roomTypeId?.typeName,
+    roomPrice,
+    prepaidMonths: m,
+    totalAmount,
+    transactionCode,
+    qrUrl,
+    bankInfo: {
+      bankBin,
+      bankAccount,
+      bankAccountName,
+      content: transactionCode,
+    },
+    expireAt,
+    expireInSeconds: Math.floor((expireAt - Date.now()) / 1000),
+  };
+};
+
+// ============================================================
+// Lấy trạng thái thanh toán của request trả trước
+// ============================================================
+exports.getPrepaidRentPaymentStatus = async (transactionCode) => {
+  const request = await PrepaidRentRequest.findOne({ transactionCode })
+    .populate("contractId", "contractCode roomId")
+    .lean();
+
+  if (!request) {
+    throw { status: 404, message: "Không tìm thấy yêu cầu trả trước." };
+  }
+
+  // Tìm payment qua transactionCode (ưu tiên) hoặc paymentId (fallback)
+  let payment = await Payment.findOne({ transactionCode }).lean();
+  if (!payment && request.paymentId) {
+    payment = await Payment.findById(request.paymentId).lean();
+  }
+
+  if (!payment) {
+    // Nếu không tìm thấy payment nhưng request đã paid (webhook đã xử lý)
+    if (request.status === "paid") {
+      return {
+        status: "Success",
+        requestId: request._id,
+        requestStatus: "paid",
+        transactionCode,
+        amount: request.totalAmount,
+        invoiceCode: request.invoicePeriodicId,
+      };
+    }
+    throw { status: 404, message: "Không tìm thấy giao dịch thanh toán." };
+  }
+
+  // Kiểm tra hết hạn
+  if (payment.status === "Pending") {
+    const expireAt = new Date(new Date(payment.createdAt).getTime() + 5 * 60 * 1000);
+    if (new Date() > expireAt) {
+      // Tự động hủy request & payment hết hạn
+      await Payment.findByIdAndUpdate(payment._id, { status: "Failed" });
+      await PrepaidRentRequest.findByIdAndUpdate(request._id, { status: "expired" });
+
+      return {
+        status: "expired",
+        transactionCode,
+        requestId: request._id,
+        message: "Giao dịch đã hết hạn thanh toán.",
+      };
+    }
+
+    return {
+      status: "pending",
+      requestId: request._id,
+      requestStatus: request.status,
+      transactionCode,
+      amount: payment.amount,
+      expireInSeconds: Math.max(0, Math.floor((expireAt - Date.now()) / 1000)),
+    };
+  }
+
+  return {
+    status: payment.status,
+    requestId: request._id,
+    requestStatus: request.status,
+    transactionCode,
+    amount: payment.amount,
+    paymentDate: payment.paymentDate,
+  };
+};
+
+// ============================================================
+// Xác nhận thanh toán thành công (được gọi từ webhook hoặc polling)
+// Tạo hóa đơn HD-PREPAID với status = "Paid"
+// ============================================================
+exports.confirmPrepaidRentPayment = async (transactionCode) => {
+  const request = await PrepaidRentRequest.findOne({ transactionCode, status: "pending" })
+    .populate({
+      path: "contractId",
+      populate: { path: "roomId" },
+    })
+    .lean();
+
+  if (!request) return null; // Không tìm thấy hoặc đã xử lý
+
+  const contractId = request.contractId._id || request.contractId;
+
+  // Cập nhật payment
+  const payment = await Payment.findByIdAndUpdate(
+    request.paymentId,
+    { status: "Success", paymentDate: new Date() },
+    { new: true }
+  );
+
+  // Tạo hóa đơn trả trước tiền phòng (InvoicePeriodic, status = "Paid")
+  const contractDoc = await Contract.findById(contractId)
+    .populate({ path: "roomId", populate: { path: "roomTypeId" } })
+    .lean();
+  const now = new Date();
+
+  // Tính prepaidFrom (tháng bắt đầu) và prepaidTo (tháng kết thúc)
+  // rentPaidUntil có nghĩa là "đã trả tiền đến hết tháng X"
+  // prepaidFrom = tháng tiếp theo tháng rentPaidUntil (ngày 1)
+  // prepaidTo = ngày cuối cùng của tháng cuối cùng trong kỳ prepaid
+  const currentRentPaidUntil = contractDoc.rentPaidUntil
+    ? new Date(contractDoc.rentPaidUntil)
+    : new Date(contractDoc.startDate);
+  // Normalize về ngày 1 UTC để tránh timezone overflow
+  const normalizedRentPaidUntil = new Date(currentRentPaidUntil);
+  normalizedRentPaidUntil.setUTCDate(1);
+  normalizedRentPaidUntil.setUTCHours(0, 0, 0, 0);
+  const prepaidFromDate = new Date(normalizedRentPaidUntil);
+  prepaidFromDate.setUTCMonth(prepaidFromDate.getUTCMonth() + 1);
+  prepaidFromDate.setUTCDate(1);
+  const actualPrepaidFrom = prepaidFromDate;
+  // prepaidTo = ngày cuối của tháng cuối cùng (prepaidFrom + prepaidMonths - 1)
+  // day=0 → ngày cuối cùng của tháng trước đó → ngày cuối của tháng prepaid cuối cùng
+  // Strip time về 00:00:00.000Z để tránh timezone shift khi hiển thị trên mobile
+  const prepaidToDate = new Date(Date.UTC(
+    actualPrepaidFrom.getUTCFullYear(),
+    actualPrepaidFrom.getUTCMonth() + request.prepaidMonths,
+    0
+  ));
+  prepaidToDate.setUTCHours(0, 0, 0, 0);
+
+  const formatVN = (d) => {
+    const dd = String(d.getUTCDate()).padStart(2, '0');
+    const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const yyyy = d.getUTCFullYear();
+    return `${dd}/${mm}/${yyyy}`;
+  };
+
+  const roomPrice = contractDoc.roomId?.roomTypeId?.currentPrice || 0;
+  const itemNameDesc = `Tiền thuê phòng trả trước ${request.prepaidMonths} tháng (từ ${formatVN(actualPrepaidFrom)} đến ${formatVN(prepaidToDate)})`;
+
+  const datePrefix = `${String(now.getDate()).padStart(2, "0")}${String(now.getMonth() + 1).padStart(2, "0")}${now.getFullYear()}`;
+  const nextSeq = String(Math.floor(Math.random() * 10000)).padStart(4, "0");
+  const invoiceCode = `HD-PREPAID-${datePrefix}-${nextSeq}`;
+
+  const invoicePeriodic = new InvoicePeriodic({
+    invoiceCode,
+    contractId: contractId,
+    title: `Thanh toán tiền phòng trả trước (${request.prepaidMonths} tháng)`,
+    items: [
+      {
+        itemName: itemNameDesc,
+        oldIndex: 0,
+        newIndex: 0,
+        usage: request.prepaidMonths,
+        unitPrice: roomPrice,
+        amount: request.totalAmount,
+        isIndex: false,
+      },
+    ],
+    totalAmount: request.totalAmount,
+    status: "Paid",
+    dueDate: now,
+  });
+  await invoicePeriodic.save();
+
+  // Cập nhật rentPaidUntil trong contract (không vượt quá endDate)
+  const newRentPaidUntil = new Date(prepaidToDate);
+  const contractEnd = new Date(contractDoc.endDate);
+  if (newRentPaidUntil > contractEnd) {
+    newRentPaidUntil.setUTCDate(contractEnd.getUTCDate());
+    newRentPaidUntil.setUTCHours(contractEnd.getUTCHours(), contractEnd.getUTCMinutes(), 0, 0);
+  }
+
+  console.log("[DEBUG] currentRentPaidUntil:", contractDoc.rentPaidUntil?.toISOString?.() ?? contractDoc.rentPaidUntil);
+  console.log("[DEBUG] normalizedRentPaidUntil:", normalizedRentPaidUntil.toISOString());
+  console.log("[DEBUG] actualPrepaidFrom:", actualPrepaidFrom.toISOString());
+  console.log("[DEBUG] prepaidToDate:", prepaidToDate.toISOString());
+  console.log("[DEBUG] newRentPaidUntil (to DB):", newRentPaidUntil.toISOString());
+  console.log("[DEBUG] prepaidMonths:", request.prepaidMonths);
+
+  await Contract.findByIdAndUpdate(contractId, {
+    rentPaidUntil: newRentPaidUntil,
+  });
+
+  // Cập nhật request
+  request.status = "paid";
+  request.invoicePeriodicId = invoicePeriodic._id;
+  await PrepaidRentRequest.findByIdAndUpdate(request._id, {
+    status: "paid",
+    invoicePeriodicId: invoicePeriodic._id,
+  });
+
+  return {
+    success: true,
+    requestId: request._id,
+    invoicePeriodicId: invoicePeriodic._id,
+    invoiceCode: invoicePeriodic.invoiceCode,
+    totalAmount: request.totalAmount,
+    prepaidMonths: request.prepaidMonths,
+    newRentPaidUntil,
+    paymentDate: payment.paymentDate,
+  };
+};
+
+// ============================================================
+// Hủy yêu cầu trả trước (khi user hủy hoặc hết hạn)
+// ============================================================
+exports.cancelPrepaidRentRequest = async (transactionCode) => {
+  const request = await PrepaidRentRequest.findOne({ transactionCode, status: "pending" });
+  if (!request) {
+    throw { status: 404, message: "Không tìm thấy yêu cầu đang chờ thanh toán." };
+  }
+
+  // Xóa payment nếu có
+  if (request.paymentId) {
+    await Payment.findByIdAndDelete(request.paymentId);
+  }
+
+  // Cập nhật request
+  request.status = "cancelled";
+  await request.save();
+
+  return { success: true, transactionCode, status: "cancelled" };
+};
+
+// ============================================================
+// Lấy lịch sử trả trước của tenant
+// ============================================================
+exports.getPrepaidRentHistory = async (tenantId) => {
+  const requests = await PrepaidRentRequest.find({ tenantId })
+    .populate({
+      path: "contractId",
+      select: "contractCode roomId",
+      populate: { path: "roomId", select: "name" },
+    })
+    .populate("invoicePeriodicId", "invoiceCode title totalAmount status")
+    .sort({ createdAt: -1 })
+    .lean();
+
+  return requests.map((r) => ({
+    _id: r._id,
+    contractCode: r.contractId?.contractCode,
+    roomName: r.contractId?.roomId?.name,
+    prepaidMonths: r.prepaidMonths,
+    totalAmount: r.totalAmount,
+    status: r.status,
+    transactionCode: r.transactionCode,
+    invoiceCode: r.invoicePeriodicId?.invoiceCode,
+    createdAt: r.createdAt,
+    updatedAt: r.updatedAt,
+  }));
+};

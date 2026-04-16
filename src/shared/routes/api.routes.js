@@ -53,14 +53,19 @@ ApiRouter.use("/requests", requestRoutes);
 ApiRouter.use("/upload", uploadRoutes);
 
 const contractRoutes = require("../../modules/contract-management/routes/contract.routes");
-const depositRoutes = require("../../modules/contract-management/routes/deposit.routes");
+// NOTE: deposit.routes.js (contract-management) đã bị xóa khỏi đây vì xung đột với deposit-room.routes.js
+// Các API quản lý deposit cũ (GET /, POST /, GET /:id) đã được gộp vào roomDepositRoutes bên dưới
+const bookingRequestRoutes = require("../../modules/contract-management/routes/booking-request.routes");
 const moveOutRoutes = require("../../modules/contract-management/routes/moveout_request.routes");
 const accountRoutes = require("../../modules/account-management/routes/account.routes");
+const liquidationRoutes = require("../../modules/contract-management/routes/liquidation.routes");
 
 ApiRouter.use("/contracts", contractRoutes);
-ApiRouter.use("/deposits", depositRoutes);
+ApiRouter.use("/renewals", require("../../modules/contract-management/routes/renewal.routes"));
+ApiRouter.use("/booking-requests", bookingRequestRoutes);
 ApiRouter.use("/move-outs", moveOutRoutes);
 ApiRouter.use("/accounts", accountRoutes);
+ApiRouter.use("/liquidations", liquidationRoutes);
 ApiRouter.use("/devices", deviceRoutes);
 ApiRouter.use("/invoices", invoiceRoutes);
 ApiRouter.use("/meter-readings", meterreadingRoutes);
@@ -70,6 +75,8 @@ const sepayWebhookRoutes = require("./sepay-webhook.routes");
 ApiRouter.use("/webhook", sepayWebhookRoutes);
 ApiRouter.use("/financial-tickets", financialTicketRoutes);
 
+// /deposits: chỉ dùng deposit-room.routes.js (có /initiate, /status/:code, /cancel/:code)
+// Đây là route /deposits duy nhất — không được mount thêm route /deposits nào khác!
 const roomDepositRoutes = require("../../modules/room-floor-management/routes/deposit-room.routes");
 ApiRouter.use("/deposits", roomDepositRoutes);
 
@@ -87,5 +94,11 @@ ApiRouter.use("/reports", reportRoutes);
 const financeRoute = require('../../modules/report-management/routes/finance.routes');
 ApiRouter.use("/finance", financeRoute);
 
+const prepaidRentRoutes = require("../../modules/prepaid-rent/routes/prepaid_rent.routes");
+ApiRouter.use("/prepaid-rent", prepaidRentRoutes);
+
+// Reconciliation routes - tạm thời disabled (cần SEPAY_API_TOKEN)
+// const reconciliationRoutes = require("./reconciliation.routes");
+// ApiRouter.use("/reconciliation", reconciliationRoutes);
 
 module.exports = ApiRouter;

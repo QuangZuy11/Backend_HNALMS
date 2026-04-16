@@ -1,13 +1,17 @@
 const Contract = require("../models/contract.model");
+const {
+  hasBookedSuccessorAfterDeclinedLease,
+} = require("../services/declinedRenewalSuccessor.service");
 const BookService = require("../models/bookservice.model");
+const BookingRequest = require("../models/booking-request.model");
 const Room = require("../../room-floor-management/models/room.model");
 const User = require("../../authentication/models/user.model");
 const UserInfo = require("../../authentication/models/userInfor.model");
 const Deposit = require("../models/deposit.model");
 const InvoiceIncurred = require("../../invoice-management/models/invoice_incurred.model");
+const InvoicePeriodic = require("../../invoice-management/models/invoice_periodic.model");
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs"); // Ensure bcryptjs is installed
-const { checkAndSendRenewalNotifications } = require("../services/contract-renewal.service");
 
 // Helper to generate random digit string (numbers only)
 const generateRandomString = (length) => {
@@ -39,6 +43,7 @@ exports.createContract = async (req, res) => {
     const {
       roomId,
       depositId, // Optional
+      bookingRequestId, // Optional (thay thế cho depositId từ request online)
       tenantInfo, // { fullName, dob, cccd, phone, email, address, ... }
       coResidents, // Array
       contractDetails, // { startDate, duration, services, paymentCycle, rentPaidUntil }
@@ -51,35 +56,68 @@ exports.createContract = async (req, res) => {
       .populate("roomTypeId")
       .session(session);
     if (!room) throw new Error("Room not found");
-    if (room.status !== "Available" && room.status !== "Deposited") {
+
+    if (await hasBookedSuccessorAfterDeclinedLease(room._id, session)) {
+      throw new Error(
+        "Đã có hợp đồng kế tiếp cho phòng sau kỳ thuê hiện tại. Không thể tạo thêm hợp đồng.",
+      );
+    }
+
+    // 1.0 Check if room is Occupied but renewalStatus = "declined" → allow new contract
+    // Người thuê hiện tại đã từ chối gia hạn, phòng có thể được ký hợp đồng mới
+    let isRenewalDeclined = false;
+    let occupiedDeclinedContract = null;
+    if (room.status === "Occupied") {
+      occupiedDeclinedContract = await Contract.findOne({
+        roomId: room._id,
+        status: "active",
+        isActivated: true,
+      }).session(session).sort({ startDate: -1 });
+      if (occupiedDeclinedContract?.renewalStatus === "declined") {
+        isRenewalDeclined = true;
+      }
+    }
+
+    if (room.status !== "Available" && room.status !== "Deposited" && !isRenewalDeclined) {
       if (room.status === "Occupied")
         throw new Error("Room is currently occupied.");
     }
 
-    // 1.2 Check for Future Contract if room is Deposited
+    // 1.2 HĐ "khách kế tiếp" khi phòng Deposited: chỉ các HĐ active bắt đầu SAU ngày bắt đầu HĐ đang tạo.
+    // Trước đây dùng startDate > new Date() nên lẫn HĐ cũ (vd. 8/4) dù HĐ mới bắt đầu 10/5 → báo lỗi sai.
     let futureContract = null;
-    if (room.status === "Deposited") {
+    if (room.status === "Deposited" && contractDetails?.startDate) {
+      const newContractStart = new Date(contractDetails.startDate);
+      newContractStart.setHours(0, 0, 0, 0);
       futureContract = await Contract.findOne({
         roomId: room._id,
         status: "active",
-        startDate: { $gt: new Date() }
-      }).session(session).sort({ startDate: 1 });
+        startDate: { $gt: newContractStart },
+      })
+        .session(session)
+        .sort({ startDate: 1 });
     }
 
-    // 1.5. Validate startDate: chỉ được tối đa 7 ngày từ khi bắt đầu cọc (nếu có deposit)
+    // 1.5. Validate startDate: >= ngày cọc, và <= 6 tháng kể từ ngày cọc (nếu có deposit)
     if (depositId) {
       const deposit = await Deposit.findById(depositId).session(session);
       if (deposit) {
         const depositCreatedDate = new Date(deposit.createdAt);
-        const maxStartDate = new Date(
-          depositCreatedDate.getTime() + 7 * 24 * 60 * 60 * 1000,
-        );
+        depositCreatedDate.setHours(0, 0, 0, 0);
+        const maxStartDate = new Date(depositCreatedDate);
+        maxStartDate.setMonth(maxStartDate.getMonth() + 6);
         const contractStartDate = new Date(contractDetails.startDate);
+        contractStartDate.setHours(0, 0, 0, 0);
 
+        if (contractStartDate < depositCreatedDate) {
+          throw new Error(
+            `Ngày bắt đầu hợp đồng (${contractStartDate.toLocaleDateString("vi-VN")}) không được trước ngày cọc (${depositCreatedDate.toLocaleDateString("vi-VN")}).`
+          );
+        }
         if (contractStartDate > maxStartDate) {
-           // We might want to bypass the 7-day rule here if we are creating a short-term rental.
-           // However, let's keep it strictly for the deposit itself to be valid.
-           // Bypassing it could allow indefinitely expired deposits to be used.
+          throw new Error(
+            `Ngày bắt đầu hợp đồng (${contractStartDate.toLocaleDateString("vi-VN")}) không được vượt quá 6 tháng kể từ ngày cọc (${depositCreatedDate.toLocaleDateString("vi-VN")}). Vui lòng chọn ngày bắt đầu trước ngày ${maxStartDate.toLocaleDateString("vi-VN")}.`
+          );
         }
       }
     }
@@ -87,7 +125,8 @@ exports.createContract = async (req, res) => {
     // 1.8 Validate Short-term Rental (if future contract exists)
     const newContractEndDate = new Date(contractDetails.startDate);
     newContractEndDate.setMonth(newContractEndDate.getMonth() + contractDetails.duration);
-    
+    newContractEndDate.setDate(newContractEndDate.getDate() - 1);
+
     if (futureContract) {
       const futureStartDate = new Date(futureContract.startDate);
       // The new rental MUST end before the future contract starts
@@ -95,6 +134,44 @@ exports.createContract = async (req, res) => {
         throw new Error(
           `Phòng đã có người cọc trước. Thời hạn thuê của bạn kết thúc vào ngày ${newContractEndDate.toLocaleDateString("vi-VN")} vượt quá ngày bắt đầu của khách kế tiếp (${futureStartDate.toLocaleDateString("vi-VN")}). Vui lòng giảm thời hạn thuê xuống.`
         );
+      }
+    }
+
+    // HĐ mới (khách B) phải bắt đầu sau ngày kết thúc HĐ hiện tại (khách A đã declined)
+    if (isRenewalDeclined && occupiedDeclinedContract) {
+      const newStart = new Date(contractDetails.startDate);
+      newStart.setHours(0, 0, 0, 0);
+      const prevEnd = new Date(occupiedDeclinedContract.endDate);
+      prevEnd.setHours(0, 0, 0, 0);
+      if (newStart <= prevEnd) {
+        throw new Error(
+          `Ngày bắt đầu hợp đồng mới phải sau ngày kết thúc hợp đồng hiện tại (${prevEnd.toLocaleDateString("vi-VN")}).`,
+        );
+      }
+
+      // Validate thêm: HĐ mới phải kết thúc trước ngày bắt đầu của HĐ chưa kích hoạt (vd HĐ 464)
+      // Tìm HĐ active chưa kích hoạt có startDate > newStart
+      const upcomingInactiveContract = await Contract.findOne({
+        roomId: room._id,
+        isActivated: false,
+        status: { $nin: ["terminated", "expired"] },
+        startDate: { $gt: newStart },
+        _id: { $ne: occupiedDeclinedContract._id },
+      }).session(session).sort({ startDate: 1 }).lean();
+
+      if (upcomingInactiveContract) {
+        const inactiveStart = new Date(upcomingInactiveContract.startDate);
+        inactiveStart.setHours(0, 0, 0, 0);
+        // newContractEndDate đã được tính ở dòng 125
+        const checkEnd = new Date(contractDetails.startDate);
+        checkEnd.setMonth(checkEnd.getMonth() + contractDetails.duration);
+        checkEnd.setDate(checkEnd.getDate() - 1);
+        checkEnd.setHours(0, 0, 0, 0);
+        if (checkEnd >= inactiveStart) {
+          throw new Error(
+            `Thời hạn hợp đồng mới phải kết thúc trước ngày bắt đầu hợp đồng tiếp theo (${inactiveStart.toLocaleDateString("vi-VN")}). Vui lòng giảm thời hạn thuê.`,
+          );
+        }
       }
     }
 
@@ -120,31 +197,178 @@ exports.createContract = async (req, res) => {
     startDateObj.setHours(0, 0, 0, 0);
     const msPerDay = 1000 * 60 * 60 * 24;
     const daysUntilStart = Math.ceil((startDateObj - todayForCalc) / msPerDay);
-    // Nếu startDate > hôm nay → tạo tài khoản inactive (chưa được đăng nhập)
-    const tenantInitialStatus = daysUntilStart > 0 ? "inactive" : "active";
+
+    // Nếu startDate > 30 ngày → hợp đồng inactive, user inactive, chưa activate
+    // Nếu startDate <= 30 ngày (đã đến hoặc < 30 ngày nữa) → hợp đồng active, user active, đã activate
+    const isFutureLong = daysUntilStart > 30;
+    const tenantInitialStatus = isFutureLong ? "inactive" : "active";
+    const contractIsActivated = !isFutureLong;
+    const contractInitialStatus = isFutureLong ? "inactive" : "active";
 
     // 2. Handle Tenant Account
-    // Check by CCCD first (primary identity document in VN)
+    // Check by CCCD + Phone + Email (all 3 must match = same person)
+    // If only 1 of 3 fields matches → error: field already registered
     let isNewUser = false;
     let passwordRaw = null;
     let user = null;
 
-    const existingUserInfo = tenantInfo.cccd
+    // Find existing UserInfo by CCCD (primary key)
+    const existingUserInfoByCCCD = tenantInfo.cccd
       ? await UserInfo.findOne({ cccd: tenantInfo.cccd }).session(session)
       : null;
 
-    if (existingUserInfo) {
-      // CCCD đã tồn tại → reuse account cũ, không tạo mới
-      user = await User.findById(existingUserInfo.userId).session(session);
-      if (!user) {
-        throw new Error(`Tìm thấy CCCD ${tenantInfo.cccd} nhưng tài khoản liên kết không tồn tại. Vui lòng liên hệ quản trị viên.`);
-      }
-      isNewUser = false;
-      console.log(`[CREATE CONTRACT] Existing User found by CCCD: ID=${user._id}, cccd=${tenantInfo.cccd}`);
-    } else {
-      // CCCD chưa tồn tại → tạo tài khoản mới ngay
-      isNewUser = true;
+    // Also check by phone and email to detect partial matches
+    const existingUserInfoByPhone = tenantInfo.phone
+      ? await UserInfo.findOne({ phone: tenantInfo.phone }).session(session)
+      : null;
 
+    const existingUserInfoByEmail = tenantInfo.email
+      ? await UserInfo.findOne({ email: tenantInfo.email }).session(session)
+      : null;
+
+    // Check if ALL 3 fields match the same person (same UserInfo)
+    const allThreeMatch =
+      existingUserInfoByCCCD &&
+      existingUserInfoByPhone &&
+      existingUserInfoByEmail &&
+      existingUserInfoByCCCD._id.equals(existingUserInfoByPhone._id) &&
+      existingUserInfoByCCCD._id.equals(existingUserInfoByEmail._id);
+
+    // Check if only CCCD matches (but phone/email mismatch → partial match → error)
+    const onlyCccdMatch = existingUserInfoByCCCD &&
+      (!existingUserInfoByPhone || !existingUserInfoByCCCD._id.equals(existingUserInfoByPhone._id)) &&
+      (!existingUserInfoByEmail || !existingUserInfoByCCCD._id.equals(existingUserInfoByEmail._id));
+
+    // Check if only Phone matches (but CCCD/email mismatch → partial match → error)
+    const onlyPhoneMatch = existingUserInfoByPhone &&
+      (!existingUserInfoByCCCD || !existingUserInfoByCCCD._id.equals(existingUserInfoByPhone._id)) &&
+      (!existingUserInfoByEmail || !existingUserInfoByEmail._id.equals(existingUserInfoByPhone._id));
+
+    // Check if only Email matches (but CCCD/phone mismatch → partial match → error)
+    const onlyEmailMatch = existingUserInfoByEmail &&
+      (!existingUserInfoByCCCD || !existingUserInfoByCCCD._id.equals(existingUserInfoByEmail._id)) &&
+      (!existingUserInfoByPhone || !existingUserInfoByPhone._id.equals(existingUserInfoByEmail._id));
+
+    // Also check if phone + email match each other but not CCCD
+    const phoneAndEmailMatch =
+      existingUserInfoByPhone &&
+      existingUserInfoByEmail &&
+      existingUserInfoByPhone._id.equals(existingUserInfoByEmail._id) &&
+      (!existingUserInfoByCCCD || !existingUserInfoByCCCD._id.equals(existingUserInfoByPhone._id));
+
+    // Also check if CCCD + phone match but email differs
+    const cccdAndPhoneMatch =
+      existingUserInfoByCCCD &&
+      existingUserInfoByPhone &&
+      existingUserInfoByCCCD._id.equals(existingUserInfoByPhone._id) &&
+      (!existingUserInfoByEmail || !existingUserInfoByCCCD._id.equals(existingUserInfoByEmail._id));
+
+    // Also check if CCCD + email match but phone differs
+    const cccdAndEmailMatch =
+      existingUserInfoByCCCD &&
+      existingUserInfoByEmail &&
+      existingUserInfoByCCCD._id.equals(existingUserInfoByEmail._id) &&
+      (!existingUserInfoByPhone || !existingUserInfoByCCCD._id.equals(existingUserInfoByPhone._id));
+
+    // Determine which specific field caused the partial match error
+    if (onlyCccdMatch) {
+      throw new Error(`Số CCCD đã thuộc sở hữu của người khác. Vui lòng kiểm tra lại.`);
+    }
+    if (onlyPhoneMatch) {
+      throw new Error(`Số điện thoại đã được đăng ký trước đó. Vui lòng kiểm tra lại.`);
+    }
+    if (onlyEmailMatch) {
+      throw new Error(`Email đã được đăng ký trước đó. Vui lòng kiểm tra lại.`);
+    }
+    if (phoneAndEmailMatch) {
+      throw new Error(`Số điện thoại và email đã thuộc về cùng một người khác. Vui lòng kiểm tra lại.`);
+    }
+    if (cccdAndPhoneMatch) {
+      throw new Error(`Số CCCD và số điện thoại đã thuộc về cùng một người khác. Vui lòng kiểm tra lại.`);
+    }
+    if (cccdAndEmailMatch) {
+      throw new Error(`Số CCCD và email đã thuộc về cùng một người khác. Vui lòng kiểm tra lại.`);
+    }
+
+    // ALL 3 match → same person. Check if they already have 2 contracts for different rooms
+    if (allThreeMatch) {
+      const existingUser = await User.findById(existingUserInfoByCCCD.userId).session(session);
+      if (existingUser) {
+        // Count active/inactive contracts for this user
+        const userContracts = await Contract.find({
+          tenantId: existingUser._id,
+          status: { $in: ["active", "inactive"] },
+        }).session(session);
+
+        if (userContracts.length >= 2) {
+          // Get room info for existing contracts
+          const roomIds = [...new Set(userContracts.map(c => c.roomId.toString()))];
+          const rooms = await Room.find({ _id: { $in: roomIds } }).session(session);
+          const roomNames = rooms.map(r => r.name || r.roomCode || r._id).join(", ");
+
+          // Send notification email
+          const samePersonEmailSubject = "Thông báo: Phát hiện đăng ký trùng thông tin - HNALMS";
+          const samePersonEmailContent = `
+            <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+              <div style="background: #FEF3C7; padding: 20px; text-align: center; border-radius: 8px 8px 0 0;">
+                <h1 style="margin: 0; color: #92400E;">⚠️ Thông Báo Quan Trọng</h1>
+              </div>
+              <div style="background: #fff; padding: 30px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 8px 8px;">
+                <h2 style="color: #1F2937;">Xin chào ${tenantInfo.fullName},</h2>
+                <p>Chúng tôi phát hiện rằng thông tin CCCD, số điện thoại và email bạn vừa đăng ký <strong>trùng khớp với một tài khoản đã có trong hệ thống</strong>.</p>
+                <div style="background: #f3f4f6; padding: 15px; border-radius: 6px; margin: 15px 0;">
+                  <p style="margin: 0;"><strong>📋 Thông tin được phát hiện trùng:</strong></p>
+                  <ul style="margin: 10px 0 0 20px; padding: 0;">
+                    <li>CCCD: <strong>${tenantInfo.cccd}</strong></li>
+                    <li>Số điện thoại: <strong>${tenantInfo.phone}</strong></li>
+                    <li>Email: <strong>${tenantInfo.email}</strong></li>
+                  </ul>
+                </div>
+                <div style="background: #fee2e2; padding: 15px; border-radius: 6px; margin: 15px 0;">
+                  <p style="margin: 0; color: #991B1B;"><strong>⚠️ Hệ thống phát hiện bạn đã có ${userContracts.length} hợp đồng thuê phòng:</strong></p>
+                  <p style="margin: 10px 0 0 0; color: #991B1B;">Phòng: <strong>${roomNames}</strong></p>
+                  <p style="margin: 5px 0 0 0; color: #991B1B;">Nếu đây là cùng một người và bạn muốn thuê thêm phòng mới, vui lòng liên hệ trực tiếp với Ban quản lý để được hỗ trợ.</p>
+                </div>
+                <p>Không tạo tài khoản mới. Tài khoản của bạn đã có sẵn trong hệ thống.</p>
+                <p style="margin-top: 20px;">Trân trọng,<br><strong>Ban Quản Lý Tòa Nhà Hoàng Nam</strong></p>
+              </div>
+              <div style="text-align: center; margin-top: 20px; color: #6b7280; font-size: 12px;">
+                <p>&copy; ${new Date().getFullYear()} HNALMS. All rights reserved.</p>
+              </div>
+            </div>
+          `;
+          try {
+            await sendEmail(tenantInfo.email, samePersonEmailSubject, samePersonEmailContent);
+          } catch (emailErr) {
+            console.error("Failed to send same-person notification email:", emailErr);
+          }
+
+          throw new Error(`Thông tin CCCD, SĐT và email trùng với tài khoản đã có. Bạn đã có ${userContracts.length} HĐ tại ${roomNames}. Không thể tạo tài khoản mới. Vui lòng liên hệ Ban quản lý.`);
+        }
+
+        // Same person but less than 2 contracts → reuse existing account
+        if (user && user.status === "active") {
+          isNewUser = false;
+          console.log(`[CREATE CONTRACT] Same person (all 3 fields match) found: User=${user._id}, cccd=${tenantInfo.cccd}, has ${userContracts.length} contract(s). Reusing account.`);
+        } else {
+          // Account inactive or deleted → create new one, reuse UserInfo
+          isNewUser = true;
+          user = null; // will be created below
+          console.log(`[CREATE CONTRACT] Same person but account inactive/deleted. Creating new account, reusing UserInfo. existingUser=${user ? user._id : 'null'}`);
+        }
+      } else {
+        // No User account at all → create new
+        isNewUser = true;
+        user = null;
+        console.log(`[CREATE CONTRACT] UserInfo exists but User account deleted. Creating new account for all 3 fields match.`);
+      }
+    } else {
+      // No existing person found at all → create new account
+      isNewUser = true;
+      console.log(`[CREATE CONTRACT] No existing person found by CCCD/Phone/Email. Creating new account. cccd=${tenantInfo.cccd}, phone=${tenantInfo.phone}, email=${tenantInfo.email}`);
+    }
+
+    if (isNewUser) {
       passwordRaw = generateRandomString(8);
       const hashedPassword = await bcrypt.hash(passwordRaw, 10);
 
@@ -180,50 +404,144 @@ exports.createContract = async (req, res) => {
       await user.save({ session });
       console.log(`[CREATE USER] ✅ New Tenant created with ID: ${user._id}`);
 
-      // Create UserInfo
-      const userInfo = new UserInfo({
-        userId: user._id,
-        fullname: tenantInfo.fullName,
-        cccd: tenantInfo.cccd,
-        address: tenantInfo.address,
-        dob: tenantInfo.dob,
-        gender: tenantInfo.gender || "Other",
-      });
-      await userInfo.save({ session });
+      if (existingUserInfoByCCCD) {
+        // UserInfo đã tồn tại (CCCD cũ) → cập nhật liên kết userId mới
+        existingUserInfoByCCCD.userId = user._id;
+        existingUserInfoByCCCD.fullname = tenantInfo.fullName;
+        existingUserInfoByCCCD.address = tenantInfo.address;
+        existingUserInfoByCCCD.dob = tenantInfo.dob;
+        existingUserInfoByCCCD.gender = tenantInfo.gender || "Other";
+        if (tenantInfo.phone) existingUserInfoByCCCD.phone = tenantInfo.phone;
+        if (tenantInfo.email) existingUserInfoByCCCD.email = tenantInfo.email;
+        await existingUserInfoByCCCD.save({ session });
+        console.log(`[CREATE USER] ✅ Reused existing UserInfo for CCCD=${tenantInfo.cccd}, linked to new user=${user._id}`);
+      } else {
+        // Tạo UserInfo hoàn toàn mới
+        const userInfo = new UserInfo({
+          userId: user._id,
+          fullname: tenantInfo.fullName,
+          cccd: tenantInfo.cccd,
+          phone: tenantInfo.phone,
+          email: tenantInfo.email,
+          address: tenantInfo.address,
+          dob: tenantInfo.dob,
+          gender: tenantInfo.gender || "Other",
+        });
+        await userInfo.save({ session });
+      }
     }
 
     // 3. Find the Deposit linked to this room (status = "Held")
+    // Priority: activationStatus=null (new, for future contract) > activationStatus=false (reset old deposit) > activationStatus=true (already active)
+    // Skip deposits already linked to any existing contract (to prevent mixing deposits between contracts)
     let linkedDepositId = depositId || null;
     if (!linkedDepositId && room.status === "Deposited") {
+      // Get all contracts for this room (any status) to find which deposits are already taken
+      const allRoomContracts = await Contract.find({
+        roomId: room._id,
+      }).session(session);
+
+      const takenDepositIds = allRoomContracts
+        .filter(c => c.depositId)
+        .map(c => c.depositId.toString());
+
       const heldDeposits = await Deposit.find({
         room: room._id,
         status: "Held",
       }).session(session);
 
       if (heldDeposits.length > 0) {
-        if (heldDeposits.length === 1) {
-          linkedDepositId = heldDeposits[0]._id;
+        // Step 1: Find deposit NOT linked to any existing contract AND with activationStatus=null (newest, for future contract)
+        const newFreeDeposit = heldDeposits.find(
+          d => !takenDepositIds.includes(d._id.toString()) && d.activationStatus === null
+        );
+
+        if (newFreeDeposit) {
+          linkedDepositId = newFreeDeposit._id;
         } else {
-          // If there are multiple Held deposits (e.g., short-term + future contract),
-          // find the one that is NOT linked to any active contract
-          const activeContracts = await Contract.find({
-            roomId: room._id,
-            status: "active"
-          }).session(session);
-          
-          const freeDeposit = heldDeposits.find(d => !activeContracts.some(c => c.depositId?.toString() === d._id.toString()));
-          if (freeDeposit) {
-            linkedDepositId = freeDeposit._id;
+          // Step 2: Find deposit NOT linked to any existing contract AND with activationStatus=false (reset old)
+          const resetFreeDeposit = heldDeposits.find(
+            d => !takenDepositIds.includes(d._id.toString()) && d.activationStatus === false
+          );
+
+          if (resetFreeDeposit) {
+            linkedDepositId = resetFreeDeposit._id;
           } else {
-            linkedDepositId = heldDeposits[0]._id; // Fallback
+            // Step 3: Find deposit NOT linked to any existing contract (any status)
+            const anyFreeDeposit = heldDeposits.find(
+              d => !takenDepositIds.includes(d._id.toString())
+            );
+
+            if (anyFreeDeposit) {
+              linkedDepositId = anyFreeDeposit._id;
+            } else {
+              // Fallback: all deposits are taken → user must explicitly select a deposit
+              linkedDepositId = null;
+            }
           }
         }
+      }
+    }
+
+    // 3.1. Process BookingRequest if provided
+    if (bookingRequestId) {
+      const bRequest = await BookingRequest.findById(bookingRequestId).session(session);
+      if (bRequest) {
+        bRequest.status = "Processed";
+        await bRequest.save({ session });
+
+        // Auto create a Held deposit to satisfy system constraints since this contract originated from a booking request
+        if (!linkedDepositId) {
+          const depositAmount = parseFloat(room.roomTypeId?.currentPrice?.toString() || "0");
+          
+          const roomCodeRaw = room.roomCode || room.name || "PHONG";
+          const roomCodeShort = roomCodeRaw.replace(/Phòng\s*/gi, 'P').replace(/[^a-zA-Z0-9]/g, '');
+          const random8 = String(Math.floor(10000000 + Math.random() * 90000000));
+          const transactionCode = `Coc ${roomCodeShort} ${random8}`;
+          
+          const deposit = new Deposit({
+            name: bRequest.name,
+            phone: bRequest.phone,
+            email: bRequest.email,
+            room: room._id,
+            amount: depositAmount,
+            status: "Held",
+            transactionCode: transactionCode,
+            activationStatus: contractIsActivated ? true : null,
+            idCard: bRequest.idCard,
+            startDate: bRequest.startDate,
+            duration: bRequest.duration,
+            prepayMonths: bRequest.prepayMonths,
+            coResidents: bRequest.coResidents,
+          });
+          await deposit.save({ session });
+          linkedDepositId = deposit._id;
+        }
+      }
+    }
+
+    // 3.5. Update linked deposit's activationStatus
+    // - Nếu hợp đồng đã active (startDate <= today): activationStatus = true
+    // - Nếu hợp đồng chưa active (startDate > today): activationStatus = null (chờ ngày kích hoạt)
+    if (linkedDepositId) {
+      const linkedDeposit = await Deposit.findById(linkedDepositId).session(session);
+      if (linkedDeposit) {
+        if (contractIsActivated) {
+          linkedDeposit.activationStatus = true;
+        } else {
+          linkedDeposit.activationStatus = null; // Chưa active, chờ đến ngày
+        }
+        if (linkedDeposit.status === "Pending") {
+          linkedDeposit.status = "Held";
+        }
+        await linkedDeposit.save({ session });
       }
     }
 
     // 4. Create Contract Record
     const endDate = new Date(contractDetails.startDate);
     endDate.setMonth(endDate.getMonth() + contractDetails.duration);
+    endDate.setDate(endDate.getDate() - 1);
 
     const newContract = new Contract({
       contractCode: generateContractCode(room.name),
@@ -235,13 +553,23 @@ exports.createContract = async (req, res) => {
       endDate: endDate,
       rentPaidUntil: rentPaidUntil || contractDetails.rentPaidUntil || null,
       duration: contractDetails.duration,
-      status: "active",
+      status: contractInitialStatus,
+      isActivated: contractIsActivated,
       images: req.body.images || [],
     });
 
     await newContract.save({ session });
 
-    // 4. Create BookService record (1 document per contract, array of services)
+    // 4.1. Update linked deposit's contractId (liên kết deposit → contract)
+    if (linkedDepositId) {
+      await Deposit.findByIdAndUpdate(
+        linkedDepositId,
+        { contractId: newContract._id },
+        { session }
+      );
+    }
+
+    // 4.2. Create BookService record (1 document per contract, array of services)
     if (bookServices && bookServices.length > 0) {
       const contractStartDate = new Date(contractDetails.startDate);
       const bookServiceRecord = new BookService({
@@ -259,25 +587,64 @@ exports.createContract = async (req, res) => {
     // 4.5 Create prepaid invoice if prepayMonths is provided
     const prepayMonths = req.body.prepayMonths ? Number(req.body.prepayMonths) : 0;
     if (prepayMonths > 0) {
-      const totalAmount = prepayMonths * roomPrice;
       const date = new Date();
       const datePrefix = `${String(date.getDate()).padStart(2, '0')}${String(date.getMonth() + 1).padStart(2, '0')}${date.getFullYear()}`;
       const nextSeq = String(Math.floor(Math.random() * 10000)).padStart(4, '0');
       const invoiceCode = `HD-PREPAID-${datePrefix}-${nextSeq}`;
+      const dueDate = date;
 
-      const prepaidInvoice = new InvoiceIncurred({
+      const formatVN = (d) => {
+        const dd = String(d.getDate()).padStart(2, '0');
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const yyyy = d.getFullYear();
+        return `${dd}/${mm}/${yyyy}`;
+      };
+
+      const prepaidFrom = new Date(contractDetails.startDate);
+      prepaidFrom.setHours(12, 0, 0, 0);
+
+      const isFirstDay = prepaidFrom.getDate() === 1;
+      
+      let actualPrepaidFrom = new Date(prepaidFrom);
+      if (!isFirstDay) {
+        // Bắt đầu từ ngày 1 của tháng tiếp theo
+        actualPrepaidFrom = new Date(prepaidFrom.getFullYear(), prepaidFrom.getMonth() + 1, 1);
+        actualPrepaidFrom.setHours(12, 0, 0, 0);
+      }
+
+      const prepaidTo = new Date(actualPrepaidFrom.getFullYear(), actualPrepaidFrom.getMonth() + prepayMonths, 0);
+      prepaidTo.setHours(12, 0, 0, 0);
+
+      const totalAmount = prepayMonths * roomPrice;
+      const itemNameDesc = `Tiền thuê phòng trả trước ${prepayMonths} tháng (từ ${formatVN(actualPrepaidFrom)} đến ${formatVN(prepaidTo)})`;
+
+      const prepaidInvoice = new InvoicePeriodic({
         invoiceCode,
         contractId: newContract._id,
-        repairRequestId: null,
         title: `Thanh toán tiền phòng trả trước (${prepayMonths} tháng)`,
+        items: [
+          {
+            itemName: itemNameDesc,
+            oldIndex: 0,
+            newIndex: 0,
+            usage: prepayMonths,
+            unitPrice: roomPrice,
+            amount: totalAmount,
+            isIndex: false,
+          }
+        ],
         totalAmount,
         status: "Paid",
-        type: "prepaid",
-        dueDate: new Date(),
-        images: [],
+        dueDate,
       });
       await prepaidInvoice.save({ session });
+
+      // Cập nhật rentPaidUntil cho hợp đồng
+      newContract.rentPaidUntil = prepaidTo;
+      await newContract.save({ session });
     }
+
+
 
     // 5. Update Room Status
     // Nếu hợp đồng bắt đầu ngay hôm nay hoặc trong quá khứ -> Occupied
@@ -295,42 +662,64 @@ exports.createContract = async (req, res) => {
     await session.commitTransaction();
     session.endSession();
 
-    // 6. Send Email Notification to the tenant's email from the form (NOT user.email from DB)
-    if (isNewUser) {
-      const recipientEmail = tenantInfo.email;
-      console.log(`[DEBUG] Preparing to send email to ${recipientEmail}`);
-      const emailContent = EMAIL_TEMPLATES.NEW_CONTRACT_ACCOUNT.getHtml(
+    // 6. Send Email Notifications to the tenant's email from the form
+    const recipientEmail = tenantInfo.email;
+    if (recipientEmail) {
+      // 6.1 Send Account Info (if new user)
+      if (isNewUser) {
+        console.log(`[DEBUG] Preparing to send account email to ${recipientEmail}`);
+        const accountEmailContent = EMAIL_TEMPLATES.NEW_CONTRACT_ACCOUNT.getHtml(
+          tenantInfo.fullName,
+          user.username,
+          passwordRaw,
+          room.name,
+        );
+        try {
+          await sendEmail(recipientEmail, EMAIL_TEMPLATES.NEW_CONTRACT_ACCOUNT.subject, accountEmailContent);
+        } catch (err) {
+          console.error(`❌ [DEBUG] Failed to send account email to ${recipientEmail}:`, err);
+        }
+      }
+
+      // 6.2 Send Contract Form
+      // Lấy thông tin deposit nếu có
+      let depositValueForEmail = 0;
+      if (linkedDepositId) {
+        const d = await Deposit.findById(linkedDepositId);
+        if (d) depositValueForEmail = d.amount;
+      } else {
+        depositValueForEmail = depositAmount; // fallback to roomPrice
+      }
+      
+      const priceStr = new Intl.NumberFormat('vi-VN').format(roomPrice);
+      const startDt = new Date(contractDetails.startDate).toLocaleDateString("vi-VN");
+      const endDt = endDate.toLocaleDateString("vi-VN");
+
+      const contractEmailContent = EMAIL_TEMPLATES.ONLINE_BOOKING_CONTRACT.getHtml(
         tenantInfo.fullName,
-        user.username,
-        passwordRaw,
+        tenantInfo.cccd,
         room.name,
+        contractDetails.duration,
+        priceStr,
+        startDt,
+        endDt,
+        req.body.prepayMonths || 1,
+        depositValueForEmail
       );
 
       try {
-        await sendEmail(
-          recipientEmail,
-          EMAIL_TEMPLATES.NEW_CONTRACT_ACCOUNT.subject,
-          emailContent,
-        );
-        console.log(`✅ [DEBUG] Email successfully sent to ${recipientEmail}`);
-      } catch (emailError) {
-        console.error(
-          `❌ [DEBUG] Failed to send email to ${user.email}:`,
-          emailError,
-        );
-        // We don't throw here to ensure the contract creation success is still returned,
-        // but we might want to warn the user in the response if critical.
+        await sendEmail(recipientEmail, EMAIL_TEMPLATES.ONLINE_BOOKING_CONTRACT.subject, contractEmailContent);
+        console.log(`✅ [DEBUG] Contract email successfully sent to ${recipientEmail}`);
+      } catch (err) {
+        console.error(`❌ [DEBUG] Failed to send contract email to ${recipientEmail}:`, err);
       }
-    } else {
-      console.log(`[DEBUG] User existing. Skipping new account email.`);
     }
 
     const successMsg = isNewUser
       ? (tenantInitialStatus === "inactive"
-          ? `Đã tạo hợp đồng thành công. Tài khoản đã tạo nhưng sẽ được kích hoạt vào ngày ${startDateObj.toLocaleDateString("vi-VN")}. Mật khẩu đã gửi email.`
-          : "Đã tạo hợp đồng thành công. Tài khoản và mật khẩu đã được gửi đến email."
-        )
-      : "Tài khoản cho số điện thoại/email này đã tồn tại nên không tạo mới, hợp đồng đã được tạo thành công!";
+        ? `Đã tạo hợp đồng thành công. Tài khoản sẽ được kích hoạt vào ngày ${startDateObj.toLocaleDateString("vi-VN")}. Mật khẩu và Hợp đồng đã gửi email.`
+        : "Đã tạo hợp đồng thành công. Mật khẩu và Hợp đồng đã được gửi đến email.")
+      : "Đã tạo hợp đồng thành công và gửi Hợp đồng vào email khách hàng (Tài khoản đã tồn tại nên dùng mật khẩu cũ)!";
 
     res.status(201).json({
       success: true,
@@ -392,6 +781,15 @@ exports.getAllContracts = async (req, res) => {
 
 exports.getContractById = async (req, res) => {
   try {
+    const rawIds = await Contract.findById(req.params.id)
+      .select("tenantId depositId")
+      .lean();
+    if (!rawIds) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Contract not found" });
+    }
+
     const contract = await Contract.findById(req.params.id)
       .populate({
         path: "roomId",
@@ -410,10 +808,12 @@ exports.getContractById = async (req, res) => {
         .json({ success: false, message: "Contract not found" });
     }
 
-    // Fetch tenant's UserInfo separately
-    const tenantInfo = await UserInfo.findOne({
-      userId: contract.tenantId._id,
-    });
+    // ObjectId gốc vẫn còn trên document khi populate tenantId trả null (User đã xóa / ref hỏng)
+    const tenantUserId =
+      contract.tenantId?._id ?? contract.tenantId ?? rawIds.tenantId;
+    let tenantInfo = tenantUserId
+      ? await UserInfo.findOne({ userId: tenantUserId })
+      : null;
 
     // Fetch BookService for this contract (with populated service names/prices)
     const bookServiceRecord = await BookService.findOne({
@@ -428,6 +828,55 @@ exports.getContractById = async (req, res) => {
 
     // Convert to plain object and fix Decimal128 fields
     const contractData = contract.toObject();
+
+    // Thông tin Bên B: nếu không còn User/UserInfo, lấy từ phiếu cọc (đã nhập lúc đặt cọc)
+    let depositSnapshot =
+      contractData.depositId &&
+      typeof contractData.depositId === "object" &&
+      contractData.depositId.name
+        ? contractData.depositId
+        : null;
+    if (!depositSnapshot && rawIds.depositId) {
+      depositSnapshot = await Deposit.findById(rawIds.depositId)
+        .select("name phone email")
+        .lean();
+    }
+
+    let tenantInfoOut = tenantInfo ? tenantInfo.toObject() : null;
+    if (!tenantInfoOut && depositSnapshot?.name) {
+      tenantInfoOut = {
+        fullname: depositSnapshot.name,
+        cccd: null,
+        dob: null,
+        gender: null,
+        address: null,
+      };
+    }
+
+    let tenantIdOut = contractData.tenantId
+      ? { ...contractData.tenantId }
+      : null;
+    if (tenantIdOut && depositSnapshot) {
+      if (!tenantIdOut.phoneNumber && depositSnapshot.phone) {
+        tenantIdOut.phoneNumber = depositSnapshot.phone;
+      }
+      if (!tenantIdOut.email && depositSnapshot.email) {
+        tenantIdOut.email = depositSnapshot.email;
+      }
+    }
+    if (!tenantIdOut && depositSnapshot?.name) {
+      tenantIdOut = {
+        username: depositSnapshot.name,
+        phoneNumber: depositSnapshot.phone || null,
+        email: depositSnapshot.email || null,
+      };
+    } else if (!tenantIdOut && tenantInfoOut?.fullname) {
+      tenantIdOut = {
+        username: tenantInfoOut.fullname,
+        phoneNumber: depositSnapshot?.phone || null,
+        email: depositSnapshot?.email || null,
+      };
+    }
 
     // Fix roomType currentPrice (Decimal128 → Number)
     if (contractData.roomId?.roomTypeId?.currentPrice) {
@@ -469,7 +918,8 @@ exports.getContractById = async (req, res) => {
       success: true,
       data: {
         ...contractData,
-        tenantInfo: tenantInfo ? tenantInfo.toObject() : null,
+        tenantId: tenantIdOut,
+        tenantInfo: tenantInfoOut,
         bookServices,
         assets,
       },
@@ -614,6 +1064,7 @@ exports.updateContract = async (req, res) => {
       if (duration < 6) throw new Error("Thời hạn thuê tối thiểu 6 tháng.");
       const newEndDate = new Date(contract.startDate);
       newEndDate.setMonth(newEndDate.getMonth() + Number(duration));
+      newEndDate.setDate(newEndDate.getDate() - 1);
       contract.duration = Number(duration);
       contract.endDate = newEndDate;
     }
@@ -735,6 +1186,7 @@ exports.updateContract = async (req, res) => {
       if (duration < 6) throw new Error("Thời hạn thuê tối thiểu 6 tháng.");
       const newEndDate = new Date(contract.startDate);
       newEndDate.setMonth(newEndDate.getMonth() + Number(duration));
+      newEndDate.setDate(newEndDate.getDate() - 1);
       contract.duration = Number(duration);
       contract.endDate = newEndDate;
     }

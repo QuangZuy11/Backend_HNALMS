@@ -103,7 +103,9 @@ exports.createRoom = async (req, res) => {
 
 exports.getRooms = async (req, res) => {
   try {
-    const rooms = await RoomService.getAllRooms(req.query);
+    // Truyền role để service phân biệt guest vs owner/admin
+    const filters = { ...req.query, _userRole: req.user?.role };
+    const rooms = await RoomService.getAllRooms(filters);
     res.status(200).json({ count: rooms.length, data: rooms });
   } catch (error) { handleError(res, error); }
 };

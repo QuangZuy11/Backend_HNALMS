@@ -1,28 +1,101 @@
 const Room = require("../models/room.model");
 const Deposit = require("../../contract-management/models/deposit.model");
+const Contract = require("../../contract-management/models/contract.model");
+const {
+  findSuccessorContractAfterDeclined,
+} = require("../../contract-management/services/declinedRenewalSuccessor.service");
 const Payment = require("../../invoice-management/models/payment.model");
 const { sendEmail } = require("../../notification-management/services/email.service");
 const { EMAIL_TEMPLATES } = require("../../../shared/config/email");
 
 // =============================================
 // HELPER: Sinh mã giao dịch duy nhất
-// Format: Coc [TenPhong] [DDMMYYYY]
-// VD: "Coc P310 02032026"
+// Format: Coc [TenPhong] [8 random digits]
+// VD: "Coc P114 73920156"
+// Dùng random thay vì ngày để tránh trùng khi cọc nhiều lần cùng phòng trong 1 ngày
 // =============================================
 const generateTransactionCode = (roomName) => {
-    const now = new Date();
-    const day = String(now.getDate()).padStart(2, '0');
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const year = now.getFullYear();
-    const dateStr = `${day}${month}${year}`; // DDMMYYYY
+    const randomStr = String(Math.floor(10000000 + Math.random() * 90000000)); // 8 số ngẫu nhiên
 
-    // Sanitize room name: bỏ dấu, bỏ "Phòng " 
+    // Sanitize room name: bỏ dấu, bỏ "Phòng "
     const roomShort = roomName
         .replace(/Phòng\s*/gi, 'P')
         .replace(/[^a-zA-Z0-9]/g, '');
 
-    return `Coc ${roomShort} ${dateStr}`;
+    return `Coc ${roomShort} ${randomStr}`;
 };
+
+/** HĐ active đã kích hoạt + renewalStatus declined → cho tối đa 1 cọc mới (không trùng cọc của khách hiện tại). */
+async function evaluateDeclinedRenewalNextDeposit(roomObjectId, existingHeldDeposits) {
+    const declinedContract = await Contract.findOne({
+        roomId: roomObjectId,
+        status: "active",
+        isActivated: true,
+        renewalStatus: "declined",
+    }).lean();
+    if (!declinedContract) return { next: "none" };
+
+    const successorContract = await findSuccessorContractAfterDeclined(
+        declinedContract,
+        roomObjectId,
+    );
+    if (successorContract) {
+        return {
+            next: "reject",
+            body: {
+                success: false,
+                message:
+                    "Đã có hợp đồng kế tiếp cho phòng sau kỳ thuê hiện tại. Không thể đặt thêm cọc.",
+            },
+        };
+    }
+
+    const tenantADepositId = declinedContract.depositId?.toString();
+
+    // Lấy tất cả HĐ chưa kích hoạt để biết deposit nào đã bind vào HĐ tương lai (vd HĐ 464)
+    const inactiveContracts = await Contract.find({
+        roomId: roomObjectId,
+        isActivated: false,
+        status: { $nin: ["terminated", "expired"] },
+    }).select("depositId").lean();
+
+    const depositsBoundToInactive = new Set(
+        inactiveContracts
+            .filter((c) => c.depositId)
+            .map((c) => c.depositId.toString())
+    );
+
+    // extraHeld: loại bỏ cọc của HĐ 622 (tenantA) VÀ cọc đã bind vào HĐ 464 (chưa kích hoạt)
+    const extraHeld = existingHeldDeposits.filter(
+        (d) =>
+            (!tenantADepositId || d._id.toString() !== tenantADepositId) &&
+            !depositsBoundToInactive.has(d._id.toString()),
+    );
+    if (extraHeld.length > 0) {
+        return {
+            next: "reject",
+            body: {
+                success: false,
+                message:
+                    "Phòng đã có người đặt cọc cho kỳ thuê tiếp theo. Không thể tạo thêm cọc.",
+            },
+        };
+    }
+    const pendingOthers = await Deposit.countDocuments({
+        room: roomObjectId,
+        status: "Pending",
+    });
+    if (pendingOthers > 0) {
+        return {
+            next: "reject",
+            body: {
+                success: false,
+                message: "Đang có giao dịch đặt cọc chờ thanh toán cho phòng này.",
+            },
+        };
+    }
+    return { next: "allow" };
+}
 
 // =============================================
 // POST /api/deposits/initiate
@@ -30,13 +103,16 @@ const generateTransactionCode = (roomName) => {
 // =============================================
 exports.initiateDeposit = async (req, res) => {
     try {
-        const { roomId, name, phone, email } = req.body;
+        const { 
+            roomId, name, phone, email, 
+            idCard, dob, address, gender, startDate, duration, prepayMonths, coResidents 
+        } = req.body;
 
         // --- Validate input ---
-        if (!roomId || !name || !phone || !email) {
+        if (!roomId || !name || !phone || !email || !idCard || !startDate) {
             return res.status(400).json({
                 success: false,
-                message: "Vui lòng điền đầy đủ thông tin: roomId, name, phone, email",
+                message: "Vui lòng điền đầy đủ thông tin bắt buộc: roomId, name, phone, email, idCard, startDate",
             });
         }
 
@@ -46,34 +122,92 @@ exports.initiateDeposit = async (req, res) => {
             return res.status(404).json({ success: false, message: "Không tìm thấy phòng" });
         }
 
+        let allowDeposit = false;
         let allowShortTermDeposit = false;
-        if (room.status === "Deposited") {
-            const Contract = require("../../contract-management/models/contract.model");
-            const Deposit = require("../../contract-management/models/deposit.model");
-            
-            const futureContract = await Contract.findOne({
+
+        // Lấy tất cả deposit đang Held của phòng này
+        const existingHeldDeposits = await Deposit.find({
+            room: room._id,
+            status: "Held",
+        });
+
+        if (room.status === "Available") {
+            // Phòng trống hoàn toàn → cho phép đặt cọc
+            allowDeposit = true;
+        } else if (room.status === "Occupied") {
+            const ev = await evaluateDeclinedRenewalNextDeposit(room._id, existingHeldDeposits);
+            if (ev.next === "reject") return res.status(400).json(ev.body);
+            if (ev.next === "allow") allowDeposit = true;
+        } else if (room.status === "Deposited") {
+            // Phòng đang deposited → kiểm tra các hợp đồng
+            const futureContracts = await Contract.find({
                 roomId: room._id,
                 status: "active",
-                startDate: { $gt: new Date() }
+                isActivated: false,
+                startDate: { $gt: new Date() },
             }).sort({ startDate: 1 });
-            
-            if (futureContract) {
-                const shortTermDeposit = await Deposit.findOne({
-                   room: room._id,
-                   status: { $in: ["Pending", "Held"] },
-                   _id: { $ne: futureContract.depositId }
-                });
 
-                if (!shortTermDeposit) {
-                    const daysUntilStart = Math.ceil((new Date(futureContract.startDate) - new Date()) / (1000 * 60 * 60 * 24));
-                    if (daysUntilStart >= 30) {
-                        allowShortTermDeposit = true;
+            if (futureContracts.length > 0) {
+                // Lấy hợp đồng sắp tới gần nhất
+                const nearestFuture = futureContracts[0];
+                const daysUntilStart = Math.ceil(
+                    (new Date(nearestFuture.startDate) - new Date()) / (1000 * 60 * 60 * 24)
+                );
+
+                if (daysUntilStart < 30) {
+                    // Còn < 30 ngày → KHÔNG cho cọc nữa
+                    return res.status(400).json({
+                        success: false,
+                        message: `Không thể đặt cọc: Hợp đồng mới sẽ bắt đầu vào ngày ${new Date(nearestFuture.startDate).toLocaleDateString("vi-VN")} (còn ${daysUntilStart} ngày). Thời hạn tối thiểu để đặt cọc mới là 30 ngày.`,
+                    });
+                }
+
+                // >= 30 ngày → cho phép cọc ngắn hạn
+                // Reset các deposit cũ chưa active về activationStatus = false
+                for (const dep of existingHeldDeposits) {
+                    if (dep.activationStatus !== true) {
+                        dep.activationStatus = false;
+                        await dep.save();
+                        console.log(`[INITIATE DEPOSIT] Reset deposit ${dep.transactionCode} → activationStatus=false`);
                     }
+                }
+                allowShortTermDeposit = true;
+            } else {
+                // Không có future contract đang chờ nhưng room = Deposited
+                // Có thể là contract đã active rồi → không cho cọc
+                const activeContracts = await Contract.findOne({
+                    roomId: room._id,
+                    status: "active",
+                    isActivated: true,
+                }).lean();
+                if (activeContracts) {
+                    // DB status vẫn Deposited khi khách từ chối gia hạn (API chi tiết phòng không ghi đè Occupied).
+                    if (activeContracts.renewalStatus === "declined") {
+                        const ev = await evaluateDeclinedRenewalNextDeposit(
+                            room._id,
+                            existingHeldDeposits,
+                        );
+                        if (ev.next === "reject") return res.status(400).json(ev.body);
+                        if (ev.next === "allow") allowDeposit = true;
+                    } else {
+                        return res.status(400).json({
+                            success: false,
+                            message: "Phòng đang có người thuê, không thể đặt cọc.",
+                        });
+                    }
+                } else {
+                    // Trường hợp hy hữu: Deposited nhưng không có contract nào
+                    // Reset tất cả deposit cũ, cho phép cọc mới
+                    for (const dep of existingHeldDeposits) {
+                        dep.activationStatus = false;
+                        await dep.save();
+                    }
+                    allowDeposit = true;
                 }
             }
         }
 
-        if (room.status !== "Available" && !allowShortTermDeposit) {
+        if (room.status !== "Available" && !allowDeposit && !allowShortTermDeposit) {
             return res.status(400).json({
                 success: false,
                 message: `Phòng hiện không thể đặt cọc (trạng thái: ${room.status})`,
@@ -86,13 +220,13 @@ exports.initiateDeposit = async (req, res) => {
             return res.status(400).json({ success: false, message: "Không thể đọc giá phòng" });
         }
 
-        // --- Sinh mã giao dịch ---
+        // --- Lấy thông tin ---
         const transactionCode = generateTransactionCode(room.name);
 
-        // --- Tính thời gian hết hạn (5 phút từ bây giờ) ---
-        const expireAt = new Date(Date.now() + 5 * 60 * 1000); // 5 phút
+        // --- Tính thời gian hết hạn (24 giờ từ bây giờ vì là gửi yêu cầu) ---
+        const expireAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 giờ
 
-        // --- Lưu Deposit vào DB với status "Pending" ---
+        // --- Lưu Deposit vào DB với status "Pending", activationStatus = null (chờ kích hoạt) ---
         const deposit = new Deposit({
             name,
             phone,
@@ -102,14 +236,21 @@ exports.initiateDeposit = async (req, res) => {
             status: "Pending",
             transactionCode,
             expireAt,
+            activationStatus: null, // Chưa active, sẽ được set khi contract kích hoạt
+            idCard,
+            dob: dob ? new Date(dob) : null,
+            address,
+            gender: gender || "Other",
+            startDate: new Date(startDate),
+            duration: parseInt(duration, 10) || 12,
+            prepayMonths: prepayMonths === "all" ? "all" : (parseInt(prepayMonths, 10) || 2),
+            coResidents: Array.isArray(coResidents) ? coResidents : [],
         });
         await deposit.save();
 
         // --- Tạo QR Code URL theo chuẩn VietQR ---
-        // Cú pháp: https://img.vietqr.io/image/{BANK_BIN}-{ACCOUNT_NUMBER}-qr_only.jpg
-        //           ?amount={amount}&addInfo={transactionCode}&accountName={name}
-        const bankBin = process.env.BANK_BIN;           // VD: "970418" (BIDV)
-        const bankAccount = process.env.BANK_ACCOUNT;   // VD: "12345678901"
+        const bankBin = process.env.BANK_BIN;
+        const bankAccount = process.env.BANK_ACCOUNT;
         const bankAccountName = encodeURIComponent(
             process.env.BANK_ACCOUNT_NAME || "HOANG NAM ALMS"
         );
@@ -212,8 +353,8 @@ exports.sepayWebhook = async (req, res) => {
         } = req.body;
 
         // --- 3. Tìm Deposit bằng transactionCode trong nội dung CK ---
-        // Format: "Coc P310 02032026"
-        // Regex: Coc + tên phòng + ngày (8 số)
+        // Format: "Coc P310 73920156" (8 random digits, không còn theo ngày)
+        // Regex: Coc + tên phòng + 8 số ngẫu nhiên
         const matchCode = content.match(/Coc\s+\S+\s+\d{8}/i);
         if (!matchCode) {
             console.warn("[SEPAY WEBHOOK] ⚠️ Không tìm thấy mã giao dịch trong nội dung:", content);
@@ -235,10 +376,10 @@ exports.sepayWebhook = async (req, res) => {
             return res.status(200).json({ success: true, message: "Amount mismatch" });
         }
 
-        // --- 5. Cập nhật trạng thái Deposit → "Held" + Thiết lập hết hạn 7 ngày ---
+        // --- 5. Cập nhật trạng thái Deposit → "Held" + Thiết lập hết hạn 30 ngày ---
         deposit.status = "Held";
-        // Thiết lập hết hạn = 7 ngày kể từ thanh toán thành công
-        deposit.expireAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+        // Thiết lập hết hạn = 30 ngày kể từ thanh toán thành công
+        deposit.expireAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 ngày
         await deposit.save();
 
         // --- 6. Tạo Payment record với status "Success" ---
@@ -274,6 +415,59 @@ exports.sepayWebhook = async (req, res) => {
         } catch (emailErr) {
             console.error("[SEPAY WEBHOOK] ❌ Lỗi gửi email:", emailErr.message);
             // Không throw, tiếp tục trả về success
+        }
+
+        // --- 9. Tự động tạo Hợp Đồng (nếu là giao dịch đặt phòng online có idCard) ---
+        if (deposit.idCard && deposit.startDate) {
+            console.log(`[SEPAY WEBHOOK] ⚡ Đang tiến hành tạo hợp đồng tự động cho giao dịch ${transactionCode}...`);
+            const contractController = require("../../contract-management/controllers/contract.controller");
+            
+            const mockReq = {
+                body: {
+                    roomId: deposit.room._id || deposit.room,
+                    depositId: deposit._id,
+                    tenantInfo: {
+                        fullName: deposit.name,
+                        cccd: deposit.idCard,
+                        phone: deposit.phone,
+                        email: deposit.email,
+                        dob: deposit.dob,
+                        address: deposit.address,
+                        gender: deposit.gender || "Other"
+                    },
+                    coResidents: deposit.coResidents || [],
+                    contractDetails: {
+                        startDate: deposit.startDate,
+                        duration: deposit.duration
+                    },
+                    bookServices: [],
+                    prepayMonths: parseInt(deposit.prepayMonths, 10) || deposit.duration
+                }
+            };
+
+            let contractResponseStatus = 200;
+            let contractResponseData = {};
+
+            const mockRes = {
+                status: (code) => {
+                    contractResponseStatus = code;
+                    return mockRes;
+                },
+                json: (data) => {
+                    contractResponseData = data;
+                }
+            };
+
+            try {
+                await contractController.createContract(mockReq, mockRes);
+                if (contractResponseStatus === 201 || contractResponseStatus === 200) {
+                    console.log(`[SEPAY WEBHOOK] ✅ Hợp đồng tạo tự động THÀNH CÔNG cho Deposit ${deposit._id}.`);
+                } else {
+                    console.error(`[SEPAY WEBHOOK] ❌ Lỗi tạo hợp đồng tự động cho Deposit:`, contractResponseData);
+                }
+            } catch (err) {
+                console.error(`[SEPAY WEBHOOK] ❌ Lỗi Fatal tạo hợp đồng:`, err.message);
+            }
         }
 
         return res.status(200).json({ success: true, message: "Deposit confirmed successfully" });
