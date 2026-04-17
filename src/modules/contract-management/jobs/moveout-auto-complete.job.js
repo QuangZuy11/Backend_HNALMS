@@ -154,7 +154,7 @@ async function _completeMoveOut(request, contract, completedAt) {
     const tenantName = request.tenantId?.username || "";
     if (tenantEmail) {
         const notification = new Notification({
-            title: `✅ Trả phòng đã hoàn tất tự động`,
+            title: `Trả phòng đã hoàn tất tự động`,
             content: `Hệ thống đã tự động hoàn tất quy trình trả phòng cho hợp đồng ${contract.contractCode}. Cảm ơn bạn đã sử dụng dịch vụ.`,
             type: "system",
             status: "sent",
