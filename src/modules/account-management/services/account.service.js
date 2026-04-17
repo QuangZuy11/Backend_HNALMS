@@ -120,19 +120,23 @@ const getAccountsByRole = async (targetRole) => {
         pipeline: [
           {
             $match: {
-              $expr: { $eq: ['$tenantId', '$tenantId'] }
+              $expr: {
+                $and: [
+                  { $eq: ['$tenantId', '$$tenantId'] },
+                  { $in: ['$status', ['active', 'inactive', 'pending_deposit']] } // Optional: filter out completed/cancelled if needed
+                ]
+              }
             }
           },
-          { $sort: { createdAt: -1 } },
-          { $limit: 1 }
+          { $sort: { createdAt: -1 } }
         ],
-        as: '_latestContract'
+        as: '_allContracts'
       }
     },
     {
       $lookup: {
         from: 'rooms',
-        localField: '_latestContract.roomId',
+        localField: '_allContracts.roomId',
         foreignField: '_id',
         as: '_roomInfo'
       }
@@ -140,17 +144,28 @@ const getAccountsByRole = async (targetRole) => {
     {
       $addFields: {
         fullname: { $ifNull: [{ $arrayElemAt: ['$_userInfo.fullname', 0] }, null] },
-        roomName: {
-          $ifNull: [
-            { $arrayElemAt: ['$_roomInfo.name', 0] },
-            { $arrayElemAt: ['$_roomInfo.roomCode', 0] }
-          ]
+        roomNames: {
+          $map: {
+            input: '$_roomInfo',
+            as: 'room',
+            in: { $ifNull: ['$$room.name', '$$room.roomCode'] }
+          }
         }
       }
     },
-    { $project: { _userInfo: 0, _latestContract: 0, _roomInfo: 0 } }
+    { $project: { _userInfo: 0, _allContracts: 0, _roomInfo: 0 } }
   ]);
-  return users;
+  
+  return users.map(user => {
+    let uniqueRooms = [];
+    if (user.roomNames && user.roomNames.length > 0) {
+      uniqueRooms = [...new Set(user.roomNames)];
+    }
+    return {
+      ...user,
+      roomName: uniqueRooms.length > 0 ? uniqueRooms.join(', ') : null
+    };
+  });
 };
 
 /**
@@ -173,6 +188,17 @@ const getAccountDetail = async (accountId, currentUserId, creatorRole) => {
 
   const userInfo = await UserInfo.findOne({ userId: user._id }).lean();
 
+  const ObjectModel_Contract = require('../../contract-management/models/contract.model.js');
+  const contracts = await ObjectModel_Contract.find({ 
+    tenantId: user._id,
+    status: { $in: ['active', 'inactive', 'pending_deposit'] }
+  })
+  .populate('roomId', 'name roomCode')
+  .lean();
+
+  const rawRoomNames = contracts.map(c => c.roomId?.name || c.roomId?.roomCode).filter(Boolean);
+  const uniqueRooms = [...new Set(rawRoomNames)];
+
   return {
     ...user,
     fullname: userInfo?.fullname || null,
@@ -180,6 +206,7 @@ const getAccountDetail = async (accountId, currentUserId, creatorRole) => {
     address: userInfo?.address || null,
     dob: userInfo?.dob || null,
     gender: userInfo?.gender || null,
+    roomName: uniqueRooms.length > 0 ? uniqueRooms.join(', ') : null,
   };
 };
 
