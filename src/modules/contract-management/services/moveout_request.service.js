@@ -887,7 +887,7 @@ class MoveOutRequestService {
       isEarlyNotice: isEarlyNoticeEffective,   // effective value (gap = false)
       isUnderMinStay: isUnderMinStayEffective, // effective value (gap = false)
       isDepositForfeited,
-      isGapContract, // 🆕 Lưu cờ gap contract vào request
+      isGapContract, // Lưu cờ gap contract vào request
       status: "Requested"
     });
     await moveOutRequest.save();
@@ -896,11 +896,11 @@ class MoveOutRequestService {
     await this._notifyManagers(
       tenantId,
       contract,
-      `📋 Yêu cầu trả phòng mới`,
+      ` Yêu cầu trả phòng mới`,
       `Tenant yêu cầu trả phòng ${contract.roomId?.name || ''}.\nNgày trả phòng: ${this._formatVNDate(moveOutDate)}\nLý do: ${reason || 'Không có'}\n\nVui lòng kiểm tra phòng và phát hành hóa đơn cuối.`
     );
 
-    console.log(`[MOVEOUT] ✅ Yêu cầu tạo thành công: ${moveOutRequest._id}`);
+    console.log(`[MOVEOUT]  Yêu cầu tạo thành công: ${moveOutRequest._id}`);
     return moveOutRequest;
   }
 
@@ -915,7 +915,7 @@ class MoveOutRequestService {
    * 3. Gửi notification báo tenant hóa đơn + tiền cọc xử lý riêng.
    */
   async releaseFinalInvoice(moveOutRequestId, managerInvoiceNotes = "", electricIndex, waterIndex) {
-    console.log(`[MOVEOUT] 📄 Manager phát hành hóa đơn cuối: ${moveOutRequestId}`);
+    console.log(`[MOVEOUT]  Manager phát hành hóa đơn cuối: ${moveOutRequestId}`);
 
     const moveOutRequest = await MoveOutRequest.findById(moveOutRequestId);
     if (!moveOutRequest) throw new Error("Không tìm thấy yêu cầu trả phòng");
