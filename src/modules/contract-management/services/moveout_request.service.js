@@ -897,7 +897,7 @@ class MoveOutRequestService {
       tenantId,
       contract,
       `📋 Yêu cầu trả phòng mới`,
-      `Tenant yêu cầu trả phòng ${contract.roomId?.name || ''}.\nNgày trả dự kiến: ${this._formatVNDate(moveOutDate)}\nLý do: ${reason || 'Không có'}\n\nVui lòng kiểm tra phòng và phát hành hóa đơn cuối.`
+      `Tenant yêu cầu trả phòng ${contract.roomId?.name || ''}.\nNgày trả phòng: ${this._formatVNDate(moveOutDate)}\nLý do: ${reason || 'Không có'}\n\nVui lòng kiểm tra phòng và phát hành hóa đơn cuối.`
     );
 
     console.log(`[MOVEOUT] ✅ Yêu cầu tạo thành công: ${moveOutRequest._id}`);
