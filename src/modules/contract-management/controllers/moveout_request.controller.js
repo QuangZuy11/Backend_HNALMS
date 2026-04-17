@@ -260,7 +260,7 @@ class MoveOutRequestController {
         data,
       });
     } catch (error) {
-      console.error(`[MOVEOUT CTRL] ❌ Lỗi hoàn tất trả phòng:`, error.message);
+      console.error(`[MOVEOUT CTRL]  Lỗi hoàn tất trả phòng:`, error.message);
       return res.status(400).json({ success: false, message: error.message });
     }
   }
@@ -304,7 +304,7 @@ class MoveOutRequestController {
         data: result,
       });
     } catch (error) {
-      console.error(`[MOVEOUT CTRL] ❌ Lỗi xoá yêu cầu trả phòng:`, error.message);
+      console.error(`[MOVEOUT CTRL]  Lỗi xoá yêu cầu trả phòng:`, error.message);
       return res.status(400).json({ success: false, message: error.message });
     }
   }
