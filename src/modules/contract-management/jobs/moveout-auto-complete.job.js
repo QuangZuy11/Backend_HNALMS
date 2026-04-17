@@ -63,10 +63,10 @@ async function autoCompleteMoveOutByEndDate() {
         const contract = request.contractId;
         if (!contract) continue;
 
-        const endDate = _toDateOnly(contract.endDate);
+        const targetDate = _toDateOnly(request.expectedMoveOutDate || contract.endDate);
 
-        // Chỉ auto-complete khi đúng ngày endDate hoặc đã quá hạn (endDate <= hôm nay)
-        if (today.getTime() < endDate.getTime()) continue;
+        // Chỉ auto-complete khi đúng ngày trả phòng (expectedMoveOutDate) hoặc đã quá hạn
+        if (today.getTime() < targetDate.getTime()) continue;
 
         console.log(`[MOVEOUT AUTO-COMPLETE] 📋 Tự động hoàn tất: ${request._id} (HĐ ${contract.contractCode})`);
 
@@ -146,7 +146,7 @@ async function _completeMoveOut(request, contract, completedAt) {
     // Cập nhật trạng thái yêu cầu trả phòng
     request.status = "Completed";
     request.completedDate = new Date();
-    request.managerCompletionNotes = "Tự động hoàn tất do quá hạn endDate mà manager chưa xử lý.";
+    request.managerCompletionNotes = "Tự động hoàn tất do đến ngày trả phòng mà hệ thống chưa xử lý.";
     await request.save();
 
     // Gửi thông báo cho tenant
