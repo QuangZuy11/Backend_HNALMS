@@ -96,7 +96,7 @@ exports.getProfile = async (req, res) => {
   try {
     // req.user.userId đã được set bởi authenticate middleware
     const userId = req.user?.userId;
-    
+
     if (!userId) {
       return res.status(401).json({
         success: false,
@@ -116,7 +116,7 @@ exports.getProfile = async (req, res) => {
     });
   } catch (error) {
     console.error("Get profile error:", error);
-    
+
     if (error.message.includes("not found")) {
       return res.status(404).json({
         success: false,
@@ -138,7 +138,7 @@ exports.getProfile = async (req, res) => {
 exports.updateProfile = async (req, res) => {
   try {
     const userId = req.user?.userId;
-    
+
     if (!userId) {
       return res.status(401).json({
         success: false,
@@ -174,7 +174,7 @@ exports.updateProfile = async (req, res) => {
     });
   } catch (error) {
     console.error("Update profile error:", error);
-    
+
     if (error.message.includes("not found")) {
       return res.status(404).json({
         success: false,
@@ -205,7 +205,7 @@ exports.updateProfile = async (req, res) => {
 exports.changePassword = async (req, res) => {
   try {
     const userId = req.user?.userId;
-    
+
     if (!userId) {
       return res.status(401).json({
         success: false,
@@ -302,7 +302,7 @@ exports.forgotPassword = async (req, res) => {
   } catch (error) {
     console.error("Forgot password error:", error);
 
-    if (error.message.includes("not found") || error.message.includes("not active")) {
+    if (error.message.includes("not found") || error.message.includes("not active") || error.message.includes("không tồn tại") || error.message.includes("không hoạt động")) {
       return res.status(404).json({
         success: false,
         message: error.message
