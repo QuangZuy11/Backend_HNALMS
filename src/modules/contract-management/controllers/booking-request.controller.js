@@ -13,6 +13,7 @@ exports.createBookingRequest = async (req, res) => {
   try {
     const {
       roomId,
+      userInfoId,  // Nếu trùng cả 3 field → frontend gửi userInfoId thay vì thông tin cá nhân
       name,
       phone,
       email,
@@ -30,6 +31,34 @@ exports.createBookingRequest = async (req, res) => {
       return res.status(404).json({ success: false, message: "Không tìm thấy phòng." });
     }
 
+    // Nếu có userInfoId → đây là người đã có tài khoản, chỉ lưu userInfoId
+    if (userInfoId) {
+      const existingUserInfo = await UserInfo.findById(userInfoId);
+      if (!existingUserInfo) {
+        return res.status(404).json({ success: false, message: "Không tìm thấy thông tin người dùng (userInfoId không hợp lệ)." });
+      }
+      console.log(`[BOOKING REQUEST] userInfoId=${userInfoId} → using existing UserInfo, skipping personal info fields.`);
+
+      const bookingRequest = new BookingRequest({
+        roomId,
+        userInfoId: existingUserInfo._id,
+        // Không lưu name/phone/email/idCard/dob/address
+        startDate: new Date(startDate),
+        duration: parseInt(duration, 10) || 12,
+        prepayMonths: prepayMonths === "all" ? "all" : (parseInt(prepayMonths, 10) || 2),
+        coResidents: Array.isArray(coResidents) ? coResidents : [],
+        status: "Pending",
+      });
+      await bookingRequest.save();
+
+      return res.status(201).json({
+        success: true,
+        message: "Yêu cầu đặt phòng đã được gửi thành công (sử dụng tài khoản hiện có).",
+        data: bookingRequest,
+      });
+    }
+
+    // Trường hợp thông thường: lưu đầy đủ thông tin cá nhân
     const bookingRequest = new BookingRequest({
       roomId,
       name,
@@ -70,11 +99,16 @@ exports.checkDuplicateTenant = async (req, res) => {
       return res.status(400).json({ success: false, message: "Cần cung cấp ít nhất 1 trường để kiểm tra." });
     }
 
+    // Normalize để tránh lỗi whitespace / case
+    const normalizedCCCD = cccd ? cccd.trim().replace(/\s/g, "") : null;
+    const normalizedPhone = phone ? phone.trim() : null;
+    const normalizedEmail = email ? email.trim().toLowerCase() : null;
+
     // Query song song để tăng tốc
     const [existingByCCCD, existingByPhone, existingByEmail] = await Promise.all([
-      cccd ? UserInfo.findOne({ cccd }) : Promise.resolve(null),
-      phone ? UserInfo.findOne({ phone }) : Promise.resolve(null),
-      email ? UserInfo.findOne({ email }) : Promise.resolve(null),
+      normalizedCCCD ? UserInfo.findOne({ cccd: normalizedCCCD }) : Promise.resolve(null),
+      normalizedPhone ? UserInfo.findOne({ phone: normalizedPhone }) : Promise.resolve(null),
+      normalizedEmail ? UserInfo.findOne({ email: new RegExp(`^${normalizedEmail.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") }) : Promise.resolve(null),
     ]);
 
     // Tất cả 3 trùng khớp → cùng 1 người
@@ -91,20 +125,14 @@ exports.checkDuplicateTenant = async (req, res) => {
         });
       }
 
-      if (existingContracts.length >= 2) {
-        return res.status(409).json({
-          success: false,
-          type: "same_person_max_contracts",
-          message: "Thông tin CCCD, SĐT và email trùng với tài khoản đã có. Bạn đã có nhiều HĐ. Không thể đặt phòng mới. Vui lòng liên hệ Ban quản lý.",
-          data: { contractsCount: existingContracts.length },
-        });
-      }
+      // Không giới hạn số lượng hợp đồng, bỏ đoạn block max 2 contracts.
 
+      // Trả về userInfoId để frontend gửi vào BookingRequest thay vì thông tin cá nhân
       return res.status(409).json({
         success: false,
         type: "same_person",
         message: "Thông tin CCCD, SĐT và email trùng với tài khoản đã có. Hệ thống sẽ sử dụng tài khoản cũ để tạo hợp đồng.",
-        data: { reuseExisting: true, contractsCount: existingContracts.length },
+        data: { reuseExisting: true, contractsCount: existingContracts.length, userInfoId: existingByCCCD._id },
       });
     }
 
@@ -204,6 +232,7 @@ exports.getAllBookingRequests = async (req, res) => {
 
     const requests = await BookingRequest.find(filter)
       .populate("roomId", "name customId roomCode floorId")
+      .populate("userInfoId", "fullname cccd phone email dob address gender")
       .sort({ createdAt: -1 });
 
     res.status(200).json({
@@ -226,7 +255,8 @@ exports.getBookingRequestById = async (req, res) => {
         populate: [
           { path: "roomTypeId", select: "typeName currentPrice personMax" }
         ]
-      });
+      })
+      .populate("userInfoId", "fullname cccd phone email dob address gender");
 
     if (!request) {
       return res.status(404).json({ success: false, message: "Không tìm thấy yêu cầu này." });
@@ -234,6 +264,7 @@ exports.getBookingRequestById = async (req, res) => {
 
     res.status(200).json({
       success: true,
+      message: "Lấy chi tiết yêu cầu thành công.",
       data: request,
     });
   } catch (error) {
@@ -284,8 +315,32 @@ exports.sendPaymentInfo = async (req, res) => {
       return res.status(404).json({ success: false, message: "Không tìm thấy yêu cầu này." });
     }
 
+    // Resolve tenant info if userInfoId exists
+    let tenantName = request.name || "";
+    let tenantEmail = request.email || "";
+    let tenantPhone = request.phone || "";
+    let tenantIdCard = request.idCard || "";
+    let tenantAddress = request.address || "";
+    let tenantDob = request.dob;
+    let tenantGender = request.gender || "Male";
+
+    if (request.userInfoId) {
+      const userInfo = await UserInfo.findById(request.userInfoId);
+      if (userInfo) {
+        tenantName = userInfo.fullname || tenantName;
+        tenantEmail = userInfo.email || tenantEmail;
+        tenantPhone = userInfo.phone || tenantPhone;
+        tenantIdCard = userInfo.cccd || tenantIdCard;
+        tenantAddress = userInfo.address || tenantAddress;
+        tenantDob = userInfo.dob || tenantDob;
+        tenantGender = userInfo.gender || tenantGender;
+      }
+    }
+
     // Update info from the finalize form
-    if (updateData.tenantInfo) {
+    // CHỈ thực hiện khi booking KHÔNG có userInfoId (khách vãng lai, chưa có tài khoản).
+    // Khi có userInfoId → mọi thông tin đã có sẵn trong UserInfo, không ghi đè.
+    if (updateData.tenantInfo && !request.userInfoId) {
       request.name = updateData.tenantInfo.fullName || request.name;
       request.phone = updateData.tenantInfo.phone || request.phone;
       request.email = updateData.tenantInfo.email || request.email;
@@ -294,6 +349,30 @@ exports.sendPaymentInfo = async (req, res) => {
       request.address = updateData.tenantInfo.address || request.address;
       request.gender = updateData.tenantInfo.gender || "Male";
       request.contactRef = updateData.tenantInfo.contactRef;
+
+      tenantName = request.name;
+      tenantEmail = request.email;
+      tenantPhone = request.phone;
+      tenantIdCard = request.idCard;
+      tenantAddress = request.address;
+      tenantDob = request.dob;
+      tenantGender = request.gender;
+    }
+
+    // Nếu manager truyền userInfoId (từ frontend SendContractToGuest), lưu lại vào booking
+    if (updateData.userInfoId && !request.userInfoId) {
+      request.userInfoId = updateData.userInfoId;
+      // Cðp nhật lại thông tin tenant từ userInfo mới gán
+      const freshUserInfo = await UserInfo.findById(updateData.userInfoId);
+      if (freshUserInfo) {
+        tenantName    = freshUserInfo.fullname || tenantName;
+        tenantEmail   = freshUserInfo.email    || tenantEmail;
+        tenantPhone   = freshUserInfo.phone    || tenantPhone;
+        tenantIdCard  = freshUserInfo.cccd     || tenantIdCard;
+        tenantAddress = freshUserInfo.address  || tenantAddress;
+        tenantDob     = freshUserInfo.dob      || tenantDob;
+        tenantGender  = freshUserInfo.gender   || tenantGender;
+      }
     }
 
     if (updateData.startDate) request.startDate = new Date(updateData.startDate);
@@ -370,17 +449,33 @@ exports.sendPaymentInfo = async (req, res) => {
       );
       // Send cancellation email to each loser
       for (const cr of competingRequests) {
+        let crEmail = cr.email;
+        let crName  = cr.name;
+
+        // Nếu booking chỉ có userInfoId (không có email trực tiếp) → fetch từ UserInfo
+        if (!crEmail && cr.userInfoId) {
+          try {
+            const crUserInfo = await UserInfo.findById(cr.userInfoId);
+            if (crUserInfo) {
+              crEmail = crUserInfo.email;
+              crName  = crUserInfo.fullname || crName;
+            }
+          } catch (_) { /* ignore */ }
+        }
+
+        if (!crEmail) continue; // bỏ qua nếu vẫn không có email
+
         try {
           await sendEmail(
-            cr.email,
+            crEmail,
             "Yêu cầu đặt phòng của bạn đã bị từ chối - Hoàng Nam",
-            `<p>Chào <strong>${cr.name}</strong>,</p>
+            `<p>Chào <strong>${crName || "Quý khách"}</strong>,</p>
              <p>Rất tiếc, yêu cầu đặt phòng <strong>${request.roomId.name}</strong> của bạn đã bị hủy vì phòng vừa được chốt bởi một khách hàng khác.</p>
              <p>Bạn có thể đặt phòng khác tại hệ thống của chúng tôi. Xin lỗi vì sự bất tiện này!</p>
              <p>Trân trọng,<br/>Quản lý Tòa nhà Hoàng Nam</p>`,
           );
         } catch (emailErr) {
-          console.error("[sendPaymentInfo] Failed to send rejection email to", cr.email, emailErr.message);
+          console.error("[sendPaymentInfo] Failed to send rejection email to", crEmail, emailErr.message);
         }
       }
     }
@@ -404,7 +499,7 @@ exports.sendPaymentInfo = async (req, res) => {
     const mStr = String(today.getMonth() + 1).padStart(2, "0");
     const yStr = today.getFullYear();
 
-    const dobObj = request.dob ? new Date(request.dob) : null;
+    const dobObj = tenantDob ? new Date(tenantDob) : null;
     const dobStr = dobObj ? `${String(dobObj.getDate()).padStart(2, "0")}/${String(dobObj.getMonth() + 1).padStart(2, "0")}/${dobObj.getFullYear()}` : "";
 
     const startObj = request.startDate ? new Date(request.startDate) : null;
@@ -500,12 +595,12 @@ exports.sendPaymentInfo = async (req, res) => {
         <p><strong>BÊN A (Bên cho thuê):</strong> <br/> Ông/Bà: QUẢN LÝ TÒA NHÀ HOÀNG NAM <br/> Đại diện cho chủ sở hữu căn hộ.</p>
         <p><strong>BÊN B (Bên thuê):</strong></p>
         <ul>
-          <li>Ông/Bà: <strong>${request.name || ""}</strong></li>
+          <li>Ông/Bà: <strong>${tenantName || ""}</strong></li>
           <li>Sinh ngày: ${dobStr}</li>
-          <li>CCCD/CMND: ${request.idCard || ""}</li>
-          <li>Điện thoại: ${request.phone || ""}</li>
-          <li>Email: ${request.email || ""}</li>
-          <li>Hộ khẩu thường trú: ${request.address || ""}</li>
+          <li>CCCD/CMND: ${tenantIdCard || ""}</li>
+          <li>Điện thoại: ${tenantPhone || ""}</li>
+          <li>Email: ${tenantEmail || ""}</li>
+          <li>Hộ khẩu thường trú: ${tenantAddress || ""}</li>
         </ul>
         <p><strong>Danh sách người ở cùng trong phòng (tối đa ${maxPersons} người/phòng):</strong></p>
         ${coResHtml}
@@ -531,7 +626,7 @@ exports.sendPaymentInfo = async (req, res) => {
     `;
 
     try {
-      await sendEmail(request.email, emailSubject, emailContent);
+      await sendEmail(tenantEmail, emailSubject, emailContent);
     } catch (emailErr) {
       console.error("Failed to send QR email:", emailErr);
     }
@@ -594,20 +689,40 @@ exports.handleSepayWebhook = async (req, res) => {
       return res.status(200).json({ success: true, message: "Amount mismatch for BookingRequest" });
     }
 
+    // Chuẩn bị tenantInfo cho mockReq
+    let tenantInfo = {};
+    if (bookingRequest.userInfoId) {
+      const userInfo = await UserInfo.findById(bookingRequest.userInfoId);
+      if (userInfo) {
+        tenantInfo = {
+          fullName: userInfo.fullname,
+          cccd: userInfo.cccd,
+          phone: userInfo.phone,
+          email: userInfo.email,
+          dob: userInfo.dob,
+          address: userInfo.address,
+          gender: userInfo.gender || "Other"
+        };
+      }
+    } else {
+      tenantInfo = {
+        fullName: bookingRequest.name,
+        cccd: bookingRequest.idCard,
+        phone: bookingRequest.phone,
+        email: bookingRequest.email,
+        dob: bookingRequest.dob,
+        address: bookingRequest.address,
+        gender: bookingRequest.gender || "Other"
+      };
+    }
+
     // Build mock request for contractController
     const mockReq = {
       body: {
         roomId: bookingRequest.roomId._id,
         bookingRequestId: bookingRequest._id,
-        tenantInfo: {
-          fullName: bookingRequest.name,
-          cccd: bookingRequest.idCard,
-          phone: bookingRequest.phone,
-          email: bookingRequest.email,
-          dob: bookingRequest.dob,
-          address: bookingRequest.address,
-          gender: bookingRequest.gender || "Other"
-        },
+        userInfoId: bookingRequest.userInfoId, // Cờ quan trọng để bypass tìm kiếm
+        tenantInfo: tenantInfo,
         coResidents: bookingRequest.coResidents || [],
         contractDetails: {
           startDate: bookingRequest.startDate,
@@ -895,20 +1010,40 @@ async function _processBookingPayment(bookingRequest, transferAmount) {
   bookingRequest.paymentStatus = "Paid";
   await bookingRequest.save();
 
+  // Chuẩn bị tenantInfo cho mockReq
+  let tenantInfo = {};
+  if (bookingRequest.userInfoId) {
+    const userInfo = await UserInfo.findById(bookingRequest.userInfoId);
+    if (userInfo) {
+      tenantInfo = {
+        fullName: userInfo.fullname,
+        cccd: userInfo.cccd,
+        phone: userInfo.phone,
+        email: userInfo.email,
+        dob: userInfo.dob,
+        address: userInfo.address,
+        gender: userInfo.gender || "Other"
+      };
+    }
+  } else {
+    tenantInfo = {
+      fullName: bookingRequest.name,
+      cccd: bookingRequest.idCard,
+      phone: bookingRequest.phone,
+      email: bookingRequest.email,
+      dob: bookingRequest.dob,
+      address: bookingRequest.address,
+      gender: bookingRequest.gender || "Other"
+    };
+  }
+
   // Build mock request for createContract
   const mockReq = {
     body: {
       roomId: bookingRequest.roomId._id || bookingRequest.roomId,
       bookingRequestId: bookingRequest._id,
-      tenantInfo: {
-        fullName: bookingRequest.name,
-        cccd: bookingRequest.idCard,
-        phone: bookingRequest.phone,
-        email: bookingRequest.email,
-        dob: bookingRequest.dob,
-        address: bookingRequest.address,
-        gender: bookingRequest.gender || "Other"
-      },
+      userInfoId: bookingRequest.userInfoId, // Cờ quan trọng để bypass tìm kiếm
+      tenantInfo: tenantInfo,
       coResidents: bookingRequest.coResidents || [],
       contractDetails: {
         startDate: bookingRequest.startDate,
@@ -945,19 +1080,39 @@ async function _triggerCreateContract(bookingRequest) {
   try {
     const contractController = require("./contract.controller");
 
+    // Chuẩn bị tenantInfo cho mockReq
+    let tenantInfo = {};
+    if (bookingRequest.userInfoId) {
+      const userInfo = await UserInfo.findById(bookingRequest.userInfoId);
+      if (userInfo) {
+        tenantInfo = {
+          fullName: userInfo.fullname,
+          cccd: userInfo.cccd,
+          phone: userInfo.phone,
+          email: userInfo.email,
+          dob: userInfo.dob,
+          address: userInfo.address,
+          gender: userInfo.gender || "Other"
+        };
+      }
+    } else {
+      tenantInfo = {
+        fullName: bookingRequest.name,
+        cccd: bookingRequest.idCard,
+        phone: bookingRequest.phone,
+        email: bookingRequest.email,
+        dob: bookingRequest.dob,
+        address: bookingRequest.address,
+        gender: bookingRequest.gender || "Other"
+      };
+    }
+
     const mockReq = {
       body: {
         roomId: bookingRequest.roomId._id || bookingRequest.roomId,
         bookingRequestId: bookingRequest._id,
-        tenantInfo: {
-          fullName: bookingRequest.name,
-          cccd: bookingRequest.idCard,
-          phone: bookingRequest.phone,
-          email: bookingRequest.email,
-          dob: bookingRequest.dob,
-          address: bookingRequest.address,
-          gender: bookingRequest.gender || "Other"
-        },
+        userInfoId: bookingRequest.userInfoId, // Cờ quan trọng để bypass tìm kiếm
+        tenantInfo: tenantInfo,
         coResidents: bookingRequest.coResidents || [],
         contractDetails: {
           startDate: bookingRequest.startDate,

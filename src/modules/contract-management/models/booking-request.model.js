@@ -6,30 +6,18 @@ const bookingRequestSchema = new mongoose.Schema({
     ref: "Room",
     required: true,
   },
-  name: {
-    type: String,
-    required: true,
+  // Khi người dùng trùng cả 3 (cccd + sđt + email), chỉ lưu userInfoId, không lưu lại thông tin cá nhân
+  userInfoId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "UserInfo",
+    default: null,
   },
-  phone: {
-    type: String,
-    required: true,
-  },
-  email: {
-    type: String,
-    required: true,
-  },
-  idCard: {
-    type: String,
-    required: true,
-  },
-  dob: {
-    type: Date,
-    required: true,
-  },
-  address: {
-    type: String,
-    required: true,
-  },
+  name: { type: String, required: false },
+  phone: { type: String, required: false },
+  email: { type: String, required: false },
+  idCard: { type: String, required: false },
+  dob: { type: Date, required: false },
+  address: { type: String, required: false },
   startDate: {
     type: Date,
     required: true,

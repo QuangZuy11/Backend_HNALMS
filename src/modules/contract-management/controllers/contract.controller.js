@@ -206,69 +206,104 @@ exports.createContract = async (req, res) => {
     const contractInitialStatus = isFutureLong ? "inactive" : "active";
 
     // 2. Handle Tenant Account
-    // Check by CCCD + Phone + Email (all 3 must match = same person)
-    // If only 1 of 3 fields matches → error: field already registered
     let isNewUser = false;
     let passwordRaw = null;
     let user = null;
 
-    // Find existing UserInfo by CCCD (primary key)
-    const existingUserInfoByCCCD = tenantInfo.cccd
-      ? await UserInfo.findOne({ cccd: tenantInfo.cccd }).session(session)
-      : null;
+    // Xem có nhận được userInfoId cắm cờ "khách cũ" không (từ booking online đã được xác minh)
+    const directUserInfoId = req.body.userInfoId || req.body.tenantInfo?.userInfoId;
+    
+    let existingUserInfoByCCCD = null;
+    let existingUserInfoByPhone = null;
+    let existingUserInfoByEmail = null;
+    let allThreeMatch = false;
+    let onlyCccdMatch = false;
+    let onlyPhoneMatch = false;
+    let onlyEmailMatch = false;
+    let phoneAndEmailMatch = false;
+    let cccdAndPhoneMatch = false;
+    let cccdAndEmailMatch = false;
 
-    // Also check by phone and email to detect partial matches
-    const existingUserInfoByPhone = tenantInfo.phone
-      ? await UserInfo.findOne({ phone: tenantInfo.phone }).session(session)
-      : null;
+    // Normalize các field trước khi query (nếu cần)
+    const normalizedCCCD = tenantInfo.cccd ? tenantInfo.cccd.trim().replace(/\s/g, "") : null;
+    const normalizedPhone = tenantInfo.phone ? tenantInfo.phone.trim() : null;
+    const normalizedEmail = tenantInfo.email ? tenantInfo.email.trim().toLowerCase() : null;
 
-    const existingUserInfoByEmail = tenantInfo.email
-      ? await UserInfo.findOne({ email: tenantInfo.email }).session(session)
-      : null;
+    if (directUserInfoId) {
+      console.log(`[CREATE CONTRACT] Received direct userInfoId=${directUserInfoId}. Bypassing queries and forcing account reuse.`);
+      const existingUserInfo = await UserInfo.findById(directUserInfoId).session(session);
+      if (!existingUserInfo) {
+        throw new Error(`Không tìm thấy UserInfo với ID=${directUserInfoId}. Vui lòng kiểm tra lại thông tin.`);
+      }
+      existingUserInfoByCCCD = existingUserInfo;
+      existingUserInfoByPhone = existingUserInfo;
+      existingUserInfoByEmail = existingUserInfo;
+      allThreeMatch = true;
+    } else {
+      console.log(`[CREATE CONTRACT] Lookup by normalized: cccd="${normalizedCCCD}", phone="${normalizedPhone}", email="${normalizedEmail}"`);
 
-    // Check if ALL 3 fields match the same person (same UserInfo)
-    const allThreeMatch =
-      existingUserInfoByCCCD &&
-      existingUserInfoByPhone &&
-      existingUserInfoByEmail &&
-      existingUserInfoByCCCD._id.equals(existingUserInfoByPhone._id) &&
-      existingUserInfoByCCCD._id.equals(existingUserInfoByEmail._id);
+      // Find existing UserInfo by CCCD (primary key)
+      existingUserInfoByCCCD = normalizedCCCD
+        ? await UserInfo.findOne({ cccd: normalizedCCCD }).session(session)
+        : null;
 
-    // Check if only CCCD matches (but phone/email mismatch → partial match → error)
-    const onlyCccdMatch = existingUserInfoByCCCD &&
-      (!existingUserInfoByPhone || !existingUserInfoByCCCD._id.equals(existingUserInfoByPhone._id)) &&
-      (!existingUserInfoByEmail || !existingUserInfoByCCCD._id.equals(existingUserInfoByEmail._id));
+      // Also check by phone and email to detect partial matches
+      existingUserInfoByPhone = normalizedPhone
+        ? await UserInfo.findOne({ phone: normalizedPhone }).session(session)
+        : null;
 
-    // Check if only Phone matches (but CCCD/email mismatch → partial match → error)
-    const onlyPhoneMatch = existingUserInfoByPhone &&
-      (!existingUserInfoByCCCD || !existingUserInfoByCCCD._id.equals(existingUserInfoByPhone._id)) &&
-      (!existingUserInfoByEmail || !existingUserInfoByEmail._id.equals(existingUserInfoByPhone._id));
+      existingUserInfoByEmail = normalizedEmail
+        ? await UserInfo.findOne({ email: new RegExp(`^${normalizedEmail.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") }).session(session)
+        : null;
 
-    // Check if only Email matches (but CCCD/phone mismatch → partial match → error)
-    const onlyEmailMatch = existingUserInfoByEmail &&
-      (!existingUserInfoByCCCD || !existingUserInfoByCCCD._id.equals(existingUserInfoByEmail._id)) &&
-      (!existingUserInfoByPhone || !existingUserInfoByPhone._id.equals(existingUserInfoByEmail._id));
+      console.log(`[CREATE CONTRACT] Lookup results: ByCCCD=${existingUserInfoByCCCD?._id || "null"}, ByPhone=${existingUserInfoByPhone?._id || "null"}, ByEmail=${existingUserInfoByEmail?._id || "null"}`);
 
-    // Also check if phone + email match each other but not CCCD
-    const phoneAndEmailMatch =
-      existingUserInfoByPhone &&
-      existingUserInfoByEmail &&
-      existingUserInfoByPhone._id.equals(existingUserInfoByEmail._id) &&
-      (!existingUserInfoByCCCD || !existingUserInfoByCCCD._id.equals(existingUserInfoByPhone._id));
+      // Check if ALL 3 fields match the same person (same UserInfo)
+      allThreeMatch =
+        existingUserInfoByCCCD &&
+        existingUserInfoByPhone &&
+        existingUserInfoByEmail &&
+        existingUserInfoByCCCD._id.equals(existingUserInfoByPhone._id) &&
+        existingUserInfoByCCCD._id.equals(existingUserInfoByEmail._id);
 
-    // Also check if CCCD + phone match but email differs
-    const cccdAndPhoneMatch =
-      existingUserInfoByCCCD &&
-      existingUserInfoByPhone &&
-      existingUserInfoByCCCD._id.equals(existingUserInfoByPhone._id) &&
-      (!existingUserInfoByEmail || !existingUserInfoByCCCD._id.equals(existingUserInfoByEmail._id));
+      console.log(`[CREATE CONTRACT] allThreeMatch=${!!allThreeMatch}`);
 
-    // Also check if CCCD + email match but phone differs
-    const cccdAndEmailMatch =
-      existingUserInfoByCCCD &&
-      existingUserInfoByEmail &&
-      existingUserInfoByCCCD._id.equals(existingUserInfoByEmail._id) &&
-      (!existingUserInfoByPhone || !existingUserInfoByCCCD._id.equals(existingUserInfoByPhone._id));
+      // Check if only CCCD matches (but phone/email mismatch → partial match → error)
+      onlyCccdMatch = existingUserInfoByCCCD &&
+        (!existingUserInfoByPhone || !existingUserInfoByCCCD._id.equals(existingUserInfoByPhone._id)) &&
+        (!existingUserInfoByEmail || !existingUserInfoByCCCD._id.equals(existingUserInfoByEmail._id));
+
+      // Check if only Phone matches (but CCCD/email mismatch → partial match → error)
+      onlyPhoneMatch = existingUserInfoByPhone &&
+        (!existingUserInfoByCCCD || !existingUserInfoByCCCD._id.equals(existingUserInfoByPhone._id)) &&
+        (!existingUserInfoByEmail || !existingUserInfoByEmail._id.equals(existingUserInfoByPhone._id));
+
+      // Check if only Email matches (but CCCD/phone mismatch → partial match → error)
+      onlyEmailMatch = existingUserInfoByEmail &&
+        (!existingUserInfoByCCCD || !existingUserInfoByCCCD._id.equals(existingUserInfoByEmail._id)) &&
+        (!existingUserInfoByPhone || !existingUserInfoByPhone._id.equals(existingUserInfoByEmail._id));
+
+      // Also check if phone + email match each other but not CCCD
+      phoneAndEmailMatch =
+        existingUserInfoByPhone &&
+        existingUserInfoByEmail &&
+        existingUserInfoByPhone._id.equals(existingUserInfoByEmail._id) &&
+        (!existingUserInfoByCCCD || !existingUserInfoByCCCD._id.equals(existingUserInfoByPhone._id));
+
+      // Also check if CCCD + phone match but email differs
+      cccdAndPhoneMatch =
+        existingUserInfoByCCCD &&
+        existingUserInfoByPhone &&
+        existingUserInfoByCCCD._id.equals(existingUserInfoByPhone._id) &&
+        (!existingUserInfoByEmail || !existingUserInfoByCCCD._id.equals(existingUserInfoByEmail._id));
+
+      // Also check if CCCD + email match but phone differs
+      cccdAndEmailMatch =
+        existingUserInfoByCCCD &&
+        existingUserInfoByEmail &&
+        existingUserInfoByCCCD._id.equals(existingUserInfoByEmail._id) &&
+        (!existingUserInfoByPhone || !existingUserInfoByCCCD._id.equals(existingUserInfoByPhone._id));
+    }
 
     // Determine which specific field caused the partial match error
     if (onlyCccdMatch) {
@@ -290,80 +325,72 @@ exports.createContract = async (req, res) => {
       throw new Error(`Số CCCD và email đã thuộc về cùng một người khác. Vui lòng kiểm tra lại.`);
     }
 
-    // ALL 3 match → same person. Check if they already have 2 contracts for different rooms
+    // ALL 3 match → same person → reuse account, tạo hợp đồng, không throw error
+    let existingAccountReused = false; // flag để frontend hiển thị thông báo đặc biệt
     if (allThreeMatch) {
-      const existingUser = await User.findById(existingUserInfoByCCCD.userId).session(session);
-      if (existingUser) {
-        // Count active/inactive contracts for this user
+      let existingUser = await User.findById(existingUserInfoByCCCD.userId).session(session);
+      
+      // FALLBACK BẠO LỰC: Lỡ database cũ lưu userId sai hoặc bị xoá, rà quét lại User theo email / username / phone cũ
+      if (!existingUser) {
+         console.log(`[CREATE CONTRACT] WARNING: User ID ${existingUserInfoByCCCD.userId} not found! Aggressively searching for existing user fallback...`);
+         existingUser = await User.findOne({
+            $or: [
+              { email: existingUserInfoByEmail.email },
+              { phoneNumber: existingUserInfoByPhone.phone }
+            ]
+         }).session(session);
+      }
+
+      if (existingUser && existingUser.status === "active") {
+        // Tài khoản đang active → dùng lại, không tạo mới
+        user = existingUser;
+        isNewUser = false;
+        existingAccountReused = true;
         const userContracts = await Contract.find({
           tenantId: existingUser._id,
           status: { $in: ["active", "inactive"] },
         }).session(session);
-
-        if (userContracts.length >= 2) {
-          // Get room info for existing contracts
-          const roomIds = [...new Set(userContracts.map(c => c.roomId.toString()))];
-          const rooms = await Room.find({ _id: { $in: roomIds } }).session(session);
-          const roomNames = rooms.map(r => r.name || r.roomCode || r._id).join(", ");
-
-          // Send notification email
-          const samePersonEmailSubject = "Thông báo: Phát hiện đăng ký trùng thông tin - HNALMS";
-          const samePersonEmailContent = `
-            <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
-              <div style="background: #FEF3C7; padding: 20px; text-align: center; border-radius: 8px 8px 0 0;">
-                <h1 style="margin: 0; color: #92400E;">⚠️ Thông Báo Quan Trọng</h1>
-              </div>
-              <div style="background: #fff; padding: 30px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 8px 8px;">
-                <h2 style="color: #1F2937;">Xin chào ${tenantInfo.fullName},</h2>
-                <p>Chúng tôi phát hiện rằng thông tin CCCD, số điện thoại và email bạn vừa đăng ký <strong>trùng khớp với một tài khoản đã có trong hệ thống</strong>.</p>
-                <div style="background: #f3f4f6; padding: 15px; border-radius: 6px; margin: 15px 0;">
-                  <p style="margin: 0;"><strong>📋 Thông tin được phát hiện trùng:</strong></p>
-                  <ul style="margin: 10px 0 0 20px; padding: 0;">
-                    <li>CCCD: <strong>${tenantInfo.cccd}</strong></li>
-                    <li>Số điện thoại: <strong>${tenantInfo.phone}</strong></li>
-                    <li>Email: <strong>${tenantInfo.email}</strong></li>
-                  </ul>
-                </div>
-                <div style="background: #fee2e2; padding: 15px; border-radius: 6px; margin: 15px 0;">
-                  <p style="margin: 0; color: #991B1B;"><strong>⚠️ Hệ thống phát hiện bạn đã có ${userContracts.length} hợp đồng thuê phòng:</strong></p>
-                  <p style="margin: 10px 0 0 0; color: #991B1B;">Phòng: <strong>${roomNames}</strong></p>
-                  <p style="margin: 5px 0 0 0; color: #991B1B;">Nếu đây là cùng một người và bạn muốn thuê thêm phòng mới, vui lòng liên hệ trực tiếp với Ban quản lý để được hỗ trợ.</p>
-                </div>
-                <p>Không tạo tài khoản mới. Tài khoản của bạn đã có sẵn trong hệ thống.</p>
-                <p style="margin-top: 20px;">Trân trọng,<br><strong>Ban Quản Lý Tòa Nhà Hoàng Nam</strong></p>
-              </div>
-              <div style="text-align: center; margin-top: 20px; color: #6b7280; font-size: 12px;">
-                <p>&copy; ${new Date().getFullYear()} HNALMS. All rights reserved.</p>
-              </div>
-            </div>
-          `;
-          try {
-            await sendEmail(tenantInfo.email, samePersonEmailSubject, samePersonEmailContent);
-          } catch (emailErr) {
-            console.error("Failed to send same-person notification email:", emailErr);
-          }
-
-          throw new Error(`Thông tin CCCD, SĐT và email trùng với tài khoản đã có. Bạn đã có ${userContracts.length} HĐ tại ${roomNames}. Không thể tạo tài khoản mới. Vui lòng liên hệ Ban quản lý.`);
-        }
-
-        // Same person but less than 2 contracts → reuse existing account
-        if (user && user.status === "active") {
-          isNewUser = false;
-          console.log(`[CREATE CONTRACT] Same person (all 3 fields match) found: User=${user._id}, cccd=${tenantInfo.cccd}, has ${userContracts.length} contract(s). Reusing account.`);
-        } else {
-          // Account inactive or deleted → create new one, reuse UserInfo
-          isNewUser = true;
-          user = null; // will be created below
-          console.log(`[CREATE CONTRACT] Same person but account inactive/deleted. Creating new account, reusing UserInfo. existingUser=${user ? user._id : 'null'}`);
-        }
+        console.log(`[CREATE CONTRACT] Same person (all 3 fields match) → Reusing account. User=${existingUser._id}, cccd=${tenantInfo.cccd}, has ${userContracts.length} existing contract(s).`);
+      } else if (existingUser) {
+        // Tài khoản bị inactive → reactivate lại, KHÔNG tạo user mới, KHÔNG tạo UserInfo mới
+        existingUser.status = tenantInitialStatus;
+        await existingUser.save({ session });
+        user = existingUser;
+        isNewUser = false;
+        existingAccountReused = true;
+        console.log(`[CREATE CONTRACT] Same person (all 3 match) but account was inactive → Reactivated. User=${existingUser._id}, cccd=${tenantInfo.cccd}`);
       } else {
-        // No User account at all → create new
+        // User bị xóa trong DB nhưng UserInfo vẫn còn → Tạo lại User mới và link với UserInfo cũ
+        console.log(`[CREATE CONTRACT] WARNING: UserInfo exists (${existingUserInfoByCCCD._id}) but linked User was deleted. Creating new User and relinking...`);
         isNewUser = true;
-        user = null;
-        console.log(`[CREATE CONTRACT] UserInfo exists but User account deleted. Creating new account for all 3 fields match.`);
+        passwordRaw = generateRandomString(8);
+        const hashedPassword = await bcrypt.hash(passwordRaw, 10);
+        let finalUsername = (existingUserInfoByCCCD.email || tenantInfo.email).split("@")[0];
+        let existingUserByUsername = await User.findOne({ username: finalUsername }).session(session);
+        let tempUsername = finalUsername;
+        while (existingUserByUsername) {
+          tempUsername = `${finalUsername}${Math.floor(100 + Math.random() * 900)}`;
+          existingUserByUsername = await User.findOne({ username: tempUsername }).session(session);
+        }
+        finalUsername = tempUsername;
+        user = new User({
+          username: finalUsername,
+          email: existingUserInfoByCCCD.email || tenantInfo.email,
+          phoneNumber: existingUserInfoByCCCD.phone || tenantInfo.phone,
+          password: hashedPassword,
+          role: "Tenant",
+          status: tenantInitialStatus,
+        });
+        await user.save({ session });
+        // Relink UserInfo → new User
+        existingUserInfoByCCCD.userId = user._id;
+        await existingUserInfoByCCCD.save({ session });
+        existingAccountReused = true;
+        isNewUser = false; // Không gửi email "tài khoản mới" vì đây là khách cũ
+        console.log(`[CREATE CONTRACT] ✅ Recreated User=${user._id}, relinked to UserInfo=${existingUserInfoByCCCD._id}`);
       }
     } else {
-      // No existing person found at all → create new account
+      // Không tìm thấy người trùng khớp → tạo tài khoản mới
       isNewUser = true;
       console.log(`[CREATE CONTRACT] No existing person found by CCCD/Phone/Email. Creating new account. cccd=${tenantInfo.cccd}, phone=${tenantInfo.phone}, email=${tenantInfo.email}`);
     }
@@ -405,7 +432,7 @@ exports.createContract = async (req, res) => {
       console.log(`[CREATE USER] ✅ New Tenant created with ID: ${user._id}`);
 
       if (existingUserInfoByCCCD) {
-        // UserInfo đã tồn tại (CCCD cũ) → cập nhật liên kết userId mới
+        // UserInfo đã tồn tại (CCCD cũ) → chỉ cập nhật liên kết userId mới, KHÔNG tạo UserInfo mới
         existingUserInfoByCCCD.userId = user._id;
         existingUserInfoByCCCD.fullname = tenantInfo.fullName;
         existingUserInfoByCCCD.address = tenantInfo.address;
@@ -416,7 +443,7 @@ exports.createContract = async (req, res) => {
         await existingUserInfoByCCCD.save({ session });
         console.log(`[CREATE USER] ✅ Reused existing UserInfo for CCCD=${tenantInfo.cccd}, linked to new user=${user._id}`);
       } else {
-        // Tạo UserInfo hoàn toàn mới
+        // Không tìm thấy UserInfo nào → tạo mới hoàn toàn
         const userInfo = new UserInfo({
           userId: user._id,
           fullname: tenantInfo.fullName,
@@ -493,22 +520,38 @@ exports.createContract = async (req, res) => {
         // Auto create a Held deposit to satisfy system constraints since this contract originated from a booking request
         if (!linkedDepositId) {
           const depositAmount = parseFloat(room.roomTypeId?.currentPrice?.toString() || "0");
-          
+
           const roomCodeRaw = room.roomCode || room.name || "PHONG";
           const roomCodeShort = roomCodeRaw.replace(/Phòng\s*/gi, 'P').replace(/[^a-zA-Z0-9]/g, '');
           const random8 = String(Math.floor(10000000 + Math.random() * 90000000));
           const transactionCode = `Coc ${roomCodeShort} ${random8}`;
-          
+
+          // Khi booking có userInfoId → lấy thông tin từ UserInfo thay vì booking fields
+          let depositName = bRequest.name;
+          let depositPhone = bRequest.phone;
+          let depositEmail = bRequest.email;
+          let depositIdCard = bRequest.idCard;
+
+          if (bRequest.userInfoId) {
+            const userInfoForDeposit = await UserInfo.findById(bRequest.userInfoId).session(session);
+            if (userInfoForDeposit) {
+              depositName = userInfoForDeposit.fullname || depositName;
+              depositPhone = userInfoForDeposit.phone || depositPhone;
+              depositEmail = userInfoForDeposit.email || depositEmail;
+              depositIdCard = userInfoForDeposit.cccd || depositIdCard;
+            }
+          }
+
           const deposit = new Deposit({
-            name: bRequest.name,
-            phone: bRequest.phone,
-            email: bRequest.email,
+            name: depositName,
+            phone: depositPhone,
+            email: depositEmail,
             room: room._id,
             amount: depositAmount,
             status: "Held",
             transactionCode: transactionCode,
             activationStatus: contractIsActivated ? true : null,
-            idCard: bRequest.idCard,
+            idCard: depositIdCard,
             startDate: bRequest.startDate,
             duration: bRequest.duration,
             prepayMonths: bRequest.prepayMonths,
@@ -681,51 +724,66 @@ exports.createContract = async (req, res) => {
         }
       }
 
-      // 6.2 Send Contract Form
-      // Lấy thông tin deposit nếu có
-      let depositValueForEmail = 0;
-      if (linkedDepositId) {
-        const d = await Deposit.findById(linkedDepositId);
-        if (d) depositValueForEmail = d.amount;
-      } else {
-        depositValueForEmail = depositAmount; // fallback to roomPrice
+      // 6.1b Nếu tài khoản đã tồn tại và trùng khớp cả 3 trường → gửi email thông báo hợp đồng mới được thêm
+      if (existingAccountReused) {
+        const newContractNotifSubject = "Thông báo: Hợp đồng mới đã được thêm vào tài khoản của bạn - HNALMS";
+        const newContractNotifContent = `
+          <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+            <div style="background: #D1FAE5; padding: 20px; text-align: center; border-radius: 8px 8px 0 0;">
+              <h1 style="margin: 0; color: #065F46;">✅ Hợp Đồng Mới Đã Được Thêm</h1>
+            </div>
+            <div style="background: #fff; padding: 30px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 8px 8px;">
+              <h2 style="color: #1F2937;">Xin chào ${tenantInfo.fullName},</h2>
+              <p>Hệ thống đã nhận diện rằng thông tin CCCD, số điện thoại và email bạn đăng ký <strong>khớp hoàn toàn với tài khoản đã có</strong> trong hệ thống.</p>
+              <div style="background: #f3f4f6; padding: 15px; border-radius: 6px; margin: 15px 0;">
+                <p style="margin: 0;"><strong>📋 Thông tin hợp đồng mới:</strong></p>
+                <ul style="margin: 10px 0 0 20px; padding: 0;">
+                  <li>Phòng: <strong>${room.name}</strong></li>
+                  <li>Ngày bắt đầu: <strong>${new Date(contractDetails.startDate).toLocaleDateString("vi-VN")}</strong></li>
+                  <li>Ngày kết thúc: <strong>${endDate.toLocaleDateString("vi-VN")}</strong></li>
+                  <li>Thời hạn: <strong>${contractDetails.duration} tháng</strong></li>
+                </ul>
+              </div>
+              <div style="background: #EFF6FF; padding: 15px; border-radius: 6px; margin: 15px 0;">
+                <p style="margin: 0; color: #1E40AF;"><strong>ℹ️ Do thông tin trùng khớp với tài khoản hiện có:</strong></p>
+                <p style="margin: 8px 0 0 0; color: #1E40AF;">Không có tài khoản mới nào được tạo. Hợp đồng đã được thêm vào tài khoản hiện tại của bạn. Vui lòng đăng nhập bằng tài khoản cũ để xem chi tiết.</p>
+              </div>
+              <p style="margin-top: 20px;">Trân trọng,<br><strong>Ban Quản Lý Tòa Nhà Hoàng Nam</strong></p>
+            </div>
+            <div style="text-align: center; margin-top: 20px; color: #6b7280; font-size: 12px;">
+              <p>&copy; ${new Date().getFullYear()} HNALMS. All rights reserved.</p>
+            </div>
+          </div>
+        `;
+        try {
+          await sendEmail(recipientEmail, newContractNotifSubject, newContractNotifContent);
+          console.log(`✅ [DEBUG] New-contract-on-existing-account email sent to ${recipientEmail}`);
+        } catch (emailErr) {
+          console.error("Failed to send existing-account new-contract email:", emailErr);
+        }
       }
-      
-      const priceStr = new Intl.NumberFormat('vi-VN').format(roomPrice);
-      const startDt = new Date(contractDetails.startDate).toLocaleDateString("vi-VN");
-      const endDt = endDate.toLocaleDateString("vi-VN");
 
-      const contractEmailContent = EMAIL_TEMPLATES.ONLINE_BOOKING_CONTRACT.getHtml(
-        tenantInfo.fullName,
-        tenantInfo.cccd,
-        room.name,
-        contractDetails.duration,
-        priceStr,
-        startDt,
-        endDt,
-        req.body.prepayMonths || 1,
-        depositValueForEmail
-      );
-
-      try {
-        await sendEmail(recipientEmail, EMAIL_TEMPLATES.ONLINE_BOOKING_CONTRACT.subject, contractEmailContent);
-        console.log(`✅ [DEBUG] Contract email successfully sent to ${recipientEmail}`);
-      } catch (err) {
-        console.error(`❌ [DEBUG] Failed to send contract email to ${recipientEmail}:`, err);
-      }
+      // Removed sending generic contract email template as requested.
     }
 
-    const successMsg = isNewUser
-      ? (tenantInitialStatus === "inactive"
-        ? `Đã tạo hợp đồng thành công. Tài khoản sẽ được kích hoạt vào ngày ${startDateObj.toLocaleDateString("vi-VN")}. Mật khẩu và Hợp đồng đã gửi email.`
-        : "Đã tạo hợp đồng thành công. Mật khẩu và Hợp đồng đã được gửi đến email.")
-      : "Đã tạo hợp đồng thành công và gửi Hợp đồng vào email khách hàng (Tài khoản đã tồn tại nên dùng mật khẩu cũ)!";
+    let successMsg;
+    if (existingAccountReused) {
+      successMsg = "Đã tạo hợp đồng thành công. Do thông tin CCCD, SĐT và email trùng khớp với tài khoản đã có, hợp đồng được liên kết với tài khoản hiện tại.";
+    } else if (isNewUser) {
+      successMsg = tenantInitialStatus === "inactive"
+        ? `Đã tạo hợp đồng thành công. Tài khoản sẽ được kích hoạt vào ngày ${startDateObj.toLocaleDateString("vi-VN")}. Mật khẩu đã gửi email.`
+        : "Đã tạo hợp đồng thành công. Mật khẩu đã được gửi đến email khách hàng.";
+    } else {
+      successMsg = "Đã tạo hợp đồng thành công (Tài khoản đã tồn tại nên dùng mật khẩu cũ)!";
+    }
 
     res.status(201).json({
       success: true,
       message: successMsg,
+      existingAccountReused,
       data: {
         isNewUser,
+        existingAccountReused,
         contract: newContract,
         account: isNewUser ? {
           username: user.username,

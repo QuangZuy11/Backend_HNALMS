@@ -11,9 +11,15 @@ class FloorController {
         data: floors,
       });
     } catch (error) {
+      if (error.name === "ValidationError") {
+        return res.status(400).json({
+          success: false,
+          error: { status: 400, message: "Dữ liệu tầng không hợp lệ" },
+        });
+      }
       res.status(500).json({
         success: false,
-        error: { status: 500, message: error.message },
+        error: { status: 500, message: "Lỗi máy chủ nội bộ" },
       });
     }
   }
@@ -30,9 +36,15 @@ class FloorController {
       }
       res.json({ success: true, data: floor });
     } catch (error) {
+      if (error.name === "ValidationError") {
+        return res.status(400).json({
+          success: false,
+          error: { status: 400, message: "Dữ liệu tầng không hợp lệ" },
+        });
+      }
       res.status(500).json({
         success: false,
-        error: { status: 500, message: error.message },
+        error: { status: 500, message: "Lỗi máy chủ nội bộ" },
       });
     }
   }
@@ -44,10 +56,18 @@ class FloorController {
       const newFloor = await floorService.createFloor(req.body);
       res.status(201).json({
         success: true,
-        message: "Floor created successfully",
+        message: "Thêm tầng thành công",
         data: newFloor,
       });
     } catch (error) {
+      // Xử lý lỗi validation từ Mongoose
+      if (error.name === "ValidationError") {
+        return res.status(400).json({
+          success: false,
+          error: { status: 400, message: "Tên tầng là bắt buộc" },
+        });
+      }
+
       // Xử lý lỗi trùng tên (E11000 duplicate key error collection)
       if (error.code === 11000) {
         return res.status(400).json({
@@ -57,7 +77,7 @@ class FloorController {
       }
       res.status(500).json({
         success: false,
-        error: { status: 500, message: error.message },
+        error: { status: 500, message: "Lỗi máy chủ nội bộ" },
       });
     }
   }
@@ -87,9 +107,15 @@ class FloorController {
           error: { status: 400, message: "Tên tầng đã tồn tại" },
         });
       }
+      if (error.name === "ValidationError") {
+        return res.status(400).json({
+          success: false,
+          error: { status: 400, message: "Dữ liệu tầng không hợp lệ" },
+        });
+      }
       res.status(500).json({
         success: false,
-        error: { status: 500, message: error.message },
+        error: { status: 500, message: "Lỗi máy chủ nội bộ" },
       });
     }
   }
@@ -111,9 +137,15 @@ class FloorController {
         message: "Floor deleted successfully",
       });
     } catch (error) {
+      if (error.name === "ValidationError") {
+        return res.status(400).json({
+          success: false,
+          error: { status: 400, message: "Dữ liệu tầng không hợp lệ" },
+        });
+      }
       res.status(500).json({
         success: false,
-        error: { status: 500, message: error.message },
+        error: { status: 500, message: "Lỗi máy chủ nội bộ" },
       });
     }
   }
