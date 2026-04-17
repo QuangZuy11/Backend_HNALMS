@@ -1442,7 +1442,7 @@ class MoveOutRequestService {
 
     await this._notifyTenant(
       moveOutRequest.tenantId,
-      `✅ Trả phòng đã hoàn tất`,
+      `Trả phòng đã hoàn tất`,
       completionContent
     );
 
