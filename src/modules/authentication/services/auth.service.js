@@ -298,12 +298,12 @@ const forgotPassword = async (email) => {
   // Find user
   const user = await User.findOne({ email: normalizedEmail });
   if (!user) {
-    throw new Error("Email not found");
+    throw new Error("Email không tồn tại trọng hệ thống");
   }
 
   // Check account status
   if (user.status !== "active") {
-    throw new Error("Account is not active");
+    throw new Error("Tài khoản không hoạt động");
   }
 
   // Generate new random password
