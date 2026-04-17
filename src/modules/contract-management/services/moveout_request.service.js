@@ -787,12 +787,10 @@ class MoveOutRequestService {
       throw new Error("Ngày trả phòng phải từ ngày hiện tại trở đi");
     }
 
-    // Điều kiện 1: Từ requestDate đến endDate phải >= 30 ngày (báo trước 30 ngày trước khi HĐ hết hạn).
-    // Tức: endDate - requestDate >= 30 → endDate >= requestDate + 30 ngày
+    // Điều kiện báo trước 30 ngày đã được BỎ — chỉ còn điều kiện đủ 6 tháng.
     const requestDate = this._toDateOnly(now);
     const daysBeforeContractEnd = this._getCalendarDaysDiff(requestDate, endDate);
-    const hasEnoughNoticeDays = daysBeforeContractEnd >= MOVEOUT_POLICY.MIN_NOTICE_DAYS;
-    const isEarlyNotice = !hasEnoughNoticeDays;
+    const isEarlyNotice = false; // Không áp dụng penalty báo trước nữa
 
     // Điều kiện 2: Tính thời gian ở từ ngày bắt đầu HĐ đến requestDate (phải đủ 6 tháng).
     const stayMonthsToRequestDate = this._getCompletedMonths(contract.startDate, requestDate);
@@ -821,8 +819,8 @@ class MoveOutRequestService {
       isUnderMinStayEffective = false;
       console.log(`[MOVEOUT] ✅ Gap contract → LUÔN ĐƯỢC HOÀN CỌC`);
     } else {
-      // Primary contract: áp dụng rule 30 ngày + 6 tháng
-      isDepositForfeited = isEarlyNotice || isUnderMinStay;
+      // Primary contract: chỉ áp dụng rule 6 tháng (đã bỏ rule 30 ngày báo trước)
+      isDepositForfeited = isUnderMinStay;
     }
     // ============================================================
     //  KẾT THÚC KIỂM TRA GAP CONTRACT
@@ -832,12 +830,6 @@ class MoveOutRequestService {
 
     // Chỉ hiển thị warning cho primary contract (gap contract không bị phạt)
     if (!isGapContract) {
-      if (isEarlyNotice) {
-        warnings.push({
-          type: "early_notice",
-          message: `Ngày yêu cầu trả phòng cách ngày kết thúc hợp đồng ${daysBeforeContractEnd} ngày, chưa đủ tối thiểu ${MOVEOUT_POLICY.MIN_NOTICE_DAYS} ngày báo trước. Trường hợp này sẽ không được hoàn cọc. Bạn có chắc chắn không?`
-        });
-      }
 
       if (isUnderMinStay) {
         warnings.push({
