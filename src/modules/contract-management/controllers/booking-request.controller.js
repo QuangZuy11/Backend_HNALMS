@@ -366,6 +366,22 @@ exports.sendPaymentInfo = async (req, res) => {
       tenantGender = request.gender;
     }
 
+    // Nếu manager truyền userInfoId (từ frontend SendContractToGuest), lưu lại vào booking
+    if (updateData.userInfoId && !request.userInfoId) {
+      request.userInfoId = updateData.userInfoId;
+      // Cðp nhật lại thông tin tenant từ userInfo mới gán
+      const freshUserInfo = await UserInfo.findById(updateData.userInfoId);
+      if (freshUserInfo) {
+        tenantName    = freshUserInfo.fullname || tenantName;
+        tenantEmail   = freshUserInfo.email    || tenantEmail;
+        tenantPhone   = freshUserInfo.phone    || tenantPhone;
+        tenantIdCard  = freshUserInfo.cccd     || tenantIdCard;
+        tenantAddress = freshUserInfo.address  || tenantAddress;
+        tenantDob     = freshUserInfo.dob      || tenantDob;
+        tenantGender  = freshUserInfo.gender   || tenantGender;
+      }
+    }
+
     if (updateData.startDate) request.startDate = new Date(updateData.startDate);
     if (updateData.duration) request.duration = parseInt(updateData.duration, 10);
     if (updateData.prepayMonths) request.prepayMonths = updateData.prepayMonths;
@@ -440,17 +456,33 @@ exports.sendPaymentInfo = async (req, res) => {
       );
       // Send cancellation email to each loser
       for (const cr of competingRequests) {
+        let crEmail = cr.email;
+        let crName  = cr.name;
+
+        // Nếu booking chỉ có userInfoId (không có email trực tiếp) → fetch từ UserInfo
+        if (!crEmail && cr.userInfoId) {
+          try {
+            const crUserInfo = await UserInfo.findById(cr.userInfoId);
+            if (crUserInfo) {
+              crEmail = crUserInfo.email;
+              crName  = crUserInfo.fullname || crName;
+            }
+          } catch (_) { /* ignore */ }
+        }
+
+        if (!crEmail) continue; // bỏ qua nếu vẫn không có email
+
         try {
           await sendEmail(
-            cr.email,
+            crEmail,
             "Yêu cầu đặt phòng của bạn đã bị từ chối - Hoàng Nam",
-            `<p>Chào <strong>${cr.name}</strong>,</p>
+            `<p>Chào <strong>${crName || "Quý khách"}</strong>,</p>
              <p>Rất tiếc, yêu cầu đặt phòng <strong>${request.roomId.name}</strong> của bạn đã bị hủy vì phòng vừa được chốt bởi một khách hàng khác.</p>
              <p>Bạn có thể đặt phòng khác tại hệ thống của chúng tôi. Xin lỗi vì sự bất tiện này!</p>
              <p>Trân trọng,<br/>Quản lý Tòa nhà Hoàng Nam</p>`,
           );
         } catch (emailErr) {
-          console.error("[sendPaymentInfo] Failed to send rejection email to", cr.email, emailErr.message);
+          console.error("[sendPaymentInfo] Failed to send rejection email to", crEmail, emailErr.message);
         }
       }
     }

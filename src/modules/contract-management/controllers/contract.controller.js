@@ -360,8 +360,34 @@ exports.createContract = async (req, res) => {
         existingAccountReused = true;
         console.log(`[CREATE CONTRACT] Same person (all 3 match) but account was inactive → Reactivated. User=${existingUser._id}, cccd=${tenantInfo.cccd}`);
       } else {
-        // KHÔNG BAO GIỜ CHO PHÉP TẠO MỚI NỮA NẾU ĐÃ CÓ TÀI KHOẢN TRÙNG, fix triệt để lỗi
-        throw new Error("Loi he thong: Da tim thay UserInfo cu nhung tai khoan dang nhap User bi xoa. Khong the tao them account rac.");
+        // User bị xóa trong DB nhưng UserInfo vẫn còn → Tạo lại User mới và link với UserInfo cũ
+        console.log(`[CREATE CONTRACT] WARNING: UserInfo exists (${existingUserInfoByCCCD._id}) but linked User was deleted. Creating new User and relinking...`);
+        isNewUser = true;
+        passwordRaw = generateRandomString(8);
+        const hashedPassword = await bcrypt.hash(passwordRaw, 10);
+        let finalUsername = (existingUserInfoByCCCD.email || tenantInfo.email).split("@")[0];
+        let existingUserByUsername = await User.findOne({ username: finalUsername }).session(session);
+        let tempUsername = finalUsername;
+        while (existingUserByUsername) {
+          tempUsername = `${finalUsername}${Math.floor(100 + Math.random() * 900)}`;
+          existingUserByUsername = await User.findOne({ username: tempUsername }).session(session);
+        }
+        finalUsername = tempUsername;
+        user = new User({
+          username: finalUsername,
+          email: existingUserInfoByCCCD.email || tenantInfo.email,
+          phoneNumber: existingUserInfoByCCCD.phone || tenantInfo.phone,
+          password: hashedPassword,
+          role: "Tenant",
+          status: tenantInitialStatus,
+        });
+        await user.save({ session });
+        // Relink UserInfo → new User
+        existingUserInfoByCCCD.userId = user._id;
+        await existingUserInfoByCCCD.save({ session });
+        existingAccountReused = true;
+        isNewUser = false; // Không gửi email "tài khoản mới" vì đây là khách cũ
+        console.log(`[CREATE CONTRACT] ✅ Recreated User=${user._id}, relinked to UserInfo=${existingUserInfoByCCCD._id}`);
       }
     } else {
       // Không tìm thấy người trùng khớp → tạo tài khoản mới
