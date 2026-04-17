@@ -152,6 +152,14 @@ const validateLogin = (req, res, next) => {
   const normalizedUsername = rawUsername.trim();
   const normalizedPassword = rawPassword.trim();
 
+  // Thiếu cả hai
+  if (!normalizedUsername && !normalizedPassword) {
+    return res.status(400).json({
+      success: false,
+      message: "Vui lòng nhập tên đăng nhập và mật khẩu"
+    });
+  }
+
   // Thiếu username
   if (!normalizedUsername) {
     return res.status(400).json({
