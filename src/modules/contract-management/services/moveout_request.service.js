@@ -849,7 +849,7 @@ class MoveOutRequestService {
       // Gap contract: thông báo ưu đãi
       warnings.push({
         type: "gap_contract_deposit_protection",
-        message: `Bạn là người thuê trong khoảng trống (gap contract). Bạn LUÔN ĐƯỢC hoàn cọc khi trả phòng, không phụ thuộc vào thời gian báo trước hay thời gian ở.`
+        message: `Bạn đang ở theo dạng hợp đồng ngắn hạn. Bạn ĐƯỢC ƯU TIÊN hoàn cọc khi trả phòng mà không phụ thuộc vào thời gian báo trước hay thời hạn tối thiểu.`
       });
     }
 
@@ -1320,6 +1320,12 @@ class MoveOutRequestService {
 
     if (moveOutRequest.status !== "Paid") {
       throw new Error(`Chỉ có thể hoàn tất trả phòng khi trạng thái là Paid (hiện tại: ${moveOutRequest.status})`);
+    }
+
+    const todayDateOnly = this._toDateOnly(new Date());
+    const expectedDateOnly = this._toDateOnly(moveOutRequest.expectedMoveOutDate);
+    if (todayDateOnly < expectedDateOnly) {
+      throw new Error(`Chưa đến ngày trả phòng (${this._formatVNDate(expectedDateOnly)}). Hệ thống sẽ tự động hoàn tất vào ngày này, hoặc bạn có thể hoàn tất thủ công từ ngày này trở đi.`);
     }
 
     const contract = await Contract.findById(moveOutRequest.contractId)
