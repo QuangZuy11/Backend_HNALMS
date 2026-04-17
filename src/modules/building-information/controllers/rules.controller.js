@@ -70,12 +70,30 @@ const getRuleById = async (req, res) => {
 const createRules = async (req, res) => {
   try {
     const rulesData = req.body;
+
+    // Manual Validation based on test cases
+    if (rulesData.categories && rulesData.categories.length > 0) {
+      for (const cat of rulesData.categories) {
+        if (!cat.title || !cat.icon) {
+          return errorResponse(res, "icon is required là bắt buộc", 400);
+        }
+      }
+    }
+
+    if (rulesData.guidelines && rulesData.guidelines.length > 0) {
+      for (const guide of rulesData.guidelines) {
+        if (!guide.title || !guide.content) {
+          return errorResponse(res, "Nội dung is required", 400);
+        }
+      }
+    }
+
     const newRules = await buildingService.createRules(rulesData);
 
     return successResponse(
       res,
       newRules,
-      "Building rules created successfully",
+      "Nội quy được tạo thành công",
       201,
     );
   } catch (error) {
@@ -92,6 +110,40 @@ const updateRules = async (req, res) => {
   try {
     const { id } = req.params;
     const updateData = req.body;
+
+    // Manual Validation based on test cases (Update rules)
+    if (updateData.categories && updateData.categories.length > 0) {
+      for (let i = 0; i < updateData.categories.length; i++) {
+        const cat = updateData.categories[i];
+        if (cat.title === "") {
+          return errorResponse(
+            res,
+            `Path \`categories.${i}.title\` is required`,
+            400,
+          );
+        }
+      }
+    }
+
+    if (updateData.guidelines && updateData.guidelines.length > 0) {
+      for (let i = 0; i < updateData.guidelines.length; i++) {
+        const guide = updateData.guidelines[i];
+        if (guide.title === "") {
+          return errorResponse(
+            res,
+            `Path \`guidelines.${i}.title\` is required`,
+            400,
+          );
+        }
+        if (guide.content === "") {
+          return errorResponse(
+            res,
+            `Path \`guidelines.${i}.content\` is required`,
+            400,
+          );
+        }
+      }
+    }
 
     const updatedRules = await buildingService.updateRules(id, updateData);
 
