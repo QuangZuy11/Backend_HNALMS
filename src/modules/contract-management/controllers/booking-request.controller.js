@@ -125,14 +125,7 @@ exports.checkDuplicateTenant = async (req, res) => {
         });
       }
 
-      if (existingContracts.length >= 2) {
-        return res.status(409).json({
-          success: false,
-          type: "same_person_max_contracts",
-          message: "Thông tin CCCD, SĐT và email trùng với tài khoản đã có. Bạn đã có nhiều HĐ. Không thể đặt phòng mới. Vui lòng liên hệ Ban quản lý.",
-          data: { contractsCount: existingContracts.length },
-        });
-      }
+      // Không giới hạn số lượng hợp đồng, bỏ đoạn block max 2 contracts.
 
       // Trả về userInfoId để frontend gửi vào BookingRequest thay vì thông tin cá nhân
       return res.status(409).json({
