@@ -452,7 +452,7 @@ async function confirmContractRenewal(contractId, tenantId, extensionMonths) {
     // Kiểm tra gap contract: chỉ được gia hạn tối đa đến ngày bắt đầu hợp đồng kế tiếp
     let maxRenewalEndDate = null;
     let next = null;
-    
+
     const gapCheck = await checkIfGapContract(contract);
     if (gapCheck.isGapContract) {
         next = await getNextActiveContract(contract.roomId, contract.endDate);
@@ -538,7 +538,7 @@ async function declineContractRenewal(contractId, tenantId) {
             contractId: contract._id,
             tenantId: contract.tenantId,
             expectedMoveOutDate: contract.endDate,
-            reason: "Từ chối gia hạn - Kết thúc tự nhiên",
+            reason: "Từ chối gia hạn - Kết thúc đúng hạn",
             requestDate: startOfUtcDay(new Date()),
             isEarlyNotice: false,
             isUnderMinStay: false,
