@@ -148,6 +148,7 @@ exports.getAllRooms = async (filters) => {
       // Nếu thời hạn kết thúc xa nhất vẫn <= 1 tháng → phòng sắp trống
       if (c.endDate <= oneMonthFromNow) {
         expiryMap[roomKey] = {
+          startDate: c.startDate,
           endDate: c.endDate,
           renewalStatus: c.renewalStatus,
         };
@@ -321,7 +322,9 @@ exports.getAllRooms = async (filters) => {
 
     const expiryInfo = expiryMap[roomKey];
     if (expiryInfo) {
-      // Expiring soon: attach endDate + renewalStatus
+      // Expiring soon: attach startDate + endDate + renewalStatus
+      // startDate cho phép FE hiển thị dải ngày đầy đủ "DD/MM/YY–DD/MM/YY"
+      obj.contractStartDate = expiryInfo.startDate;
       obj.contractEndDate = expiryInfo.endDate;
       obj.contractRenewalStatus = expiryInfo.renewalStatus || null;
     } else {
