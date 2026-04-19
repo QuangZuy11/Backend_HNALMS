@@ -209,7 +209,7 @@ const validateChangePassword = (req, res, next) => {
   if (!oldPassword || !newPassword) {
     return res.status(400).json({
       success: false,
-      message: "Old password and new password are required"
+      message: "Nhập đầy đủ mật khẩu cũ và mật khẩu mới"
     });
   }
 
@@ -226,7 +226,7 @@ const validateChangePassword = (req, res, next) => {
   if (oldPassword === newPassword) {
     return res.status(400).json({
       success: false,
-      message: "New password must be different from old password"
+      message: "Mật khẩu mới phải khác mật khẩu cũ"
     });
   }
 
