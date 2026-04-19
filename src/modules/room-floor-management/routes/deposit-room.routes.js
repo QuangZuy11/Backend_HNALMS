@@ -34,6 +34,9 @@ router.post("/", depositAdminController.createDeposit);
 // GET /api/deposits/:id — Lấy deposit theo ID
 router.get("/:id", depositAdminController.getDepositById);
 
+// PUT /api/deposits/:id — Cập nhật deposit
+router.put("/:id", depositAdminController.updateDeposit);
+
 // ⚠️ Webhook Sepay đã chuyển sang endpoint chung: POST /api/webhook/sepay
 // Xem: src/shared/routes/sepay-webhook.routes.js
 

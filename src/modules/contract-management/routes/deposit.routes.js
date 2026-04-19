@@ -11,4 +11,7 @@ router.post("/", depositController.createDeposit);
 // Get deposit by ID
 router.get("/:id", depositController.getDepositById);
 
+// Update deposit by ID
+router.put("/:id", depositController.updateDeposit);
+
 module.exports = router;
