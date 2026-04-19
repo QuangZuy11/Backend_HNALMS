@@ -27,7 +27,7 @@ describe("validateForgotPassword middleware", () => {
     expect(res.status).toHaveBeenCalledWith(400);
     expect(res.json).toHaveBeenCalledWith({
       success: false,
-      message: "Email is required",
+      message: "Vui lòng nhập địa chỉ email",
     });
     expect(next).not.toHaveBeenCalled();
   });
@@ -40,7 +40,7 @@ describe("validateForgotPassword middleware", () => {
     expect(res.status).toHaveBeenCalledWith(400);
     expect(res.json).toHaveBeenCalledWith({
       success: false,
-      message: "Invalid email format",
+      message: "Vui lòng nhập địa chỉ email hợp lệ",
     });
     expect(next).not.toHaveBeenCalled();
   });

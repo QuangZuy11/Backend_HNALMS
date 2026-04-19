@@ -243,7 +243,7 @@ const validateForgotPassword = (req, res, next) => {
   if (!email) {
     return res.status(400).json({
       success: false,
-      message: "Email is required"
+      message: "Vui lòng nhập địa chỉ email"
     });
   }
 
@@ -251,10 +251,10 @@ const validateForgotPassword = (req, res, next) => {
   if (!isValidEmail(email)) {
     return res.status(400).json({
       success: false,
-      message: "Invalid email format"
+      message: "Vui lòng nhập địa chỉ email hợp lệ"
     });
   }
-
+  
   next();
 };
 
