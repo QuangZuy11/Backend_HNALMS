@@ -331,8 +331,71 @@ const getDepositById = async (req, res) => {
   }
 };
 
+const updateDeposit = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, phone, email, room, status } = req.body;
+
+    const deposit = await Deposit.findById(id);
+    if (!deposit) {
+      return res.status(404).json({ success: false, message: "Không tìm thấy thông tin cọc" });
+    }
+
+    // Nếu có sự thay đổi phòng
+    if (room && room !== deposit.room.toString()) {
+      const oldRoomId = deposit.room;
+      const newRoomId = room;
+
+      deposit.room = newRoomId;
+      
+      // Xử lý status phòng cũ: Nếu không còn deposit Held và không có HĐ active -> Available
+      const otherDepositsInOldRoom = await Deposit.countDocuments({ room: oldRoomId, status: "Held", _id: { $ne: deposit._id } });
+      const contractsInOldRoom = await Contract.countDocuments({ roomId: oldRoomId, status: "active" });
+      if (otherDepositsInOldRoom === 0 && contractsInOldRoom === 0) {
+          await Room.findByIdAndUpdate(oldRoomId, { status: "Available" });
+      }
+
+      // Đổi phòng mới sang Deposited
+      await Room.findByIdAndUpdate(newRoomId, { status: "Deposited" });
+    }
+
+    if (name) deposit.name = name;
+    if (phone) deposit.phone = phone;
+    if (email) deposit.email = email;
+
+    if (status && status !== deposit.status) {
+      deposit.status = status;
+      // Nếu trạng thái mới không còn giữ cọc, kiểm tra xem có cần đưa phòng về Available không
+      if (status !== 'Held' && status !== 'Pending') {
+         const otherDeposits = await Deposit.countDocuments({ room: deposit.room, status: "Held", _id: { $ne: deposit._id } });
+         const contracts = await Contract.countDocuments({ roomId: deposit.room, status: "active" });
+         if (otherDeposits === 0 && contracts === 0) {
+             await Room.findByIdAndUpdate(deposit.room, { status: "Available" });
+         }
+      }
+    }
+
+    await deposit.save();
+
+    res.status(200).json({
+      success: true,
+      message: "Cập nhật thông tin cọc thành công",
+      data: deposit,
+    });
+
+  } catch (error) {
+    console.error("Error in updateDeposit:", error);
+    res.status(500).json({
+      success: false,
+      message: "Lỗi khi cập nhật cọc",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   getAllDeposits,
   createDeposit,
   getDepositById,
+  updateDeposit,
 };
