@@ -128,7 +128,7 @@ const createRepairRequest = async (data) => {
     status: "active"
   });
   if (!activeContract) {
-    throw new Error("Phòng không thuộc về người dùng hoặc hợp đồng không còn hoạt động");
+    throw new Error("Phòng đã hết hợp đồng hoặc hợp đồng chưa có hiệu lực !");
   }
 
   // Kiểm tra device có tồn tại không
