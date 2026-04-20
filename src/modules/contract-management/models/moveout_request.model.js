@@ -64,11 +64,11 @@ const MoveOutRequestSchema = new Schema({
   },
 
   // === Thông tin hóa đơn cuối ===
-  finalInvoiceId: {
-    type: Schema.Types.ObjectId,
-    ref: 'Invoice',
-    default: null
-  },
+    finalInvoiceId: {
+      type: Schema.Types.ObjectId,
+      ref: 'InvoicePeriodic',
+      default: null
+    },
 
   // === Thông tin hoàn/bù cọc ===
   depositRefundAmount: {
