@@ -218,7 +218,7 @@ exports.changePassword = async (req, res) => {
     if (!oldPassword || !newPassword) {
       return res.status(400).json({
         success: false,
-        message: "Old password and new password are required"
+        message: "Nhập đầy đủ mật khẩu cũ và mật khẩu mới"
       });
     }
 

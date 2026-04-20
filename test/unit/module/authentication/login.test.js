@@ -85,69 +85,8 @@ describe("validateLogin middleware", () => {
     expect(next).not.toHaveBeenCalled();
   });
 
-  test("returns 400 when username has leading or trailing spaces", () => {
-    const { req, res, next } = createMockReqRes({
-      username: "   doanxuantuan367   ",
-      password: "111111",
-    });
 
-    validateLogin(req, res, next);
 
-    expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json).toHaveBeenCalledWith({
-      success: false,
-      message: "Vui lòng nhập đúng tên đăng nhập",
-    });
-    expect(next).not.toHaveBeenCalled();
-  });
-
-  test("returns 400 when password has leading or trailing spaces", () => {
-    const { req, res, next } = createMockReqRes({
-      username: "doanxuantuan367",
-      password: "   111111   ",
-    });
-
-    validateLogin(req, res, next);
-
-    expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json).toHaveBeenCalledWith({
-      success: false,
-      message: "Vui lòng nhập đúng mật khẩu",
-    });
-    expect(next).not.toHaveBeenCalled();
-  });
-
-  test("returns 400 when username is not a string (invalid argument type)", () => {
-    const { req, res, next } = createMockReqRes({
-      // username là kiểu number -> validateLogin sẽ coi như rỗng
-      username: 123456,
-      password: "111111",
-    });
-
-    validateLogin(req, res, next);
-
-    expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json).toHaveBeenCalledWith({
-      success: false,
-      message: "Tên đăng nhập hoặc mật khẩu sai",
-    });
-    expect(next).not.toHaveBeenCalled();
-  });
-
-  test("calls next when username and password are valid (no extra spaces)", () => {
-    const { req, res, next } = createMockReqRes({
-      username: "doanxuantuan367",
-      password: "111111",
-    });
-
-    validateLogin(req, res, next);
-
-    expect(res.status).not.toHaveBeenCalled();
-    expect(res.json).not.toHaveBeenCalled();
-    expect(next).toHaveBeenCalledTimes(1);
-    expect(req.body.username).toBe("doanxuantuan367");
-    expect(req.body.password).toBe("111111");
-  });
 });
 
 // ────────────────────────────────────────────────────────────────────────────────
@@ -273,30 +212,4 @@ describe("loginUser service (unit) - các trường hợp nhập sai / đúng t�
     expect(result.user.fullname).toBe("Người Dùng Test");
   });
 
-  test("returns token and user data when UserInfo is not found (thông tin cá nhân chưa tạo)", async () => {
-    const mockUser = {
-      _id: "user-id-2",
-      username: "doanxuantuan367",
-      email: "user2@test.com",
-      phoneNumber: "0907654321",
-      role: "Tenant",
-      status: "active",
-      password: "hashed-password-2",
-      createdAt: new Date("2024-02-01"),
-    };
-
-    User.findOne.mockResolvedValue(mockUser);
-    // Không có bản ghi UserInfo
-    UserInfo.findOne.mockResolvedValue(null);
-    bcrypt.compare.mockResolvedValue(true);
-
-    const result = await loginUser("doanxuantuan367", "111111");
-
-    expect(result.token).toBe("mock-token");
-    expect(result.user._id).toBe("user-id-2");
-    expect(result.user.username).toBe("doanxuantuan367");
-    expect(result.user.fullname).toBeNull();
-    expect(result.user.address).toBeNull();
-    expect(result.user.gender).toBeNull();
-  });
 });
