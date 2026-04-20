@@ -99,12 +99,21 @@ class FinanceService {
     let rentRev = 0, elecRev = 0, waterRev = 0, serviceRev = 0;
     periodicInvoices.forEach(inv => {
       if (inv.status === "Paid") {
+        const isPrepaid = inv.title && inv.title.toLowerCase().includes("trả trước");
+        
+        // Nếu là trả trước, ta đã tính vào prepaidRentRev ở trên, không cộng vào rentRev nữa
+        // Tuy nhiên vẫn cần cộng điện, nước nếu có (đề phòng trường hợp hiếm)
         inv.items.forEach(item => {
           const name = item.itemName.toLowerCase();
-          if (name.includes("phòng")) rentRev += item.amount;
-          else if (name.includes("điện")) elecRev += item.amount;
-          else if (name.includes("nước")) waterRev += item.amount;
-          else serviceRev += item.amount;
+          if (name.includes("phòng")) {
+            if (!isPrepaid) rentRev += item.amount;
+          } else if (name.includes("điện")) {
+            elecRev += item.amount;
+          } else if (name.includes("nước")) {
+            waterRev += item.amount;
+          } else {
+            serviceRev += item.amount;
+          }
         });
       }
     });
@@ -181,7 +190,12 @@ class FinanceService {
       }));
 
     return {
-      summary: { totalRevenue, totalExpense, netProfit, totalDebt },
+      summary: { 
+        totalInflow: totalRevenue, 
+        totalOutflow: totalExpense, 
+        netCashFlow: netProfit, 
+        totalDebt 
+      },
       revenueBreakdown,
       chartData,
       topDebts
@@ -234,8 +248,10 @@ class FinanceService {
       return "N/A";
     };
 
-    // --- Bóc tách Định kỳ ---
+    // --- Bóc tách Định kỳ & Trả trước ---
     periodicInvoices.forEach(inv => {
+      const isPrepaid = inv.title && inv.title.toLowerCase().includes("trả trước");
+      
       summary.expectedRevenue += inv.totalAmount;
       if (inv.status === "Paid") summary.actualCollected += inv.totalAmount;
       if (inv.status === "Unpaid") summary.totalDebt += inv.totalAmount;
@@ -246,9 +262,9 @@ class FinanceService {
         date: inv.createdAt,
         room: getRoomName(inv),
         transactionType: inv.status === "Paid" ? "THU" : "NỢ",
-        category: "Định kỳ (Phòng, Điện, Nước...)",
+        category: isPrepaid ? "Tiền phòng trả trước" : "Định kỳ (Phòng, Điện, Nước...)",
         paymentMethod: inv.paymentMethod || (inv.status === "Paid" ? "Chuyển khoản" : "-"),
-        description: inv.title || "Thu tiền định kỳ",
+        description: inv.title || (isPrepaid ? "Thu tiền phòng trả trước" : "Thu tiền định kỳ"),
         inflow: inv.totalAmount,
         outflow: 0,
         status: inv.status
@@ -282,27 +298,7 @@ class FinanceService {
       });
     });
 
-    // --- Bóc tách Tiền phòng trả trước (InvoicePeriodic) ---
-    periodicInvoices.forEach(inv => {
-      if (inv.title && inv.title.toLowerCase().includes("trả trước")) {
-        if (inv.status === "Paid") {
-          summary.actualCollected += inv.totalAmount;
-          ledger.push({
-            id: inv._id,
-            code: inv.invoiceCode,
-            date: inv.createdAt,
-            room: getRoomName(inv),
-            transactionType: "THU",
-            category: "Tiền phòng trả trước",
-            paymentMethod: inv.paymentMethod || "Chuyển khoản",
-            description: inv.title || "Thu tiền phòng trả trước",
-            inflow: inv.totalAmount,
-            outflow: 0,
-            status: inv.status
-          });
-        }
-      }
-    });
+    // (Hóa đơn trả trước đã được bóc tách ở vòng lặp định kỳ phía trên)
 
     // --- Bóc tách Phiếu Chi ---
     financialTickets.forEach(ticket => {
@@ -415,6 +411,7 @@ class FinanceService {
     };
 
     periodicInvoices.forEach(inv => {
+      const isPrepaid = inv.title && inv.title.toLowerCase().includes("trả trước");
       summary.recognizedRevenue += inv.totalAmount;
       pnlLedger.push({
         id: inv._id,
@@ -422,7 +419,7 @@ class FinanceService {
         code: inv.invoiceCode,
         room: getRoomName(inv),
         description: inv.title,
-        category: "Doanh thu Định kỳ",
+        category: isPrepaid ? "Doanh thu Tiền phòng trả trước" : "Doanh thu Định kỳ",
         revenue: inv.totalAmount,
         expense: 0,
         status: inv.status === "Paid" ? "Đã thu tiền" : "Đang nợ"
