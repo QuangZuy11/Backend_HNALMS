@@ -89,9 +89,23 @@ class InvoiceIncurredService {
     const invoices = rawInvoices.map((invoice) => {
       const tenantId = invoice.contractId?.tenantId?._id?.toString();
       const fullname = tenantId ? tenantInfoMap.get(tenantId) : null;
+      const deviceName = invoice.repairRequestId?.devicesId?.name || null;
+      const repairDescription = invoice.repairRequestId?.description || null;
+      const incurredCategoryLabel =
+        invoice.type === "repair"
+          ? "Sửa chữa"
+          : invoice.type === "violation"
+            ? "Vi phạm"
+            : invoice.type === "prepaid"
+              ? "Trả trước"
+              : "Phát sinh";
+
       if (fullname) {
         return {
           ...invoice,
+          deviceName,
+          repairDescription,
+          incurredCategoryLabel,
           contractId: {
             ...invoice.contractId,
             tenantId: {
@@ -101,7 +115,12 @@ class InvoiceIncurredService {
           },
         };
       }
-      return invoice;
+      return {
+        ...invoice,
+        deviceName,
+        repairDescription,
+        incurredCategoryLabel,
+      };
     });
 
     return {
@@ -196,6 +215,14 @@ class InvoiceIncurredService {
     return {
       ...invoice,
       invoiceType: "Incurred",
+      incurredCategoryLabel:
+        invoice.type === "repair"
+          ? "Sửa chữa"
+          : invoice.type === "violation"
+            ? "Vi phạm"
+            : invoice.type === "prepaid"
+              ? "Trả trước"
+              : "Phát sinh",
       roomId: invoice.contractId?.roomId || null,
       roomName: invoice.contractId?.roomId?.name || null,
       tenant: invoice.contractId?.tenantId || null,
