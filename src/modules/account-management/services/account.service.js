@@ -263,6 +263,34 @@ const enableAccount = async (accountId, currentUserId, creatorRole) => {
   };
 };
 
+const deleteAccount = async (accountId, currentUserId, creatorRole) => {
+  const user = await User.findById(accountId);
+  if (!user) {
+    throw new Error("Tài khoản không tồn tại");
+  }
+
+  const roleKey = (creatorRole || "").toLowerCase();
+  if (roleKey === 'admin') {
+    if (user.role !== 'owner') {
+      throw new Error("Admin chỉ có thể xóa tài khoản Chủ nhà (Owner)");
+    }
+  } else if (roleKey === 'owner') {
+    if (!['manager', 'accountant'].includes(user.role)) {
+      throw new Error("Chủ nhà chỉ có thể xóa tài khoản Quản lý/Kế toán");
+    }
+  } else {
+    const allowedRoles = ALLOWED_VIEW_ROLES[roleKey];
+    if (!allowedRoles || !allowedRoles.includes(user.role)) {
+      throw new Error("Bạn không có quyền xóa tài khoản với vai trò này");
+    }
+  }
+
+  await UserInfo.deleteOne({ userId: user._id });
+  await User.deleteOne({ _id: user._id });
+
+  return { _id: user._id };
+};
+
 module.exports = {
   createAccountByRole,
   getAccountsByViewerRole,
@@ -270,4 +298,5 @@ module.exports = {
   getAccountDetail,
   disableAccount,
   enableAccount,
+  deleteAccount,
 };
