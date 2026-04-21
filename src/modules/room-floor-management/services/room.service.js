@@ -347,6 +347,8 @@ exports.getAllRooms = async (filters) => {
             obj.contractStartDate = startDate;
             obj.contractEndDate = null;
             obj.hasFutureInactiveContract = true;
+            // Gán nextInactiveContractStart để FE kiểm tra rule thuê tối thiểu 1 tháng
+            obj.nextInactiveContractStart = future.startDate;
           } else {
             obj.contractStartDate = future.startDate;
             obj.contractEndDate = future.endDate;
@@ -431,6 +433,8 @@ exports.getRoomDetail = async (roomId) => {
       roomData.contractEndDate = null;
       roomData.futureContractStartDate = futureInactiveContract.startDate;
       roomData.hasFutureInactiveContract = true;
+      // Gán nextInactiveContractStart để FE kiểm tra rule thuê tối thiểu 1 tháng
+      roomData.nextInactiveContractStart = futureInactiveContract.startDate;
     }
 
     // Check for floating deposit
