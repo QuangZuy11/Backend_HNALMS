@@ -32,6 +32,7 @@ router.get("/managers", authenticate, authorize("owner", "admin"), managerContro
 router.get("/managers/:id", authenticate, authorize("owner", "admin"), managerController.getManagerById);
 router.put("/managers/:id/disable", authenticate, authorize("owner"), managerController.disableManager);
 router.put("/managers/:id/enable", authenticate, authorize("owner"), managerController.enableManager);
+router.delete("/managers/:id", authenticate, authorize("owner", "admin"), managerController.deleteManager);
 
 // --- Tenants (Manager, Owner) ---
 router.get("/tenants", authenticate, authorize("manager", "owner"), tenantController.getTenants);
