@@ -21,6 +21,14 @@ const floorSchema = new mongoose.Schema(
       enum: ["active", "inactive"],
       default: "active",
     },
+    // Kiểu sơ đồ tầng: 'type1' = layout Tầng 1 (lưới đều, sidebar Xe),
+    // 'type2' = layout Tầng 2 (lệch 2 bên, có thang máy/khoảng trống),
+    // 'type3' = layout Tầng 5 (lưới đều, sidebar Sân Phơi)
+    layoutType: {
+      type: String,
+      enum: ["type1", "type2", "type3"],
+      default: "type1",
+    },
   },
   {
     timestamps: true,
