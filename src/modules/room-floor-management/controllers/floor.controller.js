@@ -100,7 +100,6 @@ class FloorController {
         data: updatedFloor,
       });
     } catch (error) {
-      // Xử lý lỗi trùng tên khi update
       if (error.code === 11000) {
         return res.status(400).json({
           success: false,
@@ -113,9 +112,10 @@ class FloorController {
           error: { status: 400, message: "Dữ liệu tầng không hợp lệ" },
         });
       }
-      res.status(500).json({
+      const status = error.message?.includes("không thể") ? 400 : 500;
+      res.status(status).json({
         success: false,
-        error: { status: 500, message: "Lỗi máy chủ nội bộ" },
+        error: { status, message: error.message || "Lỗi máy chủ nội bộ" },
       });
     }
   }
