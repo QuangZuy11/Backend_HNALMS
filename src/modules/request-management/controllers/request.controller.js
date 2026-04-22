@@ -98,7 +98,7 @@ exports.createRepairRequest = async (req, res) => {
 
     res.status(201).json({
       success: true,
-      message: "Tạo yêu cầu sửa chữa/bảo trì thành công",
+      message: "Tạo yêu cầu sửa chữa thành công",
       data: newRequest,
     });
   } catch (error) {
