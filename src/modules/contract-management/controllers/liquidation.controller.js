@@ -255,7 +255,27 @@ exports.createLiquidation = async (req, res) => {
           await deposit.save({ session });
         }
       }
-      await Room.findByIdAndUpdate(room._id, { status: "Available" }, { session });
+
+      // ── Kiểm tra floating deposit trước khi set trạng thái phòng ──
+      // Nếu phòng đang có cọc lẻ (chưa bind contract) → giữ là Deposited
+      const allRoomContracts = await Contract.find({
+        roomId: room._id,
+      }).select("_id").session(session);
+      const boundContractIds = new Set(allRoomContracts.map((c) => c._id.toString()));
+
+      const floatingDeposits = await Deposit.find({
+        room: room._id,
+        status: "Held",
+      }).session(session);
+
+      const hasFloatingDeposit = floatingDeposits.some((d) => {
+        if (!d.contractId) return true; // chưa bind contract nào → floating
+        if (!boundContractIds.has(d.contractId.toString())) return true; // bind contract đã bị thanh lý/xóa
+        return false;
+      });
+
+      room.status = hasFloatingDeposit ? "Deposited" : "Available";
+      await room.save({ session });
       // Removed: await User.findByIdAndUpdate(contract.tenantId._id || contract.tenantId, { status: "inactive" }, { session });
 
       await session.commitTransaction();
@@ -367,7 +387,27 @@ exports.createLiquidation = async (req, res) => {
           await deposit.save({ session });
         }
       }
-      await Room.findByIdAndUpdate(room._id, { status: "Available" }, { session });
+
+      // ── Kiểm tra floating deposit trước khi set trạng thái phòng ──
+      // Nếu phòng đang có cọc lẻ (chưa bind contract) → giữ là Deposited
+      const allRoomContracts = await Contract.find({
+        roomId: room._id,
+      }).select("_id").session(session);
+      const boundContractIds = new Set(allRoomContracts.map((c) => c._id.toString()));
+
+      const floatingDeposits = await Deposit.find({
+        room: room._id,
+        status: "Held",
+      }).session(session);
+
+      const hasFloatingDeposit = floatingDeposits.some((d) => {
+        if (!d.contractId) return true;
+        if (!boundContractIds.has(d.contractId.toString())) return true;
+        return false;
+      });
+
+      room.status = hasFloatingDeposit ? "Deposited" : "Available";
+      await room.save({ session });
       // Removed: await User.findByIdAndUpdate(contract.tenantId._id || contract.tenantId, { status: "inactive" }, { session });
 
       await session.commitTransaction();
