@@ -229,8 +229,13 @@ const createDeposit = async (req, res) => {
 
     await newDeposit.save();
 
-    // Update room status to Deposited
-    await Room.findByIdAndUpdate(room, { status: "Deposited" });
+    // Chỉ đổi sang Deposited nếu phòng không còn hợp đồng active
+    // (tức là phòng Available + tạo cọc, hoặc phòng Deposited có cọc mới)
+    // Nếu phòng đang Occupied (do hợp đồng declined-renewal cũ vẫn đang chạy)
+    // thì giữ nguyên status là Occupied
+    if (roomExists.status === "Available" || roomExists.status === "Deposited") {
+      await Room.findByIdAndUpdate(room, { status: "Deposited" });
+    }
 
     // Gửi email xác nhận deposit
     try {
@@ -355,8 +360,11 @@ const updateDeposit = async (req, res) => {
           await Room.findByIdAndUpdate(oldRoomId, { status: "Available" });
       }
 
-      // Đổi phòng mới sang Deposited
-      await Room.findByIdAndUpdate(newRoomId, { status: "Deposited" });
+      // Chỉ đổi sang Deposited nếu phòng mới không còn hợp đồng active
+      const newRoomDoc = await Room.findById(newRoomId);
+      if (newRoomDoc && (newRoomDoc.status === "Available" || newRoomDoc.status === "Deposited")) {
+        await Room.findByIdAndUpdate(newRoomId, { status: "Deposited" });
+      }
     }
 
     if (name) deposit.name = name;

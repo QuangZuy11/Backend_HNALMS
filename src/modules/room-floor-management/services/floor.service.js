@@ -20,13 +20,16 @@ class FloorService {
 
   // Chức năng SỬA tầng
   async updateFloor(id, data) {
-    // 1. Kiểm tra xem có phòng nào thuộc tầng này không
-    // Lưu ý: Nếu bạn chỉ muốn chặn khi có người ở (Occupied), hãy thêm điều kiện { status: 'occupied' }
-    const hasActiveRooms = await Room.exists({ floorId: id });
+    const floor = await Floor.findById(id);
+    if (!floor) return null;
 
-    if (hasActiveRooms) {
-      // Ném ra lỗi để Controller bắt được và trả về client
-      throw new Error("Không thể cập nhật thông tin tầng vì đang có phòng hoạt động tại tầng này.");
+    // Chỉ chặn khi đổi tên — vì tên tầng là danh tính, đổi có thể gây nhầm lẫn
+    // Các trường khác (layoutType, description, status) thì cho phép cập nhật
+    if (data.name && data.name !== floor.name) {
+      const hasActiveRooms = await Room.exists({ floorId: id });
+      if (hasActiveRooms) {
+        throw new Error("Không thể đổi tên tầng khi đang có phòng hoạt động tại tầng này.");
+      }
     }
 
     return await Floor.findByIdAndUpdate(id, data, { new: true });

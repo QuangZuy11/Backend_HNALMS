@@ -151,3 +151,28 @@ exports.enableManager = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
+
+/**
+ * Xóa tài khoản Quản lý/Kế toán - Owner hoặc Admin
+ * DELETE /accounts/managers/:id
+ */
+exports.deleteManager = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const currentUserId = req.user?.userId;
+    const creatorRole = req.user?.role;
+    const deleted = await accountService.deleteAccount(id, currentUserId, creatorRole);
+    res.json({
+      success: true,
+      message: "Đã xóa tài khoản thành công",
+      data: deleted,
+    });
+  } catch (error) {
+    console.error("Delete manager error:", error);
+    if (error.message.includes("không tồn tại")) return res.status(404).json({ success: false, message: error.message });
+    if (error.message.includes("không có quyền") || error.message.includes("chỉ có thể")) {
+      return res.status(403).json({ success: false, message: error.message });
+    }
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
