@@ -7,6 +7,7 @@ const BookService = require("../../contract-management/models/bookservice.model"
 const InvoicePeriodic = require("../../invoice-management/models/invoice_periodic.model");
 const MeterReading = require("../../invoice-management/models/meterreading.model");
 const Service = require("../../service-management/models/service.model");
+const FinancialTicket = require("../../managing-income-expenses/models/financial_tickets");
 const mongoose = require("mongoose");
 
 /**
@@ -22,6 +23,80 @@ const generateRequestCode = () => {
   return `TR-${y}${m}${d}-${rand}`;
 };
 
+/**
+ * Helper: Đọc giá tiền từ Decimal128 hoặc Number
+ */
+const extractPrice = (priceField) => {
+  if (!priceField) return 0;
+  if (typeof priceField === "object" && priceField.$numberDecimal) {
+    return parseFloat(priceField.$numberDecimal);
+  }
+  return Number(priceField) || 0;
+};
+
+/**
+ * Helper: Tính số tháng khả dụng từ rentPaidUntil
+ * Rule: Bỏ tháng hiện tại nếu không tròn, chỉ đếm từ tháng tiếp theo đến tháng của rentPaidUntil (inclusive)
+ * Ví dụ: today = 23/04/2026, rentPaidUntil = 30/06/2026 → tháng 5 + 6 = 2 tháng
+ * @param {Date} rentPaidUntil - Ngày trả trước trong hợp đồng
+ * @returns {number} Số tháng khả dụng (>= 0)
+ */
+const calculateAvailableMonths = (rentPaidUntil) => {
+  if (!rentPaidUntil) return 0;
+  const paidUntil = new Date(rentPaidUntil);
+  const now = new Date();
+
+  // Đầu tháng tiếp theo
+  const nextMonthStart = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  nextMonthStart.setHours(0, 0, 0, 0);
+
+  // paidUntil phải vươn sang tháng tiếp theo mới có tháng khả dụng
+  if (paidUntil < nextMonthStart) return 0;
+
+  // Đếm số tháng từ nextMonthStart đến tháng của paidUntil (inclusive)
+  const startYear = nextMonthStart.getFullYear();
+  const startMonth = nextMonthStart.getMonth(); // 0-indexed
+  const endYear = paidUntil.getFullYear();
+  const endMonth = paidUntil.getMonth(); // 0-indexed
+
+  const months = (endYear - startYear) * 12 + (endMonth - startMonth) + 1;
+  return Math.max(0, months);
+};
+
+/**
+ * Helper: Tạo mã phiếu chi hoàn tiền chuyển phòng
+ * Format: PAY-DDMMYYYY-XXXX
+ */
+const getTransferRefundVoucher = async () => {
+  const now = new Date();
+  const dd = String(now.getDate()).padStart(2, "0");
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const yyyy = now.getFullYear();
+  const prefix = `PAY-${dd}${mm}${yyyy}-`;
+
+  const latest = await FinancialTicket.findOne({
+    paymentVoucher: { $regex: `^${prefix}\\d{4}$` },
+  })
+    .select("paymentVoucher")
+    .sort({ paymentVoucher: -1 })
+    .lean();
+
+  let nextNumber = 1;
+  if (latest?.paymentVoucher) {
+    const suffix = latest.paymentVoucher.slice(prefix.length);
+    const parsed = parseInt(suffix, 10);
+    if (!Number.isNaN(parsed)) nextNumber = parsed + 1;
+  }
+
+  for (let i = 0; i < 100; i++) {
+    if (nextNumber > 9999) throw new Error("Đã vượt quá giới hạn mã phiếu chi trong ngày (9999)");
+    const candidate = `${prefix}${String(nextNumber).padStart(4, "0")}`;
+    const exists = await FinancialTicket.exists({ paymentVoucher: candidate });
+    if (!exists) return candidate;
+    nextNumber++;
+  }
+  throw new Error("Không thể tạo mã phiếu chi mới, vui lòng thử lại");
+};
 
 /**
  * Helper: Kiểm tra phòng có trống trong khoảng thời gian hay không
@@ -316,14 +391,18 @@ const createTransferRequest = async (tenantId, body) => {
     };
   }
 
-  // 7. Kiểm tra ngày chuyển phòng hợp lệ
+  // 7. Kiểm tra ngày chuyển phòng hợp lệ (Bắt buộc là ngày mai)
   const transferDateObj = new Date(transferDate);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  if (transferDateObj < today) {
+  transferDateObj.setHours(0, 0, 0, 0);
+  
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  tomorrow.setHours(0, 0, 0, 0);
+  
+  if (transferDateObj.getTime() !== tomorrow.getTime()) {
     throw {
       status: 400,
-      message: "Ngày chuyển phòng không được là ngày trong quá khứ.",
+      message: "Ngày chuyển phòng bắt buộc phải là ngày mai.",
     };
   }
 
@@ -370,22 +449,31 @@ const createTransferRequest = async (tenantId, body) => {
 
 /**
  * Helper: Đồng bộ TransferRequest với trạng thái hóa đơn
- * Giúp tự động chuyển TransferRequest từ InvoiceReleased sang Paid nếu hóa đơn tương ứng đã được thanh toán.
+ * Chỉ chuyển sang Paid khi: hóa đơn dịch vụ đã Paid VÀ hóa đơn đóng thêm (nếu có) đã Paid
  */
 const _syncPendingTransferRequestsWithPaidInvoices = async () => {
   const pendingRequests = await TransferRequest.find({
     status: "InvoiceReleased",
     transferInvoiceId: { $ne: null }
-  }).populate('transferInvoiceId', 'status');
+  })
+    .populate('transferInvoiceId', 'status')
+    .populate('prepaidInvoiceId', 'status');
 
   for (const req of pendingRequests) {
-    if (req.transferInvoiceId && req.transferInvoiceId.status === "Paid") {
+    const serviceInvoicePaid = req.transferInvoiceId?.status === "Paid";
+    // Nếu có hóa đơn đóng thêm thì phải Paid cả hai, nếu không có thì chỉ cần hóa đơn dịch vụ
+    const prepaidInvoicePaid = req.prepaidInvoiceId
+      ? req.prepaidInvoiceId.status === "Paid"
+      : true;
+
+    if (serviceInvoicePaid && prepaidInvoicePaid) {
       req.status = "Paid";
       await req.save();
-      console.log(`[TRANSFER_SYNC] ✅ Cập nhật TransferRequest ${req._id} sang Paid do hóa đơn đã thanh toán.`);
+      console.log(`[TRANSFER_SYNC] ✅ TransferRequest ${req._id} → Paid (dịch vụ + ${req.prepaidInvoiceId ? 'đóng thêm' : 'không có đóng thêm'}).`);
     }
   }
 };
+
 
 /**
  * [TENANT] Xem danh sách yêu cầu chuyển phòng của mình
@@ -794,7 +882,7 @@ const releaseTransferInvoice = async (requestId, managerInvoiceNotes = "", elect
     }
   }
 
-  // Lưu hóa đơn
+  // Lưu hóa đơn dịch vụ
   let finalInvoice;
   if (existingInvoice) {
     existingInvoice.title = invoiceTitle;
@@ -804,22 +892,108 @@ const releaseTransferInvoice = async (requestId, managerInvoiceNotes = "", elect
     existingInvoice.status = 'Unpaid';
     await existingInvoice.save();
     finalInvoice = existingInvoice;
-    console.log(`[TRANSFER] ✅ Hóa đơn cập nhật: ${existingInvoice._id} | Tổng: ${totalAmount}`);
   } else {
     finalInvoice = await InvoicePeriodic.create({
       invoiceCode, contractId: contract._id, title: invoiceTitle,
       items: invoiceItems, totalAmount, dueDate, status: 'Unpaid',
     });
-    console.log(`[TRANSFER] ✅ Hóa đơn tạo mới: ${invoiceCode} | Tổng: ${totalAmount}`);
   }
+  console.log(`[TRANSFER] ✅ Hóa đơn dịch vụ: ${finalInvoice._id} | Tổng: ${totalAmount}`);
 
-  // Cập nhật yêu cầu chuyển phòng
+  // ─── TÍNH CHÊNH LỆCH TIỀN TRẢ TRƯỚC ────────────────────────────────────
+  const targetRoomDoc = await Room.findById(request.targetRoomId).populate('roomTypeId', 'currentPrice typeName');
+  const oldRoomPrice = extractPrice(room.roomTypeId?.currentPrice);
+  const newRoomPrice = extractPrice(targetRoomDoc?.roomTypeId?.currentPrice);
+
+  const availableMonths = calculateAvailableMonths(contract.rentPaidUntil);
+  const availableOldAmount = Math.round(availableMonths * oldRoomPrice);
+  const availableNewAmount = Math.round(availableMonths * newRoomPrice);
+  const difference = availableNewAmount - availableOldAmount; // >0: phải đóng thêm; <0: được hoàn
+
+  console.log(`[TRANSFER] 📅 Tháng khả dụng: ${availableMonths} | Phòng cũ: ${availableOldAmount} | Phòng mới: ${availableNewAmount} | Chênh lệch: ${difference}`);
+
+  // Cập nhật proration vào request
+  request.proration = { oldRoomPrice, newRoomPrice, availableMonths, availableOldAmount, availableNewAmount, difference };
   request.transferInvoiceId = finalInvoice._id;
   request.prorationNote = managerInvoiceNotes;
+
+  let prepaidInvoice = null;
+  let refundTicket = null;
+
+  if (availableMonths > 0 && difference > 0) {
+    // Phòng mới đắt hơn → tạo hóa đơn đóng thêm tiền trả trước
+    const now = new Date();
+    const datePrefix = `${String(now.getDate()).padStart(2, '0')}${String(now.getMonth() + 1).padStart(2, '0')}${now.getFullYear()}`;
+    const nextSeq = String(Math.floor(Math.random() * 10000)).padStart(4, '0');
+    const prepaidCode = `HD-PREPAID-${datePrefix}-${nextSeq}`;
+
+    const formatVN = (d) => {
+      const dd = String(d.getDate()).padStart(2, '0');
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const yyyy = d.getFullYear();
+      return `${dd}/${mm}/${yyyy}`;
+    };
+
+    const prepaidFrom = new Date(request.transferDate);
+    prepaidFrom.setHours(12, 0, 0, 0);
+
+    const isFirstDay = prepaidFrom.getDate() === 1;
+    let actualPrepaidFrom = new Date(prepaidFrom);
+    if (!isFirstDay) {
+      actualPrepaidFrom = new Date(prepaidFrom.getFullYear(), prepaidFrom.getMonth() + 1, 1);
+      actualPrepaidFrom.setHours(12, 0, 0, 0);
+    }
+
+    const prepaidTo = new Date(actualPrepaidFrom.getFullYear(), actualPrepaidFrom.getMonth() + availableMonths, 0);
+    prepaidTo.setHours(12, 0, 0, 0);
+
+    const itemNameDesc = `Đóng thêm tiền phòng trả trước ${availableMonths} tháng (từ ${formatVN(actualPrepaidFrom)} đến ${formatVN(prepaidTo)})`;
+
+    prepaidInvoice = await InvoicePeriodic.create({
+      invoiceCode: prepaidCode,
+      contractId: contract._id,
+      title: `Thanh toán tiền phòng trả trước (${availableMonths} tháng)`,
+      items: [{ 
+        itemName: itemNameDesc, 
+        oldIndex: 0, 
+        newIndex: 0, 
+        usage: availableMonths, 
+        unitPrice: newRoomPrice - oldRoomPrice, 
+        amount: difference, 
+        isIndex: false 
+      }],
+      totalAmount: difference,
+      dueDate,
+      status: 'Unpaid',
+    });
+    request.prepaidInvoiceId = prepaidInvoice._id;
+    console.log(`[TRANSFER] 💰 Hóa đơn đóng thêm: ${difference.toLocaleString('vi-VN')} VND`);
+
+  } else if (availableMonths > 0 && difference < 0) {
+    // Phòng cũ thừa tiền → tạo phiếu chi hoàn tiền
+    const refundAmount = Math.abs(difference);
+    const existingTicket = await FinancialTicket.findOne({ referenceId: request._id, title: { $regex: /^Hoàn tiền chuyển phòng/i } });
+    if (!existingTicket) {
+      const voucher = await getTransferRefundVoucher();
+      refundTicket = await FinancialTicket.create({
+        amount: refundAmount,
+        title: `Hoàn tiền chuyển phòng - HĐ ${contract.contractCode} (${availableMonths} tháng × ${(oldRoomPrice - newRoomPrice).toLocaleString('vi-VN')} VND)`,
+        referenceId: request._id,
+        status: 'Approved',
+        transactionDate: new Date(),
+        paymentVoucher: voucher,
+      });
+      request.refundTicketId = refundTicket._id;
+      console.log(`[TRANSFER] 💸 Phiếu chi hoàn tiền: ${refundAmount.toLocaleString('vi-VN')} VND | Voucher: ${voucher}`);
+    } else {
+      request.refundTicketId = existingTicket._id;
+    }
+  }
+
   request.status = "InvoiceReleased";
   await request.save();
 
-  return { request, invoice: finalInvoice };
+  return { request, invoice: finalInvoice, prepaidInvoice, refundTicket, proration: request.proration };
 };
 
 /**
@@ -851,12 +1025,17 @@ const updateTransferRequest = async (requestId, tenantId, body) => {
   const newTargetRoomId = targetRoomId || request.targetRoomId.toString();
   const newTransferDate = transferDate ? new Date(transferDate) : request.transferDate;
 
-  // Validate ngày
+  // Validate ngày (Bắt buộc là ngày mai)
   if (transferDate) {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    if (newTransferDate < today) {
-      throw { status: 400, message: "Ngày chuyển phòng không được là ngày trong quá khứ." };
+    const transferDateObj = new Date(transferDate);
+    transferDateObj.setHours(0, 0, 0, 0);
+    
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    tomorrow.setHours(0, 0, 0, 0);
+    
+    if (transferDateObj.getTime() !== tomorrow.getTime()) {
+      throw { status: 400, message: "Ngày chuyển phòng bắt buộc phải là ngày mai." };
     }
   }
 
@@ -1056,20 +1235,32 @@ const completeTransferRequest = async (requestId) => {
     if (request.status !== "Paid") {
       throw {
         status: 400,
-        message: `Chỉ có thể hoàn tất yêu cầu khi đã thanh toán (Paid). Hiện tại: "${request.status}"`,
+        message: `Chỉ có thể hoàn tất yêu cầu khi đã thanh toán đầy đủ (Paid). Hiện tại: "${request.status}"`,
       };
     }
 
-    // 2. Kiểm tra ngày chuyển đã tới
+    // 1b. Kiểm tra phiếu chi hoàn tiền (nếu có) đã được xử lý
+    if (request.refundTicketId) {
+      const refundTicket = await FinancialTicket.findById(request.refundTicketId).select('status').lean();
+      if (refundTicket && refundTicket.status !== 'Paid') {
+        throw {
+          status: 400,
+          message: `Phiếu chi hoàn tiền chuyển phòng chưa được thanh toán. Vui lòng hoàn tất phiếu chi trước khi bàn giao phòng.`,
+        };
+      }
+    }
+
+    // 2. Kiểm tra ngày hợp lệ (Cho phép hoàn tất từ ngày tạo yêu cầu trở đi)
     const transferDate = new Date(request.transferDate);
+    const createdAtDate = new Date(request.createdAt);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    transferDate.setHours(0, 0, 0, 0);
+    createdAtDate.setHours(0, 0, 0, 0);
 
-    if (transferDate > today) {
+    if (today < createdAtDate) {
       throw {
         status: 400,
-        message: `Ngày chuyển phòng chưa tới. Ngày chuyển: ${transferDate.toLocaleDateString("vi-VN")}`,
+        message: `Chưa tới ngày hợp lệ để hoàn tất.`,
       };
     }
 
@@ -1133,7 +1324,7 @@ const completeTransferRequest = async (requestId) => {
       status: "active",
       terms: oldContract.terms,
       images: [],
-      rentPaidUntil: oldContract.rentPaidUntil, // ✅ CHUYỂN DỮ LIỆU NGÀY THANH TOÁN TIỀN THUÊ
+      rentPaidUntil: oldContract.rentPaidUntil,
     });
 
     await newContract.save({ session });
@@ -1144,8 +1335,64 @@ const completeTransferRequest = async (requestId) => {
     console.log(`   - Chuyển dữ liệu:`);
     console.log(`     • CoResidents: ${oldContract.coResidents?.length || 0} người`);
     console.log(`     • CỌC (ID: ${oldContract.depositId ? oldContract.depositId : "N/A"})`);
-    console.log(`     • Ngày thanh toán tiền thuê: ${oldContract.rentPaidUntil ? new Date(oldContract.rentPaidUntil).toLocaleDateString("vi-VN") : "N/A"}`);
+    console.log(`     • rentPaidUntil mới: ${newContract.rentPaidUntil ? new Date(newContract.rentPaidUntil).toLocaleDateString("vi-VN") : "N/A"} (${request.proration?.availableMonths || 0} tháng khả dụng)`);
     console.log(`     • Terms & Conditions: Giữ nguyên`);
+
+    // 7.2 TẠO BẢN GHI TIỀN PHÒNG TRẢ TRƯỚC CHO HỢP ĐỒNG MỚI
+    // Cần thiết để luồng move-out sau này tính hoàn tiền đúng
+    const availableMonths = request.proration?.availableMonths || 0;
+    if (availableMonths > 0 && newContract.rentPaidUntil) {
+      const newRoomPrice = request.proration?.newRoomPrice || 0;
+      const newPrepaidAmount = Math.round(availableMonths * newRoomPrice);
+      
+      const now = new Date();
+      const datePrefix = `${String(now.getDate()).padStart(2, '0')}${String(now.getMonth() + 1).padStart(2, '0')}${now.getFullYear()}`;
+      const nextSeq = String(Math.floor(Math.random() * 10000)).padStart(4, '0');
+      const invoiceCode = `HD-PREPAID-${datePrefix}-${nextSeq}`;
+      
+      const formatVN = (d) => {
+        const dd = String(d.getDate()).padStart(2, '0');
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const yyyy = d.getFullYear();
+        return `${dd}/${mm}/${yyyy}`;
+      };
+
+      const prepaidFrom = new Date(newStartDate);
+      prepaidFrom.setHours(12, 0, 0, 0);
+
+      const isFirstDay = prepaidFrom.getDate() === 1;
+      
+      let actualPrepaidFrom = new Date(prepaidFrom);
+      if (!isFirstDay) {
+        // Bắt đầu từ ngày 1 của tháng tiếp theo
+        actualPrepaidFrom = new Date(prepaidFrom.getFullYear(), prepaidFrom.getMonth() + 1, 1);
+        actualPrepaidFrom.setHours(12, 0, 0, 0);
+      }
+
+      const prepaidTo = new Date(actualPrepaidFrom.getFullYear(), actualPrepaidFrom.getMonth() + availableMonths, 0);
+      prepaidTo.setHours(12, 0, 0, 0);
+
+      const itemNameDesc = `Tiền thuê phòng trả trước ${availableMonths} tháng (từ ${formatVN(actualPrepaidFrom)} đến ${formatVN(prepaidTo)})`;
+
+      await InvoicePeriodic.create({
+        invoiceCode,
+        contractId: newContract._id,
+        title: `Thanh toán tiền phòng trả trước (${availableMonths} tháng)`,
+        items: [{
+          itemName: itemNameDesc,
+          oldIndex: 0,
+          newIndex: 0,
+          usage: availableMonths,
+          unitPrice: newRoomPrice,
+          amount: newPrepaidAmount,
+          isIndex: false,
+        }],
+        totalAmount: newPrepaidAmount,
+        dueDate: now,
+        status: 'Paid', // Đã thanh toán (chuyển từ hợp đồng cũ sang)
+      });
+      console.log(`   • Bản ghi tiền phòng trả trước HĐ mới: ${newPrepaidAmount.toLocaleString('vi-VN')} VND (${availableMonths} tháng) → Paid`);
+    }
 
     // 7.5 CHUYỂN DỊCH VỤ TỪ HỢP ĐỒNG CŨ SANG HỢP ĐỒNG MỚI (CỐ ĐỊNH + MỞ RỘNG)
     // LOGIC THANG MÁY: Tầng 1 → Tầng khác = Thêm, Tầng khác → Tầng 1 = Bỏ

@@ -59,18 +59,30 @@ const transferRequestSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
-    // [MỚI] Hóa đơn chuyển phòng (nếu có)
+    // Hóa đơn điện/nước/dịch vụ tháng chuyển phòng
     transferInvoiceId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "InvoicePeriodic",
       default: null,
     },
-    // [MỚI] Thời gian hoàn tất chuyển phòng
+    // Hóa đơn đóng thêm tiền phòng trả trước (khi phòng mới đắt hơn)
+    prepaidInvoiceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "InvoicePeriodic",
+      default: null,
+    },
+    // Phiếu chi hoàn tiền trả trước (khi phòng cũ rẻ hơn / thừa tiền)
+    refundTicketId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "FinancialTicket",
+      default: null,
+    },
+    // Thời gian hoàn tất chuyển phòng
     completedAt: {
       type: Date,
       default: null,
     },
-    // [MỚI] Ghi chú về xử lý chênh lệch tiền
+    // Ghi chú về xử lý chênh lệch tiền
     prorationNote: {
       type: String,
       default: "",
@@ -81,13 +93,13 @@ const transferRequestSchema = new mongoose.Schema(
       ref: "Contracts",
       default: null,
     },
-    // Thông tin tính toán chênh lệch tiền thuê
+    // Thông tin tính toán chênh lệch tiền thuê trả trước
     proration: {
-      oldRoomPrice: { type: Number, default: 0 },       // Giá phòng cũ
+      oldRoomPrice: { type: Number, default: 0 },        // Giá phòng cũ
       newRoomPrice: { type: Number, default: 0 },        // Giá phòng mới
-      daysRemainingInMonth: { type: Number, default: 0 }, // Số ngày còn lại trong tháng
-      oldRoomRefund: { type: Number, default: 0 },       // Tiền thừa phòng cũ
-      newRoomCharge: { type: Number, default: 0 },       // Tiền phải đóng phòng mới
+      availableMonths: { type: Number, default: 0 },     // Số tháng khả dụng từ rentPaidUntil
+      availableOldAmount: { type: Number, default: 0 },  // Tiền trả trước khả dụng phòng cũ
+      availableNewAmount: { type: Number, default: 0 },  // Tiền trả trước áp dụng cho phòng mới
       difference: { type: Number, default: 0 },          // Chênh lệch (+ phải đóng thêm, - được hoàn)
     },
   },
