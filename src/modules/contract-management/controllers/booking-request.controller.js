@@ -434,7 +434,12 @@ exports.sendPaymentInfo = async (req, res) => {
     await request.save();
 
     // Lock the room so nobody else can take it
-    await Room.findByIdAndUpdate(request.roomId._id, { status: "Deposited" });
+    // CHỈ set Deposited khi phòng KHÔNG có HĐ active đang chạy (kể cả declined).
+    // Nếu phòng đang Occupied (HĐ declined chưa hết hạn) → giữ nguyên Occupied.
+    const roomDoc = await Room.findById(request.roomId._id);
+    if (roomDoc && roomDoc.status !== "Occupied") {
+      await Room.findByIdAndUpdate(request.roomId._id, { status: "Deposited" });
+    }
 
     // ─── Auto-reject competing Pending requests for the same room ───
     const competingRequests = await BookingRequest.find({
