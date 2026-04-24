@@ -295,6 +295,21 @@ exports.rejectTransferRequest = async (req, res) => {
 };
 
 /**
+ * [MANAGER] Lấy chỉ số điện nước gần nhất của phòng trong yêu cầu chuyển phòng
+ * GET /api/requests/transfer/:id/latest-meter
+ */
+exports.getLatestMeterReading = async (req, res) => {
+  try {
+    const result = await transferService.getLatestMeterReadingForTransfer(req.params.id);
+    res.status(200).json({ success: true, message: "Lấy chỉ số điện nước thành công", data: result });
+  } catch (error) {
+    console.error("Get latest meter reading error:", error);
+    const status = error.status || 500;
+    res.status(status).json({ success: false, message: error.message || "Server error" });
+  }
+};
+
+/**
  * [MANAGER] Phát hành hóa đơn chuyển phòng
  * POST /api/requests/transfer/:id/release-invoice
  * Body: { managerInvoiceNotes, electricIndex, waterIndex }

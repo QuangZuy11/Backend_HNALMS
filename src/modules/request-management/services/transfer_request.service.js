@@ -394,11 +394,11 @@ const createTransferRequest = async (tenantId, body) => {
   // 7. Kiểm tra ngày chuyển phòng hợp lệ (Bắt buộc là ngày mai)
   const transferDateObj = new Date(transferDate);
   transferDateObj.setHours(0, 0, 0, 0);
-  
+
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 1);
   tomorrow.setHours(0, 0, 0, 0);
-  
+
   if (transferDateObj.getTime() !== tomorrow.getTime()) {
     throw {
       status: 400,
@@ -706,14 +706,14 @@ const releaseTransferInvoice = async (requestId, managerInvoiceNotes = "", elect
 
   const request = await TransferRequest.findById(requestId);
   if (!request) throw { status: 404, message: "Không tìm thấy yêu cầu chuyển phòng." };
-  
+
   if (request.status !== "Approved") {
     throw { status: 400, message: `Chỉ có thể phát hành hóa đơn khi yêu cầu đã được Approved (hiện tại: ${request.status}).` };
   }
 
   const contract = await Contract.findById(request.contractId).populate({ path: 'roomId', populate: { path: 'roomTypeId' } });
   if (!contract) throw { status: 404, message: "Không tìm thấy hợp đồng." };
-  
+
   const room = contract.roomId;
   if (!room) throw { status: 404, message: "Hợp đồng không có thông tin phòng cũ." };
 
@@ -756,10 +756,10 @@ const releaseTransferInvoice = async (requestId, managerInvoiceNotes = "", elect
     for (const manualInput of manualInputs) {
       const latestUtilityReading = await MeterReading.findOne({ roomId: room._id, utilityId: manualInput.utilityDoc._id })
         .sort({ readingDate: -1, createdAt: -1 }).populate('utilityId');
-      
+
       const previousIndex = Number(latestUtilityReading?.newIndex) || 0;
       const finalNewIndex = Number(manualInput.inputIndex);
-      
+
       const TWO_MINUTES = 2 * 60 * 1000;
       const isRecentReading = latestUtilityReading?.createdAt && (Date.now() - new Date(latestUtilityReading.createdAt).getTime()) < TWO_MINUTES;
 
@@ -827,7 +827,7 @@ const releaseTransferInvoice = async (requestId, managerInvoiceNotes = "", elect
     const amount = usage * servicePrice;
     totalAmount += amount;
     const serviceName = current.utilityId.name || current.utilityId.serviceName || "Dịch vụ";
-    
+
     invoiceItems.push({
       itemName: `Tiền ${serviceName.toLowerCase()}`,
       oldIndex,
@@ -876,8 +876,8 @@ const releaseTransferInvoice = async (requestId, managerInvoiceNotes = "", elect
       const amount = chargeItem.quantity * chargeItem.unitPrice;
       totalAmount += amount;
       invoiceItems.push({
-        itemName: `Dịch vụ ${chargeItem.itemName}`, 
-        oldIndex: 0, newIndex: 0, usage: chargeItem.quantity, unitPrice: chargeItem.unitPrice, amount, isIndex: false 
+        itemName: `Dịch vụ ${chargeItem.itemName}`,
+        oldIndex: 0, newIndex: 0, usage: chargeItem.quantity, unitPrice: chargeItem.unitPrice, amount, isIndex: false
       });
     }
   }
@@ -952,15 +952,15 @@ const releaseTransferInvoice = async (requestId, managerInvoiceNotes = "", elect
     prepaidInvoice = await InvoicePeriodic.create({
       invoiceCode: prepaidCode,
       contractId: contract._id,
-      title: `Thanh toán tiền phòng trả trước (${availableMonths} tháng)`,
-      items: [{ 
-        itemName: itemNameDesc, 
-        oldIndex: 0, 
-        newIndex: 0, 
-        usage: availableMonths, 
-        unitPrice: newRoomPrice - oldRoomPrice, 
-        amount: difference, 
-        isIndex: false 
+      title: `Thanh toán thêm tiền phòng trả trước (${availableMonths} tháng)`,
+      items: [{
+        itemName: itemNameDesc,
+        oldIndex: 0,
+        newIndex: 0,
+        usage: availableMonths,
+        unitPrice: newRoomPrice - oldRoomPrice,
+        amount: difference,
+        isIndex: false
       }],
       totalAmount: difference,
       dueDate,
@@ -1029,11 +1029,11 @@ const updateTransferRequest = async (requestId, tenantId, body) => {
   if (transferDate) {
     const transferDateObj = new Date(transferDate);
     transferDateObj.setHours(0, 0, 0, 0);
-    
+
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
     tomorrow.setHours(0, 0, 0, 0);
-    
+
     if (transferDateObj.getTime() !== tomorrow.getTime()) {
       throw { status: 400, message: "Ngày chuyển phòng bắt buộc phải là ngày mai." };
     }
@@ -1049,10 +1049,10 @@ const updateTransferRequest = async (requestId, tenantId, body) => {
       if (!currentRoomNew) {
         throw { status: 404, message: "Phòng hiện tại (roomId) không tồn tại." };
       }
-      
+
       const newContract = await Contract.findOne({ tenantId, roomId, status: { $in: ["active", "inactive"] } });
-      if(!newContract) {
-         throw { status: 400, message: "Phòng hiện tại không thuộc hợp đồng có hiệu lực của bạn (hoặc hợp đồng đã kết thúc)." };
+      if (!newContract) {
+        throw { status: 400, message: "Phòng hiện tại không thuộc hợp đồng có hiệu lực của bạn (hoặc hợp đồng đã kết thúc)." };
       }
 
       if (!currentRoomNew.isActive) {
@@ -1344,12 +1344,12 @@ const completeTransferRequest = async (requestId) => {
     if (availableMonths > 0 && newContract.rentPaidUntil) {
       const newRoomPrice = request.proration?.newRoomPrice || 0;
       const newPrepaidAmount = Math.round(availableMonths * newRoomPrice);
-      
+
       const now = new Date();
       const datePrefix = `${String(now.getDate()).padStart(2, '0')}${String(now.getMonth() + 1).padStart(2, '0')}${now.getFullYear()}`;
       const nextSeq = String(Math.floor(Math.random() * 10000)).padStart(4, '0');
       const invoiceCode = `HD-PREPAID-${datePrefix}-${nextSeq}`;
-      
+
       const formatVN = (d) => {
         const dd = String(d.getDate()).padStart(2, '0');
         const mm = String(d.getMonth() + 1).padStart(2, '0');
@@ -1361,7 +1361,7 @@ const completeTransferRequest = async (requestId) => {
       prepaidFrom.setHours(12, 0, 0, 0);
 
       const isFirstDay = prepaidFrom.getDate() === 1;
-      
+
       let actualPrepaidFrom = new Date(prepaidFrom);
       if (!isFirstDay) {
         // Bắt đầu từ ngày 1 của tháng tiếp theo
@@ -1556,6 +1556,54 @@ const completeTransferRequest = async (requestId) => {
   }
 };
 
+/**
+ * [MANAGER] Lấy chỉ số điện nước gần nhất của phòng trong yêu cầu chuyển phòng
+ * @param {string} requestId - ID yêu cầu chuyển phòng
+ */
+const getLatestMeterReadingForTransfer = async (requestId) => {
+  const request = await TransferRequest.findById(requestId).lean();
+  if (!request) throw { status: 404, message: "Không tìm thấy yêu cầu chuyển phòng." };
+
+  const contract = await Contract.findById(request.contractId).lean();
+  if (!contract) throw { status: 404, message: "Không tìm thấy hợp đồng." };
+
+  const roomId = contract.roomId;
+  if (!roomId) throw { status: 404, message: "Hợp đồng không có thông tin phòng." };
+
+  const [electricService, waterService] = await Promise.all([
+    Service.findOne({ name: { $regex: /^(điện|dien)$/i } }).lean(),
+    Service.findOne({ name: { $regex: /^(nước|nuoc)$/i } }).lean(),
+  ]);
+
+  const results = { electric: null, water: null };
+
+  if (electricService?._id) {
+    const latestElectric = await MeterReading.findOne({ roomId, utilityId: electricService._id })
+      .sort({ readingDate: -1, createdAt: -1 })
+      .lean();
+    if (latestElectric) {
+      results.electric = {
+        newIndex: latestElectric.newIndex,
+        readingDate: latestElectric.readingDate,
+      };
+    }
+  }
+
+  if (waterService?._id) {
+    const latestWater = await MeterReading.findOne({ roomId, utilityId: waterService._id })
+      .sort({ readingDate: -1, createdAt: -1 })
+      .lean();
+    if (latestWater) {
+      results.water = {
+        newIndex: latestWater.newIndex,
+        readingDate: latestWater.readingDate,
+      };
+    }
+  }
+
+  return results;
+};
+
 module.exports = {
   getAvailableRoomsForTransfer,
   createTransferRequest,
@@ -1569,5 +1617,6 @@ module.exports = {
   rejectTransferRequest,
   releaseTransferInvoice,
   completeTransferRequest,
+  getLatestMeterReadingForTransfer,
 };
 
