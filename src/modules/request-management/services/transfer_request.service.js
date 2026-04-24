@@ -1304,6 +1304,21 @@ const completeTransferRequest = async (requestId) => {
     console.log(`📋 Hợp đồng cũ (${oldContract.contractCode}) → terminated`);
     console.log(`   - Ngày kết thúc: ${endDateForOldContract.toLocaleString("vi-VN")}`);
 
+    // 6.5. XÓA CÁC HÓA ĐƠN PREPAID CŨ ĐỂ TRÁNH TÍNH TRÙNG DOANH THU
+    // Xóa tất cả HD tiền phòng trả trước (HD-PREPAID-*) thuộc hợp đồng cũ
+    const deletedOldPrepaid = await InvoicePeriodic.deleteMany({
+      contractId: oldContract._id,
+      invoiceCode: { $regex: /^HD-PREPAID-/ },
+    }).session(session);
+    console.log(`🗑️  Đã xóa ${deletedOldPrepaid.deletedCount} HD prepaid cũ (HĐ ${oldContract.contractCode})`);
+
+    // Xóa HD "đóng thêm tiền phòng trả trước" nếu có (prepaidInvoiceId trên TransferRequest)
+    if (request.prepaidInvoiceId) {
+      await InvoicePeriodic.findByIdAndDelete(request.prepaidInvoiceId).session(session);
+      console.log(`🗑️  Đã xóa HD đóng thêm prepaid: ${request.prepaidInvoiceId}`);
+      request.prepaidInvoiceId = null;
+    }
+
     // 7. TẠO HỢP ĐỒNG MỚI
     const newContractCode = generateNewContractCode(newRoom.name);
     const newStartDate = new Date(request.transferDate);
