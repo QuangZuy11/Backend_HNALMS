@@ -1337,6 +1337,7 @@ const completeTransferRequest = async (requestId) => {
       endDate: newEndDate,
       duration: oldContract.duration,
       status: "active",
+      isActivated: true, // ✅ Hợp đồng chuyển phòng luôn coi như đã kích hoạt vì transferDate đã đến
       terms: oldContract.terms,
       images: [],
       rentPaidUntil: oldContract.rentPaidUntil,
