@@ -1348,6 +1348,20 @@ const completeTransferRequest = async (requestId) => {
     console.log(`   - Ngày bắt đầu: ${newStartDate.toLocaleDateString("vi-VN")}`);
     console.log(`   - Ngày kết thúc: ${newEndDate.toLocaleDateString("vi-VN")}`);
     console.log(`   - Chuyển dữ liệu:`);
+
+    // 7.1 CẬP NHẬT CỌC SANG PHÒNG MỚI VÀ HỢP ĐỒNG MỚI
+    if (oldContract.depositId) {
+      const Deposit = require("../../contract-management/models/deposit.model");
+      await Deposit.findByIdAndUpdate(
+        oldContract.depositId,
+        {
+          room: request.targetRoomId,
+          contractId: newContract._id,
+        },
+        { session }
+      );
+      console.log(`   ✅ Đã cập nhật cọc sang phòng mới và hợp đồng mới.`);
+    }
     console.log(`     • CoResidents: ${oldContract.coResidents?.length || 0} người`);
     console.log(`     • CỌC (ID: ${oldContract.depositId ? oldContract.depositId : "N/A"})`);
     console.log(`     • rentPaidUntil mới: ${newContract.rentPaidUntil ? new Date(newContract.rentPaidUntil).toLocaleDateString("vi-VN") : "N/A"} (${request.proration?.availableMonths || 0} tháng khả dụng)`);
