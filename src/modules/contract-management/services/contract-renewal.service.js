@@ -118,11 +118,12 @@ async function checkIfGapContract(contract) {
 }
 
 async function getNextActiveContract(roomId, afterDate) {
+    // Tìm hợp đồng kế tiếp: bao gồm cả active đã kích hoạt VÀ inactive/pending (chưa bắt đầu)
+    // vì hợp đồng tương lai chưa hoạt động vẫn chiếm slot phòng và phải block gia hạn
     const next = await Contract.findOne({
         roomId,
         startDate: { $gt: afterDate },
-        status: "active",
-        isActivated: true
+        status: { $in: ["active", "inactive"] }
     })
         .select("_id startDate endDate contractCode tenantId")
         .sort({ startDate: 1 })
@@ -478,9 +479,35 @@ async function confirmContractRenewal(contractId, tenantId, extensionMonths) {
         throw new Error(gapMsg);
     }
 
-    // Gia hạn: update endDate và duration
+    // Gia hạn: tính endDate mới và kiểm tra không vượt qua hợp đồng tương lai
     const newEnd = new Date(contract.endDate);
     newEnd.setMonth(newEnd.getMonth() + months);
+
+    // Kiểm tra hợp đồng tương lai (bất kể gap contract hay không)
+    // Nếu endDate mới >= startDate hợp đồng kế tiếp → block
+    const futureConflict = await Contract.findOne({
+        roomId: contract.roomId,
+        _id: { $ne: contract._id },
+        status: { $in: ["active", "inactive"] },
+        startDate: { $lte: newEnd }
+    })
+        .select("_id startDate endDate contractCode")
+        .sort({ startDate: 1 })
+        .lean();
+
+    if (futureConflict) {
+        const conflictStart = toDateOnly(futureConflict.startDate);
+        const myCurrentEnd = toDateOnly(contract.endDate);
+        if (conflictStart.getTime() > myCurrentEnd.getTime()) {
+            // Hợp đồng này bắt đầu sau endDate hiện tại → gia hạn thêm sẽ gây trùng lặp
+            throw new Error(
+                `Không thể gia hạn thêm ${months} tháng vì sẽ trùng với hợp đồng ${
+                    futureConflict.contractCode || "kế tiếp"
+                } bắt đầu ngày ${formatDate(futureConflict.startDate)}. Chỉ được gia hạn tối đa đến trước ngày đó.`
+            );
+        }
+    }
+
     contract.endDate = newEnd;
     contract.duration = (contract.duration || 0) + months;
     await contract.save();
