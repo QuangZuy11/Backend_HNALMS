@@ -1,8 +1,9 @@
 const cron = require("node-cron");
-const { checkAndSendRenewalNotifications } = require("../services/contract-renewal.service");
+const { checkAndSendRenewalNotifications, checkIfGapContract, startOfUtcDay } = require("../services/contract-renewal.service");
 const Contract = require("../models/contract.model");
 const Notification = require("../../notification-management/models/notification.model");
 const User = require("../../authentication/models/user.model");
+const MoveOutRequest = require("../models/moveout_request.model");
 
 const contractRenewalJob = () => {
     cron.schedule("0 9 * * *", async () => {
@@ -132,6 +133,32 @@ async function autoDeclineExpiredRenewalWindow() {
         contract.renewalStatus = "declined";
         await contract.save();
         declinedCount++;
+
+        // Tự động sinh Move-out Request (giống khi tenant bấm từ chối thủ công)
+        try {
+            const { isGapContract } = await checkIfGapContract(contract);
+            const existingReq = await MoveOutRequest.findOne({ contractId: contract._id });
+            if (!existingReq) {
+                const moveOutReq = new MoveOutRequest({
+                    contractId: contract._id,
+                    tenantId: contract.tenantId._id || contract.tenantId,
+                    expectedMoveOutDate: contract.endDate,
+                    reason: "Hết cửa sổ gia hạn - Hệ thống tự động từ chối",
+                    requestDate: startOfUtcDay(new Date()),
+                    isEarlyNotice: false,
+                    isUnderMinStay: false,
+                    isDepositForfeited: false,
+                    isGapContract: isGapContract,
+                    status: "Requested"
+                });
+                await moveOutReq.save();
+                console.log(`[CONTRACT RENEWAL WINDOW] Đã tạo MoveOutRequest cho contract ${contract.contractCode}`);
+            } else {
+                console.log(`[CONTRACT RENEWAL WINDOW] MoveOutRequest đã tồn tại cho contract ${contract.contractCode}, bỏ qua`);
+            }
+        } catch (err) {
+            console.error(`[CONTRACT RENEWAL WINDOW] Lỗi tạo MoveOutRequest cho contract ${contract.contractCode}:`, err.message);
+        }
 
         const roomName = contract.roomId?.name || "";
         const managers = await User.find({ role: "manager", status: "active" }).select("_id");

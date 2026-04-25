@@ -596,5 +596,7 @@ module.exports = {
     getRenewalPreviewForTenant,
     confirmContractRenewal,
     declineContractRenewal,
+    checkIfGapContract,
+    startOfUtcDay,
     RENEWAL_WINDOW_DAYS
 };
