@@ -4,6 +4,57 @@ const FinancialTicket = require("../../managing-income-expenses/models/financial
 const Deposit = require("../../contract-management/models/deposit.model");
 
 class FinanceService {
+  // ==========================================
+  // HELPER: PHÂN BỔ DOANH THU THEO THỜI GIAN (ACCRUAL BASIS)
+  // ==========================================
+  _parseRange(text) {
+    if (!text) return null;
+    const match = text.match(/từ (\d{2})\/(\d{2})\/(\d{4}) đến (\d{2})\/(\d{2})\/(\d{4})/);
+    if (match) {
+      const start = new Date(match[3], match[2] - 1, match[1]);
+      const end = new Date(match[6], match[5] - 1, match[4], 23, 59, 59);
+      return { start, end };
+    }
+    return null;
+  }
+
+  _getDistributedAmount(amount, text, reportStart, reportEnd, createdAt) {
+    const range = this._parseRange(text);
+    if (range) {
+      const itemStart = range.start;
+      const itemEnd = range.end;
+
+      // Tổng số ngày của kỳ hạn này
+      const totalDays = Math.max(1, Math.ceil((itemEnd - itemStart) / (1000 * 60 * 60 * 24)) + 1);
+
+      // Số ngày giao thoa với kỳ báo cáo
+      const overlapS = new Date(Math.max(itemStart, reportStart));
+      const overlapE = new Date(Math.min(itemEnd, reportEnd));
+
+      if (overlapS > overlapE) return 0;
+
+      const overlapDays = Math.ceil((overlapE - overlapS) / (1000 * 60 * 60 * 24)) + 1;
+      return (amount * overlapDays) / totalDays;
+    }
+
+    // Nếu không có dải ngày, kiểm tra xem có chuỗi "tháng MM/YYYY" không
+    const monthMatch = text?.match(/tháng (\d{1,2})\/(\d{4})/i);
+    if (monthMatch) {
+      const m = parseInt(monthMatch[1]);
+      const y = parseInt(monthMatch[2]);
+      const targetMonthStart = new Date(y, m - 1, 1);
+      // Nếu tháng của item khớp với tháng báo cáo (giả định reportStart là đầu tháng)
+      if (targetMonthStart.getMonth() === reportStart.getMonth() && targetMonthStart.getFullYear() === reportStart.getFullYear()) {
+        return amount;
+      }
+      return 0;
+    }
+
+    // Cuối cùng dùng ngày tạo nếu không có thông tin gì khác
+    if (createdAt >= reportStart && createdAt <= reportEnd) return amount;
+    return 0;
+  }
+
   async getDashboardData(month, year) {
     const targetMonth = parseInt(month) || new Date().getMonth() + 1;
     const targetYear = parseInt(year) || new Date().getFullYear();
@@ -95,27 +146,43 @@ class FinanceService {
     // ==========================================
     // 3. TÍNH CƠ CẤU DOANH THU (PIE CHART - P&L LOGIC)
     // ==========================================
-    // Lưu ý: Biểu đồ tròn mang ý nghĩa LỢI NHUẬN, nên ta dùng Forfeited Deposits (Khách bỏ cọc)
+    // [CẬP NHẬT LOGIC P&L] Truy vấn rộng hơn để bắt các khoản trả trước từ tháng trước hoặc cho tháng sau
+    const allPeriodic = await InvoicePeriodic.find({ status: { $ne: "Draft" } });
+    const allIncurred = await InvoiceIncurred.find({ status: { $ne: "Draft" } });
+
     let rentRev = 0, elecRev = 0, waterRev = 0, serviceRev = 0;
-    periodicInvoices.forEach(inv => {
-      if (inv.status === "Paid") {
-        const isPrepaid = inv.title && inv.title.toLowerCase().includes("trả trước");
+    let violationRevPnl = 0, repairRevPnl = 0, prepaidRentRevPnl = 0;
+
+    allPeriodic.forEach(inv => {
+      const created = new Date(inv.createdAt);
+      inv.items.forEach(item => {
+        const name = item.itemName.toLowerCase();
+        const distAmt = this._getDistributedAmount(item.amount, item.itemName || inv.title, startOfMonth, endOfMonth, created);
         
-        // Nếu là trả trước, ta đã tính vào prepaidRentRev ở trên, không cộng vào rentRev nữa
-        // Tuy nhiên vẫn cần cộng điện, nước nếu có (đề phòng trường hợp hiếm)
-        inv.items.forEach(item => {
-          const name = item.itemName.toLowerCase();
-          if (name.includes("phòng")) {
-            if (!isPrepaid) rentRev += item.amount;
-          } else if (name.includes("điện")) {
-            elecRev += item.amount;
-          } else if (name.includes("nước")) {
-            waterRev += item.amount;
-          } else {
-            serviceRev += item.amount;
-          }
-        });
-      }
+        if (distAmt <= 0) return;
+
+        if (name.includes("phòng")) {
+          if (name.includes("trả trước")) prepaidRentRevPnl += distAmt;
+          else rentRev += distAmt;
+        } else if (name.includes("điện")) {
+          elecRev += distAmt;
+        } else if (name.includes("nước")) {
+          waterRev += distAmt;
+        } else {
+          serviceRev += distAmt;
+        }
+      });
+    });
+
+    allIncurred.forEach(inv => {
+      const created = new Date(inv.createdAt);
+      const distAmt = this._getDistributedAmount(inv.totalAmount, inv.title, startOfMonth, endOfMonth, created);
+      if (distAmt <= 0) return;
+
+      if (inv.type === "violation") violationRevPnl += distAmt;
+      else if (inv.type === "repair") repairRevPnl += distAmt;
+      else if (inv.type === "prepaid") prepaidRentRevPnl += distAmt;
+      else serviceRev += distAmt;
     });
 
     let guestDepositRev = 0;
@@ -123,19 +190,28 @@ class FinanceService {
 
     const revenueBreakdown = [
       { name: "Tiền phòng (Định kỳ)", value: rentRev },
-      { name: "Tiền phòng trả trước", value: prepaidRentRev },
+      { name: "Tiền phòng trả trước", value: prepaidRentRevPnl },
       { name: "Tiền điện", value: elecRev },
       { name: "Tiền nước", value: waterRev },
       { name: "Dịch vụ khác", value: serviceRev },
-      { name: "Phạt vi phạm", value: violationRev },
-      { name: "Đền bù sửa chữa", value: repairRev },
+      { name: "Phạt vi phạm", value: violationRevPnl },
+      { name: "Đền bù sửa chữa", value: repairRevPnl },
       { name: "Khách bỏ cọc giữ chỗ", value: guestDepositRev }
     ].filter(item => item.value > 0);
 
     // ==========================================
-    // 4. LẤY BIỂU ĐỒ 6 THÁNG GẦN NHẤT (BAR CHART)
+    // 4. LẤY BIỂU ĐỒ 6 THÁNG GẦN NHẤT (BAR CHART - ACCRUAL FOR REVENUE)
     // ==========================================
     const chartData = [];
+    // Lấy dữ liệu chi và cọc cho 6 tháng
+    const sixMonthsStart = new Date(targetYear, targetMonth - 6, 1);
+    const tixForChart = await FinancialTicket.find({ 
+      transactionDate: { $gte: sixMonthsStart, $lte: endOfMonth }, 
+      status: { $in: ["Completed", "Paid", "Approved"] } 
+    });
+    const incDepsForChart = await Deposit.find({ createdAt: { $gte: sixMonthsStart, $lte: endOfMonth } });
+    const refDepsForChart = await Deposit.find({ status: "Refunded", refundDate: { $gte: sixMonthsStart, $lte: endOfMonth } });
+
     for (let i = 5; i >= 0; i--) {
       let m = targetMonth - i;
       let y = targetYear;
@@ -147,19 +223,25 @@ class FinanceService {
       const sDate = new Date(y, m - 1, 1);
       const eDate = new Date(y, m, 0, 23, 59, 59);
 
-      const pInv = await InvoicePeriodic.find({ createdAt: { $gte: sDate, $lte: eDate }, status: "Paid" });
-      const iInv = await InvoiceIncurred.find({ createdAt: { $gte: sDate, $lte: eDate }, status: "Paid" });
-      const tix = await FinancialTicket.find({ transactionDate: { $gte: sDate, $lte: eDate }, status: { $in: ["Completed", "Paid", "Approved"] } });
+      // Tính doanh thu phân bổ cho tháng này
+      let rev = 0;
+      allPeriodic.forEach(inv => {
+        if (inv.status !== "Paid") return; // Chỉ tính hóa đơn đã thanh toán vào doanh thu thực tế biểu đồ
+        const created = new Date(inv.createdAt);
+        inv.items.forEach(item => {
+          rev += this._getDistributedAmount(item.amount, item.itemName || inv.title, sDate, eDate, created);
+        });
+      });
+      allIncurred.forEach(inv => {
+        if (inv.status !== "Paid") return;
+        rev += this._getDistributedAmount(inv.totalAmount, inv.title, sDate, eDate, new Date(inv.createdAt));
+      });
+      
+      // Cộng cọc giữ chỗ (thu trong tháng này)
+      rev += incDepsForChart.filter(d => d.createdAt >= sDate && d.createdAt <= eDate).reduce((s, x) => s + x.amount, 0);
 
-      // [FIX LỖI] Biểu đồ 6 tháng cũng phải dùng Cọc Thu / Cọc Hoàn
-      const incDeps = await Deposit.find({ createdAt: { $gte: sDate, $lte: eDate } });
-      const refDeps = await Deposit.find({ status: "Refunded", refundDate: { $gte: sDate, $lte: eDate } });
-
-      const rev = pInv.reduce((s, x) => s + x.totalAmount, 0) +
-        iInv.reduce((s, x) => s + x.totalAmount, 0) +
-        incDeps.reduce((s, x) => s + x.amount, 0); // Cộng cọc thu
-      const exp = tix.reduce((s, x) => s + x.amount, 0) +
-        refDeps.reduce((s, x) => s + x.amount, 0); // Cộng cọc hoàn
+      const exp = tixForChart.filter(t => t.transactionDate >= sDate && t.transactionDate <= eDate).reduce((s, x) => s + x.amount, 0) +
+                  refDepsForChart.filter(d => d.refundDate >= sDate && d.refundDate <= eDate).reduce((s, x) => s + x.amount, 0);
 
       chartData.push({
         month: `T${m}/${y.toString().slice(-2)}`,
@@ -376,15 +458,14 @@ class FinanceService {
     const end = new Date(endDate);
     end.setHours(23, 59, 59, 999);
 
+    // [LOGIC PHÂN BỔ DOANH THU - ACCRUAL BASIS]
+    // Lấy tất cả hóa đơn (trừ nháp) để kiểm tra sự giao thoa về thời gian
     const periodicInvoices = await InvoicePeriodic.find({
-      createdAt: { $gte: start, $lte: end },
       status: { $ne: "Draft" }
     }).populate({ path: 'contractId', select: 'roomId', populate: { path: 'roomId', select: 'name' } });
 
     const incurredInvoices = await InvoiceIncurred.find({
-      createdAt: { $gte: start, $lte: end },
-      status: { $ne: "Draft" },
-      type: { $ne: "prepaid" }
+      status: { $ne: "Draft" }
     }).populate({ path: 'contractId', select: 'roomId', populate: { path: 'roomId', select: 'name' } });
 
     const financialTickets = await FinancialTicket.find({
@@ -411,34 +492,45 @@ class FinanceService {
     };
 
     periodicInvoices.forEach(inv => {
-      const isPrepaid = inv.title && inv.title.toLowerCase().includes("trả trước");
-      summary.recognizedRevenue += inv.totalAmount;
-      pnlLedger.push({
-        id: inv._id,
-        date: inv.createdAt,
-        code: inv.invoiceCode,
-        room: getRoomName(inv),
-        description: inv.title,
-        category: isPrepaid ? "Doanh thu Tiền phòng trả trước" : "Doanh thu Định kỳ",
-        revenue: inv.totalAmount,
-        expense: 0,
-        status: inv.status === "Paid" ? "Đã thu tiền" : "Đang nợ"
+      const created = new Date(inv.createdAt);
+      inv.items.forEach(item => {
+        const distAmt = this._getDistributedAmount(item.amount, item.itemName || inv.title, start, end, created);
+        if (distAmt > 0) {
+          const isPrepaid = item.itemName.toLowerCase().includes("trả trước") || inv.title.toLowerCase().includes("trả trước");
+          summary.recognizedRevenue += distAmt;
+          pnlLedger.push({
+            id: inv._id + item._id,
+            date: inv.createdAt,
+            code: inv.invoiceCode,
+            room: getRoomName(inv),
+            description: item.itemName,
+            category: isPrepaid ? "Doanh thu Tiền phòng trả trước (Phân bổ)" : "Doanh thu Định kỳ",
+            revenue: distAmt,
+            expense: 0,
+            status: inv.status === "Paid" ? "Đã thu tiền" : "Đang nợ"
+          });
+        }
       });
     });
 
     incurredInvoices.forEach(inv => {
-      summary.recognizedRevenue += inv.totalAmount;
-      pnlLedger.push({
-        id: inv._id,
-        date: inv.createdAt,
-        code: inv.invoiceCode,
-        room: getRoomName(inv),
-        description: inv.title,
-        category: "Doanh thu Phạt/Sửa chữa",
-        revenue: inv.totalAmount,
-        expense: 0,
-        status: inv.status === "Paid" ? "Đã thu tiền" : "Đang nợ"
-      });
+      const created = new Date(inv.createdAt);
+      const distAmt = this._getDistributedAmount(inv.totalAmount, inv.title, start, end, created);
+
+      if (distAmt > 0) {
+        summary.recognizedRevenue += distAmt;
+        pnlLedger.push({
+          id: inv._id,
+          date: inv.createdAt,
+          code: inv.invoiceCode,
+          room: getRoomName(inv),
+          description: inv.title,
+          category: inv.type === "prepaid" ? "Doanh thu Trả trước (Phân bổ)" : "Doanh thu Phạt/Sửa chữa",
+          revenue: distAmt,
+          expense: 0,
+          status: inv.status === "Paid" ? "Đã thu tiền" : "Đang nợ"
+        });
+      }
     });
 
     forfeitedDeposits.forEach(dep => {
