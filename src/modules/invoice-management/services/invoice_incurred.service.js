@@ -267,7 +267,6 @@ class InvoiceIncurredService {
 
     const query = {
       contractId: { $in: contractIds },
-      status: { $ne: "Draft" } // Khách thuê không được thấy bản nháp
     };
 
     const total = await InvoiceIncurred.countDocuments(query);

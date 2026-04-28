@@ -457,7 +457,6 @@ class InvoicePeriodicService {
 
     const query = {
       contractId: { $in: contractIds },
-      status: { $ne: "Draft" } 
     };
 
     const total = await InvoicePeriodic.countDocuments(query);

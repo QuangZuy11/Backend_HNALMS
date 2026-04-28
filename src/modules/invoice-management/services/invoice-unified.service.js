@@ -68,10 +68,9 @@ class InvoiceUnifiedService {
 
     const query = {
       contractId: { $in: contractIds },
-      status: { $ne: "Draft" }
     };
 
-    // Filter status
+    // Filter status (không loại trừ Draft nữa)
     if (status && status !== 'all') {
       query.status = status;
     }
@@ -105,10 +104,9 @@ class InvoiceUnifiedService {
 
     const query = {
       contractId: { $in: contractIds },
-      status: { $ne: "Draft" }
     };
 
-    // Filter status
+    // Filter status (không loại trừ Draft nữa)
     if (status && status !== 'all') {
       query.status = status;
     }
