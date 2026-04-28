@@ -5,6 +5,7 @@
 
 const ComplaintRequest = require("../models/complaint_requests.model");
 const Contract = require("../../contract-management/models/contract.model");
+const UserInfo = require("../../authentication/models/userInfor.model");
 
 /**
  * Tạo yêu cầu khiếu nại mới
@@ -29,10 +30,18 @@ const createComplaintRequest = async (data) => {
 
     const savedComplaint = await complaint.save();
     
-    return await savedComplaint.populate([
+    const populated = await savedComplaint.populate([
       { path: "tenantId", select: "username email phoneNumber" },
       { path: "responseBy", select: "username email role" }
     ]);
+
+    // Lấy fullname từ UserInfo
+    const userInfo = await UserInfo.findOne({ userId: tenantId }).select("fullname").lean();
+    if (userInfo && populated.tenantId) {
+      populated.tenantId.fullname = userInfo.fullname;
+    }
+    
+    return populated;
   } catch (error) {
     throw new Error(`Error creating complaint: ${error.message}`);
   }
@@ -49,6 +58,11 @@ const getComplaintById = async (id) => {
       .populate("tenantId", "username email phoneNumber")
       .populate("responseBy", "username email role")
       .lean();
+
+    if (complaint && complaint.tenantId) {
+      const userInfo = await UserInfo.findOne({ userId: complaint.tenantId._id }).select("fullname").lean();
+      complaint.tenantId.fullname = userInfo?.fullname || null;
+    }
 
     return complaint;
   } catch (error) {
@@ -96,17 +110,26 @@ const getComplaintsList = async (filters = {}, page = 1, limit = 10) => {
     ];
 
     const roomByTenant = new Map();
+    const fullnameByTenant = new Map();
 
     if (tenantIds.length > 0) {
-      const contracts = await Contract.find({
-        tenantId: { $in: tenantIds },
-        status: "active",
-      })
-        .populate({
-          path: "roomId",
-          select: "name roomCode",
+      // Lấy thông tin phòng
+      const [contracts, userInfos] = await Promise.all([
+        Contract.find({
+          tenantId: { $in: tenantIds },
+          status: "active",
         })
-        .lean();
+          .populate({
+            path: "roomId",
+            select: "name roomCode",
+          })
+          .lean(),
+        UserInfo.find({
+          userId: { $in: tenantIds }
+        })
+          .select("userId fullname")
+          .lean()
+      ]);
 
       contracts.forEach((ct) => {
         if (ct.tenantId && ct.roomId) {
@@ -117,12 +140,23 @@ const getComplaintsList = async (filters = {}, page = 1, limit = 10) => {
           });
         }
       });
+
+      userInfos.forEach((ui) => {
+        if (ui.userId) {
+          fullnameByTenant.set(ui.userId.toString(), ui.fullname);
+        }
+      });
     }
 
     complaints.forEach((c) => {
       if (c.tenantId?._id) {
-        const room = roomByTenant.get(c.tenantId._id.toString());
+        const tenantIdStr = c.tenantId._id.toString();
+        
+        const room = roomByTenant.get(tenantIdStr);
         c.room = room || null;
+
+        const fullname = fullnameByTenant.get(tenantIdStr);
+        c.tenantId.fullname = fullname || null;
       } else {
         c.room = null;
       }
@@ -160,7 +194,13 @@ const updateComplaintRequest = async (id, data) => {
       { new: true }
     )
       .populate("tenantId", "username email phoneNumber")
-      .populate("responseBy", "username email role");
+      .populate("responseBy", "username email role")
+      .lean();
+
+    if (complaint && complaint.tenantId) {
+      const userInfo = await UserInfo.findOne({ userId: complaint.tenantId._id }).select("fullname").lean();
+      complaint.tenantId.fullname = userInfo?.fullname || null;
+    }
 
     return complaint;
   } catch (error) {
@@ -203,7 +243,13 @@ const updateComplaintStatus = async (id, status, response, responderId, managerN
       { new: true }
     )
       .populate("tenantId", "username email phoneNumber")
-      .populate("responseBy", "username email role");
+      .populate("responseBy", "username email role")
+      .lean();
+
+    if (complaint && complaint.tenantId) {
+      const userInfo = await UserInfo.findOne({ userId: complaint.tenantId._id }).select("fullname").lean();
+      complaint.tenantId.fullname = userInfo?.fullname || null;
+    }
 
     return complaint;
   } catch (error) {
@@ -281,6 +327,18 @@ const getComplaintsByCategory = async (category) => {
       .populate("responseBy", "username email role")
       .sort({ createdDate: -1 })
       .lean();
+
+    if (complaints.length > 0) {
+      const tenantIds = [...new Set(complaints.map(c => c.tenantId?._id).filter(Boolean))];
+      const userInfos = await UserInfo.find({ userId: { $in: tenantIds } }).select("userId fullname").lean();
+      const fullnameMap = new Map(userInfos.map(ui => [ui.userId.toString(), ui.fullname]));
+      
+      complaints.forEach(c => {
+        if (c.tenantId?._id) {
+          c.tenantId.fullname = fullnameMap.get(c.tenantId._id.toString()) || null;
+        }
+      });
+    }
 
     return complaints;
   } catch (error) {
