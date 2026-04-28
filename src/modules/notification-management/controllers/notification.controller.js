@@ -288,6 +288,35 @@ class NotificationController {
             });
         }
     }
+
+    // [Manager] Check và gửi thông báo quá hạn cho tất cả hóa đơn
+    async checkOverdueInvoices(req, res) {
+        try {
+            const userRole = req.user.role;
+
+            // Chỉ Manager mới được phép gửi thông báo quá hạn
+            if (userRole !== 'manager' && userRole !== 'owner') {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Chỉ Manager hoặc Owner mới có quyền gửi thông báo quá hạn'
+                });
+            }
+
+            const result = await notificationService.checkAndSendOverdueNotifications();
+
+            res.status(200).json({
+                success: true,
+                message: `Đã gửi ${result.sent} thông báo quá hạn`,
+                data: result
+            });
+
+        } catch (error) {
+            res.status(500).json({
+                success: false,
+                message: error.message
+            });
+        }
+    }
 }
 
 module.exports = new NotificationController();

@@ -6,6 +6,7 @@ const contractStartJob = require("./src/modules/contract-management/jobs/contrac
 const { contractRenewalJob } = require("./src/modules/contract-management/jobs/contract-renewal.job");
 const { moveOutAutoCompleteJob } = require("./src/modules/contract-management/jobs/moveout-auto-complete.job");
 const bookingRequestExpirationJob = require("./src/modules/contract-management/jobs/booking-request-expiration.job");
+const { invoiceOverdueJob } = require("./src/modules/invoice-management/jobs/invoice-overdue.job");
 // const { startReconciliationJob } = require("./src/shared/services/sepay-reconciliation.service");
 
 const PORT = process.env.PORT || 9999;
@@ -21,6 +22,7 @@ app.listen(PORT, async () => {
     contractRenewalJob();
     moveOutAutoCompleteJob();
     bookingRequestExpirationJob();
+    invoiceOverdueJob();
     // Reconciliation service tạm thời disabled - uncomment sau khi có SEPAY_API_TOKEN
     // const reconInterval = parseInt(process.env.RECONCILIATION_INTERVAL_MINUTES || "5", 10);
     // startReconciliationJob(reconInterval * 60 * 1000);

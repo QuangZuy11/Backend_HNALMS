@@ -71,4 +71,10 @@ router.get("/unread-count",
     notificationController.getUnreadCount
 );
 
+// [Manager] Check và gửi thông báo quá hạn cho tất cả hóa đơn chưa thanh toán
+router.post("/check-overdue",
+    authenticate,
+    notificationController.checkOverdueInvoices
+);
+
 module.exports = router;

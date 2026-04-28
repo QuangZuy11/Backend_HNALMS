@@ -596,6 +596,209 @@ class NotificationService {
             return null;
         }
     }
+
+    // Tạo thông báo hóa đơn quá hạn thanh toán
+    async createOverdueInvoiceNotification(tenantId, invoiceType, invoiceData) {
+        try {
+            console.log(`[OVERDUE NOTIFICATION] 📌 Bắt đầu tạo thông báo quá hạn...`);
+            console.log(`[OVERDUE NOTIFICATION] Input: tenantId=${tenantId}, invoiceType=${invoiceType}, invoiceCode=${invoiceData?.invoiceCode}`);
+
+            // Lấy thông tin tenant
+            const tenant = await User.findById(tenantId).select('fullName email');
+            if (!tenant) {
+                console.error(`[OVERDUE NOTIFICATION] ❌ Không tìm thấy tenant: ${tenantId}`);
+                return null;
+            }
+            console.log(`[OVERDUE NOTIFICATION] ✅ Tìm thấy tenant: ${tenant.fullName}`);
+
+            // Kiểm tra xem đã gửi thông báo quá hạn cho hóa đơn này chưa
+            const existingNotif = await Notification.findOne({
+                'recipients.recipient_id': tenantId,
+                type: 'system',
+                content: { $regex: invoiceData?.invoiceCode || '', $options: 'i' },
+                createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } // Chỉ check trong vòng 7 ngày
+            });
+            if (existingNotif) {
+                console.log(`[OVERDUE NOTIFICATION] ⏭️ Đã gửi thông báo quá hạn cho hóa đơn ${invoiceData?.invoiceCode} trong tuần này, bỏ qua`);
+                return null;
+            }
+
+            // Tạo tiêu đề và nội dung dựa vào loại hóa đơn
+            let title, content;
+            const invoiceCode = invoiceData?.invoiceCode || '';
+            const invoiceTitle = invoiceData?.title || invoiceData?.invoiceTitle || '';
+            const totalAmount = invoiceData?.totalAmount?.toLocaleString('vi-VN') || '0';
+            const dueDate = invoiceData?.dueDate ? new Date(invoiceData.dueDate).toLocaleDateString('vi-VN') : '';
+            const daysOverdue = invoiceData?.daysOverdue || 1;
+
+            if (invoiceType === 'periodic') {
+                title = `[QUÁ HẠN] Hóa Đơn Định Kỳ ${invoiceCode}`;
+                content = `⚠️ CẢNH BÁO: Hóa đơn định kỳ đã quá hạn thanh toán!\n\n` +
+                    `Mã hóa đơn: ${invoiceCode}\n` +
+                    `Tiêu đề: ${invoiceTitle}\n` +
+                    `Số tiền: ${totalAmount} đ\n` +
+                    `Hạn thanh toán: ${dueDate}\n` +
+                    `Quá hạn: ${daysOverdue} ngày\n\n` +
+                    `Vui lòng thanh toán ngay để tránh bị tính phạt.`;
+
+            } else if (invoiceType === 'incurred') {
+                const typeLabel = invoiceData?.type === 'repair' ? 'Sửa Chữa'
+                    : invoiceData?.type === 'violation' ? 'Vi Phạm'
+                    : invoiceData?.type === 'prepaid' ? 'Cọc' : 'Phát Sinh';
+                title = `[QUÁ HẠN] Hóa Đơn ${typeLabel} ${invoiceCode}`;
+                content = `⚠️ CẢNH BÁO: Hóa đơn ${typeLabel.toLowerCase()} đã quá hạn thanh toán!\n\n` +
+                    `Mã hóa đơn: ${invoiceCode}\n` +
+                    `Tiêu đề: ${invoiceTitle}\n` +
+                    `Số tiền: ${totalAmount} đ\n` +
+                    `Hạn thanh toán: ${dueDate}\n` +
+                    `Quá hạn: ${daysOverdue} ngày\n\n` +
+                    `Vui lòng thanh toán ngay để tránh bị tính phạt.`;
+
+            } else {
+                console.warn(`[OVERDUE NOTIFICATION] ⚠️ Loại hóa đơn không được hỗ trợ: ${invoiceType}`);
+                return null;
+            }
+
+            console.log(`[OVERDUE NOTIFICATION] 📝 Title: ${title}`);
+
+            // Tạo notification - type = 'system'
+            const notification = new Notification({
+                title,
+                content,
+                type: 'system',
+                status: 'sent',
+                created_by: null,
+                recipients: [{
+                    recipient_id: tenantId,
+                    recipient_role: 'tenant',
+                    is_read: false,
+                    read_at: null
+                }]
+            });
+
+            console.log(`[OVERDUE NOTIFICATION] 💾 Lưu notification vào DB...`);
+            const savedNotif = await notification.save();
+            console.log(`[OVERDUE NOTIFICATION] ✅ THÀNH CÔNG! Thông báo quá hạn đã lưu vào DB`);
+            console.log(`[OVERDUE NOTIFICATION] 🆔 Notification ID: ${savedNotif._id}`);
+
+            return savedNotif;
+
+        } catch (error) {
+            console.error(`[OVERDUE NOTIFICATION] ❌ LỖI: ${error.message}`);
+            console.error(`[OVERDUE NOTIFICATION] 📌 Stack trace:`, error.stack);
+            return null;
+        }
+    }
+
+    // Gửi thông báo quá hạn cho tất cả hóa đơn chưa thanh toán đã quá hạn
+    async checkAndSendOverdueNotifications() {
+        try {
+            console.log(`[OVERDUE CHECK] 🔄 Bắt đầu kiểm tra hóa đơn quá hạn...`);
+            const now = new Date();
+            let totalSent = 0;
+
+            // Check InvoicePeriodic quá hạn
+            console.log(`[OVERDUE CHECK] 📋 Query InvoicePeriodic: status='Unpaid', dueDate < ${now.toISOString()}`);
+            const overduePeriodics = await require('../../invoice-management/models/invoice_periodic.model').find({
+                status: 'Unpaid',
+                dueDate: { $lt: now }
+            }).populate('contractId', 'tenantId');
+            console.log(`[OVERDUE CHECK] 📊 Tìm thấy ${overduePeriodics.length} hóa đơn định kỳ có status=Unpaid và dueDate quá hạn`);
+
+            for (const invoice of overduePeriodics) {
+                if (!invoice.contractId) {
+                    console.log(`[OVERDUE CHECK] ⏭️ Invoice ${invoice.invoiceCode} không có contractId, bỏ qua`);
+                    continue;
+                }
+                if (!invoice.contractId.tenantId) {
+                    console.log(`[OVERDUE CHECK] ⏭️ Invoice ${invoice.invoiceCode} có contract nhưng không có tenantId, bỏ qua`);
+                    continue;
+                }
+                console.log(`[OVERDUE CHECK] ✅ Xử lý InvoicePeriodic: ${invoice.invoiceCode} | tenantId: ${invoice.contractId.tenantId} | dueDate: ${invoice.dueDate}`);
+
+                // Kiểm tra đã gửi notification trong 7 ngày chưa
+                const existingNotif = await Notification.findOne({
+                    'recipients.recipient_id': invoice.contractId.tenantId,
+                    type: 'system',
+                    content: { $regex: invoice.invoiceCode || '', $options: 'i' },
+                    createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
+                });
+                if (existingNotif) {
+                    console.log(`[OVERDUE CHECK] ⏭️ Invoice ${invoice.invoiceCode} đã có notification trong 7 ngày, bỏ qua`);
+                    continue;
+                }
+
+                const daysOverdue = Math.floor((now - new Date(invoice.dueDate)) / (1000 * 60 * 60 * 24));
+                const result = await this.createOverdueInvoiceNotification(
+                    invoice.contractId.tenantId,
+                    'periodic',
+                    {
+                        invoiceCode: invoice.invoiceCode,
+                        title: invoice.title,
+                        totalAmount: invoice.totalAmount,
+                        dueDate: invoice.dueDate,
+                        daysOverdue
+                    }
+                );
+                if (result) totalSent++;
+            }
+
+            // Check InvoiceIncurred quá hạn
+            console.log(`[OVERDUE CHECK] 📋 Query InvoiceIncurred: status='Unpaid', dueDate < ${now.toISOString()}`);
+            const overdueIncurreds = await require('../../invoice-management/models/invoice_incurred.model').find({
+                status: 'Unpaid',
+                dueDate: { $lt: now }
+            }).populate('contractId', 'tenantId');
+            console.log(`[OVERDUE CHECK] 📊 Tìm thấy ${overdueIncurreds.length} hóa đơn phát sinh có status=Unpaid và dueDate quá hạn`);
+
+            for (const invoice of overdueIncurreds) {
+                if (!invoice.contractId) {
+                    console.log(`[OVERDUE CHECK] ⏭️ Invoice ${invoice.invoiceCode} không có contractId, bỏ qua`);
+                    continue;
+                }
+                if (!invoice.contractId.tenantId) {
+                    console.log(`[OVERDUE CHECK] ⏭️ Invoice ${invoice.invoiceCode} có contract nhưng không có tenantId, bỏ qua`);
+                    continue;
+                }
+                console.log(`[OVERDUE CHECK] ✅ Xử lý InvoiceIncurred: ${invoice.invoiceCode} | tenantId: ${invoice.contractId.tenantId} | dueDate: ${invoice.dueDate}`);
+
+                // Kiểm tra đã gửi notification trong 7 ngày chưa
+                const existingNotif = await Notification.findOne({
+                    'recipients.recipient_id': invoice.contractId.tenantId,
+                    type: 'system',
+                    content: { $regex: invoice.invoiceCode || '', $options: 'i' },
+                    createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
+                });
+                if (existingNotif) {
+                    console.log(`[OVERDUE CHECK] ⏭️ Invoice ${invoice.invoiceCode} đã có notification trong 7 ngày, bỏ qua`);
+                    continue;
+                }
+
+                const daysOverdue = Math.floor((now - new Date(invoice.dueDate)) / (1000 * 60 * 60 * 24));
+                const result = await this.createOverdueInvoiceNotification(
+                    invoice.contractId.tenantId,
+                    'incurred',
+                    {
+                        invoiceCode: invoice.invoiceCode,
+                        title: invoice.title,
+                        totalAmount: invoice.totalAmount,
+                        dueDate: invoice.dueDate,
+                        type: invoice.type,
+                        daysOverdue
+                    }
+                );
+                if (result) totalSent++;
+            }
+
+            console.log(`[OVERDUE CHECK] ✅ Hoàn thành! Đã gửi ${totalSent} thông báo quá hạn`);
+            return { sent: totalSent };
+
+        } catch (error) {
+            console.error(`[OVERDUE CHECK] ❌ LỖI: ${error.message}`);
+            console.error(`[OVERDUE CHECK] 📌 Stack trace:`, error.stack);
+            return { sent: 0, error: error.message };
+        }
+    }
 }
 
 module.exports = new NotificationService();
