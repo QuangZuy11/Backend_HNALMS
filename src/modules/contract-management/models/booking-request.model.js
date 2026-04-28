@@ -62,6 +62,11 @@ const bookingRequestSchema = new mongoose.Schema({
     default: "Unpaid"
   },
   paymentExpiresAt: { type: Date },
+  contractId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Contracts",
+    default: null
+  },
   status: {
     type: String,
     enum: ["Pending", "Processed", "Rejected", "Awaiting Payment", "Expired"],
