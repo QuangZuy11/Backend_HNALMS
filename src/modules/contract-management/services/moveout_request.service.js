@@ -12,6 +12,7 @@ const UserInfo = require("../../authentication/models/userInfor.model");
 const Notification = require("../../notification-management/models/notification.model");
 const Service = require("../../service-management/models/service.model");
 const FinancialTicket = require("../../managing-income-expenses/models/financial_tickets");
+const { sendEmail } = require("../../notification-management/services/email.service");
 
 const MOVEOUT_POLICY = {
   MIN_NOTICE_DAYS: 30,
@@ -1443,6 +1444,91 @@ class MoveOutRequestService {
       `Trả phòng đã hoàn tất`,
       completionContent
     );
+
+    // ─── Gửi email thông báo hoàn tất trả phòng ──────────────────────────
+    try {
+      const tenantUser = await User.findById(moveOutRequest.tenantId).select("email");
+      const tenantInfo = await UserInfo.findOne({ userId: moveOutRequest.tenantId }).select("fullname");
+      const tenantEmail = tenantUser?.email;
+      const tenantName = tenantInfo?.fullname || tenantUser?.email || "Quý khách";
+      const roomName = contract.roomId ? (await Room.findById(contract.roomId).select("name").lean())?.name || "" : "";
+      const completedDateStr = new Intl.DateTimeFormat("vi-VN", { day: "2-digit", month: "2-digit", year: "numeric" }).format(new Date());
+
+      if (tenantEmail) {
+        // Xây dựng phần thông tin hoàn tiền trong email
+        let refundSection = "";
+        if (!isDepositForfeited && totalRefund > 0) {
+          let refundDetails = "";
+          if (depositAmt > 0) refundDetails += `<li>Tiền cọc: <strong>${depositAmt.toLocaleString("vi-VN")} VND</strong></li>`;
+          if (prepaidAmt > 0) refundDetails += `<li>Tiền phòng trả trước dư (${prepaidMths} tháng): <strong>${prepaidAmt.toLocaleString("vi-VN")} VND</strong></li>`;
+          refundSection = `
+            <div style="background:#f0fdf4;border-left:4px solid #22c55e;border-radius:6px;padding:14px 18px;margin:18px 0;">
+              <div style="color:#15803d;font-weight:700;font-size:1.05rem;margin-bottom:8px;">💰 Thông tin hoàn tiền</div>
+              <ul style="margin:0;padding-left:18px;color:#166534;">
+                ${refundDetails}
+                <li>Tổng hoàn: <strong>${totalRefund.toLocaleString("vi-VN")} VND</strong></li>
+              </ul>
+              <div style="margin-top:10px;color:#166534;font-size:0.95rem;">Kế toán sẽ liên hệ để chi tiền hoàn về cho bạn.</div>
+            </div>`;
+        } else if (isDepositForfeited && prepaidAmt > 0) {
+          refundSection = `
+            <div style="background:#f0fdf4;border-left:4px solid #22c55e;border-radius:6px;padding:14px 18px;margin:18px 0;">
+              <div style="color:#15803d;font-weight:700;font-size:1.05rem;margin-bottom:8px;">💰 Hoàn tiền phòng trả trước</div>
+              <p style="margin:0;color:#166534;">Tiền phòng trả trước dư (<strong>${prepaidMths} tháng</strong>): <strong>${prepaidAmt.toLocaleString("vi-VN")} VND</strong></p>
+              <div style="margin-top:10px;color:#166534;font-size:0.95rem;">Kế toán sẽ liên hệ để chi tiền hoàn về cho bạn.</div>
+            </div>`;
+        } else {
+          refundSection = `
+            <div style="background:#fff7ed;border-left:4px solid #f97316;border-radius:6px;padding:14px 18px;margin:18px 0;">
+              <div style="color:#9a3412;font-weight:700;font-size:1.05rem;">⚠️ Tiền cọc không được hoàn do không đủ điều kiện.</div>
+            </div>`;
+        }
+
+        const managerNoteHtml = managerCompletionNotes
+          ? `<div style="margin-top:12px;color:#475569;font-size:0.97rem;"><strong>Ghi chú từ Quản Lý:</strong> ${managerCompletionNotes}</div>`
+          : "";
+
+        const emailHtml = `
+          <!DOCTYPE html>
+          <html lang="vi">
+          <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Xác nhận hoàn tất trả phòng</title>
+          </head>
+          <body style="font-family:'Segoe UI',Arial,sans-serif;background:#f4f6f8;margin:0;padding:0;">
+            <div style="max-width:540px;margin:32px auto;background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.07);overflow:hidden;">
+              <div style="background:linear-gradient(90deg,#1e3a8a 0%,#fbbf24 100%);color:#fff;padding:28px 0 18px 0;text-align:center;">
+                <h1 style="margin:0;font-size:1.9rem;letter-spacing:1px;">Hoàng Nam Building</h1>
+                <div style="font-size:1.05rem;margin-top:6px;">✅ Xác nhận hoàn tất trả phòng</div>
+              </div>
+              <div style="padding:32px 28px 24px 28px;">
+                <div style="font-size:1.1rem;color:#1e293b;margin-bottom:14px;">Xin chào <strong>${tenantName}</strong>,</div>
+                <p style="color:#334155;margin:0 0 10px 0;">Quản lý đã xác nhận hoàn tất quy trình trả phòng của bạn. Dưới đây là thông tin chi tiết:</p>
+                <ul style="list-style:none;padding:0;margin:0 0 10px 0;">
+                  <li style="margin-bottom:8px;"><span style="color:#475569;">Phòng:</span> <strong style="color:#1e293b;">${roomName}</strong></li>
+                  <li style="margin-bottom:8px;"><span style="color:#475569;">Mã hợp đồng:</span> <strong style="color:#1e293b;">${contractCode}</strong></li>
+                  <li style="margin-bottom:8px;"><span style="color:#475569;">Ngày hoàn tất:</span> <strong style="color:#1e293b;">${completedDateStr}</strong></li>
+                </ul>
+                ${refundSection}
+                ${managerNoteHtml}
+                <div style="margin-top:24px;color:#64748b;font-size:0.95rem;text-align:center;">Cảm ơn bạn đã tin tưởng và lựa chọn Hoàng Nam Building.<br>Đây là email tự động, vui lòng không trả lời lại email này.</div>
+              </div>
+              <div style="background:#fbbf24;color:#1e293b;text-align:center;font-size:0.95rem;padding:12px 0;border-radius:0 0 12px 12px;">
+                Chúc bạn nhiều sức khỏe và may mắn!
+              </div>
+            </div>
+          </body>
+          </html>`;
+
+        await sendEmail(tenantEmail, "Hoàn tất trả phòng - Hoàng Nam Building", emailHtml);
+        console.log(`[MOVEOUT] ✅ Đã gửi email hoàn tất trả phòng đến: ${tenantEmail}`);
+      } else {
+        console.warn(`[MOVEOUT] ⚠️ Không tìm thấy email của tenant ${moveOutRequest.tenantId}, bỏ qua gửi email`);
+      }
+    } catch (emailErr) {
+      console.error("[MOVEOUT] ❌ Gửi email hoàn tất trả phòng thất bại:", emailErr.message);
+    }
 
     return moveOutRequest;
   }
