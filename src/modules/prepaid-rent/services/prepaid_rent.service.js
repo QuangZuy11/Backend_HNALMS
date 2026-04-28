@@ -39,9 +39,9 @@ const computeContractDurationMonths = (startDate, endDate) => {
   return Math.max(1, months);
 };
 
-// Hợp đồng ≤ 6 tháng: đóng trước tối thiểu 1 tháng; > 6 tháng: tối thiểu 2 tháng
+// HĐ < 6 tháng: tối thiểu 1 tháng; HĐ >= 6 tháng: tối thiểu 3 tháng
 const getMinPrepaidMonthsByDuration = (durationMonths) =>
-  durationMonths <= 6 ? 1 : 2;
+  durationMonths < 6 ? 1 : 3;
 
 /**
  * Số tháng có thể cộng thêm (setMonth) từ mốc paidThrough mà không vượt endDate.
@@ -165,8 +165,8 @@ exports.createPrepaidRentRequest = async (tenantId, contractId, prepaidMonths) =
       status: 400,
       message:
         minPrepaidMonths === 1
-          ? "Số tháng đóng trước tối thiểu là 1 tháng (hợp đồng ngắn hạn)."
-          : "Số tháng đóng trước tối thiểu là 2 tháng (hợp đồng trên 6 tháng).",
+          ? "Số tháng đóng trước tối thiểu là 1 tháng (Đối với hợp đồng ngắn hạn)."
+          : "Số tháng đóng trước tối thiểu là 3 tháng (Đối với hợp đồng trên 6 tháng).",
     };
   }
 
