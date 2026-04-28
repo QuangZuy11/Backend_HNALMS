@@ -106,7 +106,7 @@ class NotificationService {
                 if (search) {
                     matchCondition.title = { $regex: search, $options: 'i' };
                 }
-                
+
                 if (fromDate || toDate) {
                     matchCondition.createdAt = {};
                     if (fromDate) matchCondition.createdAt.$gte = new Date(fromDate);
@@ -156,7 +156,7 @@ class NotificationService {
                 if (search) {
                     matchCondition.title = { $regex: search, $options: 'i' };
                 }
-                
+
                 if (fromDate || toDate) {
                     matchCondition.createdAt = {};
                     if (fromDate) matchCondition.createdAt.$gte = new Date(fromDate);
@@ -165,6 +165,24 @@ class NotificationService {
 
                 const notifications = await Notification.aggregate([
                     { $match: matchCondition },
+                    // Lookup User để lấy thông tin người tạo
+                    {
+                        $lookup: {
+                            from: 'user',
+                            localField: 'created_by',
+                            foreignField: '_id',
+                            as: 'creator'
+                        }
+                    },
+                    // Lookup UserInfo để lấy fullname
+                    {
+                        $lookup: {
+                            from: 'userinfos',
+                            localField: 'created_by',
+                            foreignField: 'userId',
+                            as: 'creatorInfo'
+                        }
+                    },
                     {
                         $addFields: {
                             recipient_info: {
@@ -177,6 +195,13 @@ class NotificationService {
                                     },
                                     0
                                 ]
+                            },
+                            sender_name: {
+                                $ifNull: [
+                                    { $arrayElemAt: ['$creatorInfo.fullname', 0] },
+                                    { $arrayElemAt: ['$creator.username', 0] },
+                                    'Hệ thống'
+                                ]
                             }
                         }
                     },
@@ -187,6 +212,7 @@ class NotificationService {
                             type: 1,
                             status: 1,
                             createdAt: 1,
+                            sender_name: 1,
                             is_read: '$recipient_info.is_read',
                             read_at: '$recipient_info.read_at'
                         }
@@ -396,39 +422,44 @@ class NotificationService {
     async createSystemNotificationForRequest(tenantId, requestType, requestData) {
         try {
             console.log(`🔔 [NOTIFICATION] Tạo notification cho request type: ${requestType}, tenantId: ${tenantId}`);
-            
-            // Lấy thông tin tenant
-            const tenant = await User.findById(tenantId).select('fullName');
+
+            // Lấy thông tin tenant và userInfo để có fullname
+            const UserInfo = require('../../authentication/models/userInfor.model');
+            const tenant = await User.findById(tenantId);
             if (!tenant) {
                 console.error(`❌ [NOTIFICATION] Không tìm thấy tenant: ${tenantId}`);
                 throw new Error('Không tìm thấy thông tin tenant');
             }
-            console.log(`✅ [NOTIFICATION] Tenant found: ${tenant.fullName}`);
+
+            // Lấy fullname từ UserInfo
+            const userInfo = await UserInfo.findOne({ userId: tenantId });
+            const displayName = userInfo?.fullname || tenant.username;
+            console.log(`✅ [NOTIFICATION] Tenant found: ${displayName}`);
 
             // Tạo tiêu đề và nội dung dựa vào loại request
             let title, content;
             if (requestType === 'repair') {
                 const { type, roomName, description } = requestData;
-                title = `📋 Yêu cầu ${type} từ ${tenant.fullName}`;
-                content = `Phòng: ${roomName}\nLoại: ${type}\nMô tả: ${description}`;
+                title = `Yêu cầu ${type}`;
+                content = `${roomName}\nLoại: ${type}\nMô tả: ${description}`;
             } else if (requestType === 'complaint') {
                 const { category, complaintContent } = requestData;
-                title = `⚠️ Khiếu nại (${category}) từ ${tenant.fullName}`;
+                title = `Khiếu nại (${category})`;
                 content = complaintContent;
             } else if (requestType === 'transfer') {
                 const { currentRoomName, targetRoomName, reason, transferDate } = requestData;
-                title = `🏠 Yêu cầu chuyển phòng từ ${tenant.fullName}`;
-                content = `Từ phòng: ${currentRoomName}\nSang phòng: ${targetRoomName}\nNgày chuyển: ${new Date(transferDate).toLocaleDateString('vi-VN')}\nLý do: ${reason}`;
+                title = `Yêu cầu chuyển phòng `;
+                content = `Từ: ${currentRoomName}\nSang: ${targetRoomName}\nNgày chuyển: ${new Date(transferDate).toLocaleDateString('vi-VN')}\nLý do: ${reason}`;
             } else {
                 throw new Error('Loại request không hợp lệ');
             }
 
             // Lấy tất cả manager có trạng thái active
-            const managers = await User.find({ 
-                role: 'manager', 
-                status: 'active' 
+            const managers = await User.find({
+                role: 'manager',
+                status: 'active'
             }).select('_id');
-            
+
             console.log(`🔍 [NOTIFICATION] Tìm thấy ${managers.length} manager(s) active`);
             if (managers.length === 0) {
                 console.warn('⚠️ [NOTIFICATION] Không tìm thấy manager nào để gửi thông báo');
@@ -436,12 +467,13 @@ class NotificationService {
             }
 
             // Tạo notification đã gửi ngay (status = 'sent')
+            // created_by = tenantId để có thể lookup fullName từ User -> UserInfo
             const notification = new Notification({
                 title,
                 content,
                 type: 'system',
                 status: 'sent',
-                created_by: null, // Thông báo từ hệ thống
+                created_by: tenantId,
                 recipients: managers.map(manager => ({
                     recipient_id: manager._id,
                     recipient_role: 'manager',
@@ -467,7 +499,7 @@ class NotificationService {
         try {
             console.log(`[INVOICE NOTIFICATION] 📌 Bắt đầu tạo notification...`);
             console.log(`[INVOICE NOTIFICATION] Input: tenantId=${tenantId}, invoiceType=${invoiceType}, invoiceCode=${invoiceData?.invoiceCode}`);
-            
+
             // Lấy thông tin tenant
             const tenant = await User.findById(tenantId).select('fullName email');
             if (!tenant) {
@@ -478,27 +510,27 @@ class NotificationService {
 
             // Tạo tiêu đề và nội dung dựa vào loại hóa đơn
             let title, content;
-            
+
             if (invoiceType === 'periodic') {
                 // Hóa đơn định kỳ (Tiền thuê, điện, nước, wifi)
                 const { invoiceCode, title: invoiceTitle, totalAmount, dueDate, items } = invoiceData;
                 const itemsList = items?.map(item => `• ${item.itemName}: ${item.amount?.toLocaleString('vi-VN')} đ`).join('\n') || '';
-                
+
                 title = `[Hóa Đơn Định Kỳ] ${invoiceCode}`;
-                content = `Phòng của bạn có hóa đơn định kỳ:\n\n${itemsList}\n\nTổng tiền: ${totalAmount?.toLocaleString('vi-VN')} đ\nHạn thanh toán: ${new Date(dueDate).toLocaleDateString('vi-VN')}\n\nVui lòng thanh toán đúng hạn.`;
-                
+                content = `Bạn có hóa đơn định kỳ:\n\n${itemsList}\n\nTổng tiền: ${totalAmount?.toLocaleString('vi-VN')} đ\nHạn thanh toán: ${new Date(dueDate).toLocaleDateString('vi-VN')}\n\nVui lòng thanh toán đúng hạn.`;
+
             } else if (invoiceType === 'incurred') {
                 // Hóa đơn phát sinh (Sửa chữa, vi phạm, cọc)
                 const { invoiceCode, title: invoiceTitle, totalAmount, dueDate, type, description } = invoiceData;
-                
+
                 let typeLabel = 'Phát Sinh';
                 if (type === 'repair') typeLabel = 'Sửa Chữa';
                 else if (type === 'violation') typeLabel = 'Vi Phạm';
                 else if (type === 'prepaid') typeLabel = 'Cọc';
-                
+
                 title = `[Hóa Đơn ${typeLabel}] ${invoiceCode}`;
-                content = `Phòng của bạn có hóa đơn ${typeLabel}:\n\n${invoiceTitle}\nTiền: ${totalAmount?.toLocaleString('vi-VN')} đ\nHạn thanh toán: ${new Date(dueDate).toLocaleDateString('vi-VN')}\n\nVui lòng thanh toán đúng hạn.`;
-                
+                content = `Bạn có hóa đơn ${typeLabel}:\n\n${invoiceTitle}\nSố Tiền: ${totalAmount?.toLocaleString('vi-VN')} đ\nHạn thanh toán: ${new Date(dueDate).toLocaleDateString('vi-VN')}\n\nVui lòng thanh toán đúng hạn.`;
+
             } else {
                 console.warn(`[INVOICE NOTIFICATION] ⚠️ Loại hóa đơn không được hỗ trợ: ${invoiceType}`);
                 return null;
@@ -527,9 +559,9 @@ class NotificationService {
             console.log(`[INVOICE NOTIFICATION] 🆔 Notification ID: ${savedNotif._id}`);
             console.log(`[INVOICE NOTIFICATION] 👤 Tenant: ${tenant.fullName} (${tenantId})`);
             console.log(`[INVOICE NOTIFICATION] 📧 Email: ${tenant.email}`);
-            
+
             return savedNotif;
-            
+
         } catch (error) {
             console.error(`[INVOICE NOTIFICATION] ❌ LỖI: ${error.message}`);
             console.error(`[INVOICE NOTIFICATION] 📌 Stack trace:`, error.stack);
