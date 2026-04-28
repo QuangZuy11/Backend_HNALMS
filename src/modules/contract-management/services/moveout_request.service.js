@@ -965,17 +965,7 @@ class MoveOutRequestService {
     let totalAmount = 0;
     const formatVN = (d) => `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
 
-    // ─── 1. Tiền phòng còn lại tới ngày xuất phòng ───────────────────────
-    // Tiền phòng KHÔNG tính vào hóa đơn cuối (đã thanh toán qua rentPaidUntil)
-    invoiceItems.push({
-      itemName: `Tiền thuê phòng (đã thanh toán qua tiền cọc)`,
-      usage: 1,
-      unitPrice: 0,
-      amount: 0,
-      isIndex: false
-    });
-
-    // ─── 2. Điện / Nước + Các dịch vụ có chỉ số – Lấy từ MeterReading ────
+    // ─── 1. Điện / Nước + Các dịch vụ có chỉ số – Lấy từ MeterReading ────
     const startOfMonth = new Date(year, month - 1, 1);
     const endOfMonth = new Date(year, month, 0, 23, 59, 59);
     const METER_MAX = 99999;
@@ -1107,25 +1097,24 @@ class MoveOutRequestService {
       Array.isArray(doc.services) ? doc.services : []
     );
 
+    let bookServiceCount = 0;
     if (bookServiceItems.length > 0) {
       const moveOutDay = new Date(moveOutDate);
       moveOutDay.setHours(23, 59, 59, 999);
-      const serviceChargeMap = new Map();
 
       bookServiceItems.forEach((srvItem) => {
         if (!srvItem?.serviceId) return;
 
         const startDate = srvItem.startDate ? new Date(srvItem.startDate) : null;
-        const endDate = srvItem.endDate ? new Date(srvItem.endDate) : null;
+        const endDateRaw = srvItem.endDate ? new Date(srvItem.endDate) : null;
 
+        // Bỏ qua dịch vụ chưa bắt đầu tính đến ngày xuất phòng
         if (startDate) {
           startDate.setHours(0, 0, 0, 0);
           if (startDate > moveOutDay) return;
         }
-        if (endDate) {
-          endDate.setHours(23, 59, 59, 999);
-          if (endDate < moveOutDay) return;
-        }
+        // Bỏ qua dịch vụ đã kết thúc trước đầu tháng (giống logic periodic invoice)
+        if (endDateRaw && endDateRaw < startOfMonth) return;
 
         const srvItemName = srvItem.serviceId.name || srvItem.serviceId.serviceName || "Dịch vụ";
         const srvItemId = srvItem.serviceId._id?.toString();
@@ -1140,22 +1129,22 @@ class MoveOutRequestService {
         const finalQty = Number(srvItem.quantity) || 1;
         if (!Number.isFinite(finalQty) || finalQty <= 0) return;
 
-        const serviceKey = srvItem.serviceId._id ? srvItem.serviceId._id.toString() : `${srvItemName}-${finalQty}-${srvPrice}`;
-        const existing = serviceChargeMap.get(serviceKey);
-        if (!existing || ((existing.startDate || 0) > (startDate || 0))) {
-          serviceChargeMap.set(serviceKey, { itemName: srvItemName, quantity: finalQty, unitPrice: srvPrice, startDate });
-        }
-      });
-
-      for (const chargeItem of serviceChargeMap.values()) {
-        const amount = chargeItem.quantity * chargeItem.unitPrice;
+        const amount = finalQty * srvPrice;
         totalAmount += amount;
-        invoiceItems.push({ itemName: `Dịch vụ ${chargeItem.itemName}`, oldIndex: 0, newIndex: 0, usage: chargeItem.quantity, unitPrice: chargeItem.unitPrice, amount, isIndex: false });
-      }
-      console.log(`[MOVEOUT] 📦 Đã thêm ${serviceChargeMap.size} item dịch vụ từ BookService`);
-    } else {
-      console.log(`[MOVEOUT] ℹ️ Không có BookService cho contract này`);
+        invoiceItems.push({
+          itemName: `Dịch vụ ${srvItemName}`,
+          oldIndex: 0,
+          newIndex: 0,
+          usage: finalQty,
+          unitPrice: srvPrice,
+          amount,
+          isIndex: false
+        });
+        bookServiceCount++;
+        console.log(`[MOVEOUT] 📦 Dịch vụ: ${srvItemName} x${finalQty} × ${srvPrice.toLocaleString('vi-VN')} = ${amount.toLocaleString('vi-VN')} VND`);
+      });
     }
+    console.log(`[MOVEOUT] 📦 Đã thêm ${bookServiceCount} item dịch vụ từ BookService (tổng raw: ${bookServiceItems.length})`);
 
     // ─── Lưu hóa đơn cuối ────────────────────────────────────────────────
     if (existingFinal) {
@@ -1316,10 +1305,6 @@ class MoveOutRequestService {
     }
 
     const todayDateOnly = this._toDateOnly(new Date());
-    const expectedDateOnly = this._toDateOnly(moveOutRequest.expectedMoveOutDate);
-    if (todayDateOnly < expectedDateOnly) {
-      throw new Error(`Chưa đến ngày trả phòng (${this._formatVNDate(expectedDateOnly)}). Hệ thống sẽ tự động hoàn tất vào ngày này, hoặc bạn có thể hoàn tất thủ công từ ngày này trở đi.`);
-    }
 
     const contract = await Contract.findById(moveOutRequest.contractId)
       .select("_id contractCode status depositId roomId");
