@@ -275,19 +275,54 @@ exports.getBookingRequestById = async (req, res) => {
 
 exports.updateBookingRequestStatus = async (req, res) => {
   try {
-    const { status } = req.body;
+    const { status, reason } = req.body;
     if (!["Pending", "Processed", "Rejected"].includes(status)) {
       return res.status(400).json({ success: false, message: "Trạng thái không hợp lệ." });
     }
 
+    const updateData = { status };
+    if (status === "Rejected") {
+      updateData.rejectionReason = reason || "Không có lý do cụ thể";
+    }
+
     const request = await BookingRequest.findByIdAndUpdate(
       req.params.id,
-      { status },
+      updateData,
       { new: true }
-    );
+    ).populate("roomId").populate("userInfoId");
 
     if (!request) {
       return res.status(404).json({ success: false, message: "Không tìm thấy yêu cầu." });
+    }
+
+    // Gửi email nếu bị từ chối
+    if (status === "Rejected") {
+      let tenantEmail = request.email;
+      let tenantName = request.name;
+      
+      if (!tenantEmail && request.userInfoId) {
+        tenantEmail = request.userInfoId.email;
+        tenantName = request.userInfoId.fullname || tenantName;
+      }
+
+      if (tenantEmail) {
+        const emailContent = `
+          <p>Chào <strong>${tenantName || "Quý khách"}</strong>,</p>
+          <p>Chúng tôi rất tiếc phải thông báo rằng yêu cầu đặt phòng <strong>${request.roomId?.name || ""}</strong> của bạn đã bị từ chối.</p>
+          <p><strong>Lý do:</strong> ${updateData.rejectionReason}</p>
+          <p>Bạn có thể tham khảo các phòng khác tại hệ thống của chúng tôi. Xin lỗi vì sự bất tiện này!</p>
+          <p>Trân trọng,<br/>Quản lý Tòa nhà Hoàng Nam</p>
+        `;
+        try {
+          await sendEmail(
+            tenantEmail,
+            "Yêu cầu đặt phòng của bạn đã bị từ chối - Hoàng Nam",
+            emailContent
+          );
+        } catch (emailErr) {
+          console.error("Lỗi khi gửi email từ chối:", emailErr);
+        }
+      }
     }
 
     res.status(200).json({
@@ -798,18 +833,52 @@ exports.handleSepayWebhook = async (req, res) => {
 
     if (contractResponseStatus === 201 || contractResponseStatus === 200) {
       // Successfully converted → update BookingRequest status to Processed
-      await BookingRequest.findByIdAndUpdate(bookingRequest._id, { status: "Processed" });
+      const contractId = contractResponseData?.data?.contract?._id;
+      await BookingRequest.findByIdAndUpdate(bookingRequest._id, { 
+        status: "Processed",
+        contractId: contractId || null
+      });
       console.log(`[BOOKING WH] Updated BookingRequest.status = "Processed"`);
 
       // Also reject any remaining Pending requests for the same room
-      await BookingRequest.updateMany(
-        {
-          roomId: bookingRequest.roomId._id,
-          _id: { $ne: bookingRequest._id },
-          status: { $in: ["Pending", "Awaiting Payment"] },
-        },
-        { status: "Rejected", rejectionReason: "room_taken" },
-      );
+      const remainingRequests = await BookingRequest.find({
+        roomId: bookingRequest.roomId._id,
+        _id: { $ne: bookingRequest._id },
+        status: { $in: ["Pending", "Awaiting Payment"] },
+      }).populate("userInfoId");
+
+      if (remainingRequests.length > 0) {
+        await BookingRequest.updateMany(
+          { _id: { $in: remainingRequests.map(r => r._id) } },
+          { status: "Rejected", rejectionReason: "room_taken" }
+        );
+
+        // Gửi email cho các yêu cầu bị hủy
+        for (const cr of remainingRequests) {
+          let crEmail = cr.email;
+          let crName = cr.name;
+          if (!crEmail && cr.userInfoId) {
+            crEmail = cr.userInfoId.email;
+            crName = cr.userInfoId.fullname || crName;
+          }
+
+          if (crEmail) {
+            try {
+              await sendEmail(
+                crEmail,
+                "Yêu cầu đặt phòng của bạn đã bị từ chối - Hoàng Nam",
+                `<p>Chào <strong>${crName || "Quý khách"}</strong>,</p>
+                 <p>Rất tiếc, yêu cầu đặt phòng <strong>${bookingRequest.roomId.name}</strong> của bạn đã bị hủy vì phòng vừa được thanh toán và chốt bởi một khách hàng khác.</p>
+                 <p>Bạn có thể đặt phòng khác tại hệ thống của chúng tôi. Xin lỗi vì sự bất tiện này!</p>
+                 <p>Trân trọng,<br/>Quản lý Tòa nhà Hoàng Nam</p>`
+              );
+            } catch (err) {
+              console.error("[handleSepayWebhook] Lỗi gửi email từ chối:", err.message);
+            }
+          }
+        }
+      }
+
       // Ensure Payment record is marked Success (double-check)
       if (paymentRecord) {
         paymentRecord.status = "Success";
@@ -1069,7 +1138,11 @@ async function _processBookingPayment(bookingRequest, transferAmount) {
 
   // Update status to Processed
   if (mockRes._status === 201 || mockRes._status === 200) {
-    await BookingRequest.findByIdAndUpdate(bookingRequest._id, { status: "Processed" });
+    const contractId = mockRes._data?.data?.contract?._id;
+    await BookingRequest.findByIdAndUpdate(bookingRequest._id, { 
+      status: "Processed",
+      contractId: contractId || null
+    });
     console.log(`[_PROCESS BOOKING] ✅ Contract created for BookingRequest ${bookingRequest._id}`);
     return { success: true, contractCreated: true, data: mockRes._data };
   } else {
@@ -1129,15 +1202,20 @@ async function _triggerCreateContract(bookingRequest) {
     };
 
     let contractResponseStatus = 200;
+    let contractResponseData = null;
     const mockRes = {
       status: (code) => { contractResponseStatus = code; return mockRes; },
-      json: () => { }
+      json: (data) => { contractResponseData = data; }
     };
 
     await contractController.createContract(mockReq, mockRes);
 
     if (contractResponseStatus === 201 || contractResponseStatus === 200) {
-      await BookingRequest.findByIdAndUpdate(bookingRequest._id, { status: "Processed" });
+      const contractId = contractResponseData?.data?.contract?._id;
+      await BookingRequest.findByIdAndUpdate(bookingRequest._id, { 
+        status: "Processed",
+        contractId: contractId || null
+      });
       console.log(`[BOOKING POLLING] ✅ Contract created for BookingRequest ${bookingRequest._id}`);
     } else {
       console.warn(`[BOOKING POLLING] ⚠️ createContract returned ${contractResponseStatus}`);
