@@ -234,12 +234,26 @@ class NotificationService {
                     }
                 };
             } else if (normalizedRole === 'tenant') {
-                // Tenant xem thông báo:
-                // 1. type = 'tenant' (từ Manager) cho TẤT CẢ tenant
+                // Lấy thông tin tài khoản tenant để filter notification theo ngày tạo
+                // Đảm bảo tenant mới không thấy thông báo đã được gửi TRƯỚC khi họ tạo tài khoản
+                const tenantUser = await User.findById(userId).select('createdAt');
+                const tenantCreatedAt = tenantUser?.createdAt || new Date(0);
+
+                // Filter notifications:
+                // 1. type = 'tenant' VÀ notification.createdAt >= tenant.createdAt
+                //    (chỉ thông báo được gửi SAU khi tenant tạo tài khoản)
                 // 2. type = 'system' VÀ recipient_id = tenantId (thông báo hệ thống gửi cho tenant cụ thể)
                 const orConditions = [
-                    { type: 'tenant', status: 'sent' },
-                    { type: 'system', status: 'sent', 'recipients.recipient_id': userId }
+                    {
+                        type: 'tenant',
+                        status: 'sent',
+                        createdAt: { $gte: tenantCreatedAt }
+                    },
+                    {
+                        type: 'system',
+                        status: 'sent',
+                        'recipients.recipient_id': userId
+                    }
                 ];
 
                 matchCondition = {
@@ -251,7 +265,7 @@ class NotificationService {
                 }
 
                 if (fromDate || toDate) {
-                    matchCondition.createdAt = {};
+                    matchCondition.createdAt = matchCondition.createdAt || {};
                     if (fromDate) matchCondition.createdAt.$gte = new Date(fromDate);
                     if (toDate) matchCondition.createdAt.$lte = new Date(toDate);
                 }
@@ -400,13 +414,26 @@ class NotificationService {
                 });
                 return { unread_count: count };
             } else if (normalizedRole === 'tenant') {
-                // Tenant đếm thông báo chưa đọc: type = 'tenant' + type = 'system' gửi cho tenant đó
+                // Lấy thông tin tài khoản tenant để filter notification theo ngày tạo
+                const tenantUser = await User.findById(userId).select('createdAt');
+                const tenantCreatedAt = tenantUser?.createdAt || new Date(0);
+
+                // Tenant đếm thông báo chưa đọc:
+                // 1. type = 'tenant' VÀ notification.createdAt >= tenant.createdAt
+                // 2. type = 'system' gửi cho tenant cụ thể
                 const count = await Notification.countDocuments({
                     $or: [
-                        // Thông báo từ Manager cho tất cả tenant
-                        { type: 'tenant', status: 'sent' },
-                        // Thông báo hệ thống gửi cho tenant cụ thể
-                        { type: 'system', status: 'sent', 'recipients.recipient_id': userId, 'recipients.is_read': false }
+                        {
+                            type: 'tenant',
+                            status: 'sent',
+                            createdAt: { $gte: tenantCreatedAt }
+                        },
+                        {
+                            type: 'system',
+                            status: 'sent',
+                            'recipients.recipient_id': userId,
+                            'recipients.is_read': false
+                        }
                     ]
                 });
                 return { unread_count: count };
