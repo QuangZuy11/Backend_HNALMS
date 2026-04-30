@@ -843,44 +843,59 @@ const releaseTransferInvoice = async (requestId, managerInvoiceNotes = "", elect
   const contractBookServices = await BookService.find({ contractId: contract._id }).populate('services.serviceId');
   const bookServiceItems = contractBookServices.flatMap(doc => Array.isArray(doc.services) ? doc.services : []);
 
+  let bookServiceCount = 0;
   if (bookServiceItems.length > 0) {
-    const transferDay = new Date(request.transferDate);
+    const transferDay = new Date(request.transferDate || now);
     transferDay.setHours(23, 59, 59, 999);
-    const serviceChargeMap = new Map();
 
     bookServiceItems.forEach((srvItem) => {
       if (!srvItem?.serviceId) return;
-      const startDate = srvItem.startDate ? new Date(srvItem.startDate) : null;
-      const endDate = srvItem.endDate ? new Date(srvItem.endDate) : null;
 
-      if (startDate) { startDate.setHours(0, 0, 0, 0); if (startDate > transferDay) return; }
-      if (endDate) { endDate.setHours(23, 59, 59, 999); if (endDate < transferDay) return; }
+      const startDate = srvItem.startDate ? new Date(srvItem.startDate) : null;
+      const endDateRaw = srvItem.endDate ? new Date(srvItem.endDate) : null;
+
+      // Bỏ qua dịch vụ chưa bắt đầu tính đến ngày chuyển phòng
+      if (startDate) {
+        startDate.setHours(0, 0, 0, 0);
+        if (startDate > transferDay) return;
+      }
+      // Bỏ qua dịch vụ đã kết thúc trước đầu tháng (giống invoice_periodic)
+      if (endDateRaw && endDateRaw < startOfMonth) return;
 
       const srvItemName = srvItem.serviceId.name || srvItem.serviceId.serviceName || "Dịch vụ";
       const srvItemId = srvItem.serviceId._id?.toString();
+      // Bỏ qua điện/nước (đã tính qua MeterReading)
       if (srvItemId === electricServiceId || srvItemId === waterServiceId) return;
 
+      // Kiểm tra thêm theo tên (dự phòng nếu ID không khớp)
+      const nameCheck = srvItemName.toLowerCase().trim();
+      if (nameCheck === 'điện' || nameCheck === 'dien' || nameCheck === 'nước' || nameCheck === 'nuoc') return;
+
       let srvPrice = srvItem.serviceId.currentPrice || srvItem.serviceId.price || 0;
-      srvPrice = typeof srvPrice === 'object' && srvPrice.$numberDecimal ? parseFloat(srvPrice.$numberDecimal) : Number(srvPrice) || 0;
+      srvPrice = typeof srvPrice === 'object' && srvPrice.$numberDecimal
+        ? parseFloat(srvPrice.$numberDecimal)
+        : Number(srvPrice) || 0;
       if (!Number.isFinite(srvPrice) || srvPrice < 0) return;
 
       const finalQty = Number(srvItem.quantity) || 1;
-      const serviceKey = srvItem.serviceId._id ? srvItem.serviceId._id.toString() : `${srvItemName}-${finalQty}-${srvPrice}`;
-      const existing = serviceChargeMap.get(serviceKey);
-      if (!existing || ((existing.startDate || 0) > (startDate || 0))) {
-        serviceChargeMap.set(serviceKey, { itemName: srvItemName, quantity: finalQty, unitPrice: srvPrice, startDate });
-      }
-    });
+      if (!Number.isFinite(finalQty) || finalQty <= 0) return;
 
-    for (const chargeItem of serviceChargeMap.values()) {
-      const amount = chargeItem.quantity * chargeItem.unitPrice;
+      const amount = finalQty * srvPrice;
       totalAmount += amount;
       invoiceItems.push({
-        itemName: `Dịch vụ ${chargeItem.itemName}`,
-        oldIndex: 0, newIndex: 0, usage: chargeItem.quantity, unitPrice: chargeItem.unitPrice, amount, isIndex: false
+        itemName: `Dịch vụ ${srvItemName}`,
+        oldIndex: 0,
+        newIndex: 0,
+        usage: finalQty,
+        unitPrice: srvPrice,
+        amount,
+        isIndex: false
       });
-    }
+      bookServiceCount++;
+      console.log(`[TRANSFER] 📦 Dịch vụ: ${srvItemName} x${finalQty} × ${srvPrice.toLocaleString('vi-VN')} = ${amount.toLocaleString('vi-VN')} VND`);
+    });
   }
+  console.log(`[TRANSFER] 📦 Đã thêm ${bookServiceCount} item dịch vụ từ BookService (tổng raw: ${bookServiceItems.length})`);
 
   // Lưu hóa đơn dịch vụ
   let finalInvoice;
