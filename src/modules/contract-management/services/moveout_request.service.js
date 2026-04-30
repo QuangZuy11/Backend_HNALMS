@@ -1118,7 +1118,11 @@ class MoveOutRequestService {
 
         const srvItemName = srvItem.serviceId.name || srvItem.serviceId.serviceName || "Dịch vụ";
         const srvItemId = srvItem.serviceId._id?.toString();
+        // Bỏ qua điện/nước bằng ID
         if (srvItemId === electricServiceId || srvItemId === waterServiceId) return;
+        // Bỏ qua điện/nước bằng tên (dự phòng nếu ID không khớp - học từ invoice_periodic)
+        const nameCheck = srvItemName.toLowerCase().trim();
+        if (nameCheck === 'điện' || nameCheck === 'dien' || nameCheck === 'nước' || nameCheck === 'nuoc') return;
 
         let srvPrice = srvItem.serviceId.currentPrice || srvItem.serviceId.price || 0;
         srvPrice = typeof srvPrice === 'object' && srvPrice.$numberDecimal
