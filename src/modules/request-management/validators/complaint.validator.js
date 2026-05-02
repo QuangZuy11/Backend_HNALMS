@@ -80,7 +80,7 @@ const validateUpdateComplaint = (data) => {
     const validCategories = [
       "Tiếng ồn",
       "Vệ sinh",
-      "An niên",
+      "An ninh",
       "Cơ sở vật chất",
       "Thái độ phục vụ",
       "Khác"
