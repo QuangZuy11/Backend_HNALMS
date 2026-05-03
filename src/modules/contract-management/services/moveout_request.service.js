@@ -956,6 +956,43 @@ class MoveOutRequestService {
       throw new Error('Hóa đơn tháng này đã được thanh toán, không thể cập nhật lại dữ liệu trả phòng.');
     }
 
+    // ─── Nếu đã có hóa đơn định kỳ tháng này → dùng luôn, KHÔNG tạo HĐ mới và KHÔNG cần nhập điện nước ──
+    if (existingFinal) {
+      console.log(`[MOVEOUT] 📄 Đã có hóa đơn định kỳ ${invoiceCode} → dùng lại, bỏ qua tạo HĐ + chỉ số điện nước.`);
+      const finalInvoice = existingFinal;
+
+      // Tính cọc + tiền phòng trả trước
+      const isDepositForfeited = Boolean(moveOutRequest.isDepositForfeited);
+      const deposit = await this._findDepositForContract(contract);
+      const { months: prepaidMonths, amount: prepaidRentOverpay } = await this._calculatePrepaidMonthsAndAmount(contract);
+      const depositRefundAmount = deposit && !isDepositForfeited ? Math.max(Number(deposit.amount) || 0, 0) : 0;
+      const totalRefundAmount = depositRefundAmount + prepaidRentOverpay;
+
+      moveOutRequest.finalInvoiceId = finalInvoice._id;
+      moveOutRequest.managerInvoiceNotes = managerInvoiceNotes;
+      moveOutRequest.depositRefundAmount = totalRefundAmount;
+      moveOutRequest.prepaidRentOverpay = prepaidRentOverpay;
+      moveOutRequest.prepaidMonths = prepaidMonths;
+      moveOutRequest.status = "InvoiceReleased";
+      moveOutRequest.paymentDate = null;
+      await moveOutRequest.save();
+
+      await this._notifyTenant(moveOutRequest.tenantId, `📄 Hóa đơn cuối đã được phát hành`, `Quản lý đã phát hành hóa đơn cuối cho phòng ${contract?.roomId?.name || ''}. Vui lòng kiểm tra và thanh toán.`);
+
+      return {
+        moveOutRequest,
+        finalInvoice,
+        settlement: {
+          invoiceAmount: finalInvoice?.totalAmount || 0,
+          depositRefundAmount,
+          prepaidRentOverpay,
+          totalRefundAmount,
+          isDepositForfeited,
+          refundTicket: null,
+        },
+      };
+    }
+
     let parsedPrice = room.roomTypeId?.currentPrice || 0;
     parsedPrice = typeof parsedPrice === 'object' && parsedPrice.$numberDecimal
       ? parseFloat(parsedPrice.$numberDecimal)
@@ -1233,6 +1270,55 @@ class MoveOutRequestService {
         refundTicket: null, // sẽ tạo ở STEP 4 (Paid)
       },
     };
+  }
+
+  /**
+   * [MANAGER] Lấy chỉ số điện nước gần nhất + kiểm tra hóa đơn định kỳ tháng hiện tại.
+   * Trả về hasPeriodicInvoice để frontend ẩn form nhập điện nước khi đã có HĐ.
+   * GET /api/move-outs/:moveOutRequestId/latest-meter
+   */
+  async getLatestMeterReadingForMoveOut(moveOutRequestId) {
+    const moveOutRequest = await MoveOutRequest.findById(moveOutRequestId).lean();
+    if (!moveOutRequest) throw new Error('Không tìm thấy yêu cầu trả phòng.');
+
+    const contract = await Contract.findById(moveOutRequest.contractId).lean();
+    if (!contract) throw new Error('Không tìm thấy hợp đồng.');
+
+    const roomId = contract.roomId;
+    if (!roomId) throw new Error('Hợp đồng không có thông tin phòng.');
+
+    // ── Kiểm tra hóa đơn định kỳ tháng hiện tại ──────────────────────────
+    const now = new Date();
+    const month = now.getMonth() + 1;
+    const year = now.getFullYear();
+    const periodicInvoiceCode = `INV-${contract.contractCode}-${month}${year}`;
+    const periodicInvoice = await InvoicePeriodic.findOne({
+      invoiceCode: periodicInvoiceCode,
+      contractId: contract._id,
+    }).lean();
+    const hasPeriodicInvoice = !!periodicInvoice;
+    // ──────────────────────────────────────────────────────────────────────
+
+    const [electricService, waterService] = await Promise.all([
+      Service.findOne({ name: { $regex: /^(điện|dien)$/i } }).lean(),
+      Service.findOne({ name: { $regex: /^(nước|nuoc)$/i } }).lean(),
+    ]);
+
+    const results = { electric: null, water: null, hasPeriodicInvoice };
+
+    if (electricService?._id) {
+      const latestElectric = await MeterReading.findOne({ roomId, utilityId: electricService._id })
+        .sort({ readingDate: -1, createdAt: -1 }).lean();
+      if (latestElectric) results.electric = { newIndex: latestElectric.newIndex, readingDate: latestElectric.readingDate };
+    }
+
+    if (waterService?._id) {
+      const latestWater = await MeterReading.findOne({ roomId, utilityId: waterService._id })
+        .sort({ readingDate: -1, createdAt: -1 }).lean();
+      if (latestWater) results.water = { newIndex: latestWater.newIndex, readingDate: latestWater.readingDate };
+    }
+
+    return results;
   }
 
   /**

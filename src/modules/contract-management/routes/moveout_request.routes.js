@@ -40,6 +40,10 @@ router.get("/:moveOutRequestId", authenticate, moveOutRequestController.getMoveO
 router.post("/:moveOutRequestId/release-invoice", authenticate, moveOutRequestController.releaseFinalInvoice);
 router.put("/:moveOutRequestId/release-invoice", authenticate, moveOutRequestController.releaseFinalInvoice);
 
+// [MANAGER] Lấy chỉ số điện nước gần nhất + kiểm tra hóa đơn định kỳ tháng hiện tại
+// GET /api/move-outs/:moveOutRequestId/latest-meter
+router.get("/:moveOutRequestId/latest-meter", authenticate, moveOutRequestController.getLatestMeterReadingForMoveOut);
+
 // [STEP 3] Manager xác nhận hoàn tất trả phòng
 // PATCH/PUT /api/move-outs/:moveOutRequestId/complete
 // Body: { managerCompletionNotes }
