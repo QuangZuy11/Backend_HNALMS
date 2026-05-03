@@ -76,6 +76,12 @@ const contractLiquidationSchema = new Schema(
       ref: "MeterReading",
       default: [],
     },
+
+    status: {
+      type: String,
+      enum: ["pending_owner", "pending_accountant", "completed"],
+      default: "completed",
+    },
   },
   {
     timestamps: true,
