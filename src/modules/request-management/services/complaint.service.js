@@ -64,6 +64,12 @@ const getComplaintById = async (id) => {
       complaint.tenantId.fullname = userInfo?.fullname || null;
     }
 
+    // Lấy fullname của người phản hồi (quản lý) từ UserInfo
+    if (complaint && complaint.responseBy) {
+      const responderInfo = await UserInfo.findOne({ userId: complaint.responseBy._id }).select("fullname").lean();
+      complaint.responseBy.fullname = responderInfo?.fullname || null;
+    }
+
     return complaint;
   } catch (error) {
     throw new Error(`Error fetching complaint: ${error.message}`);
@@ -148,6 +154,25 @@ const getComplaintsList = async (filters = {}, page = 1, limit = 10) => {
       });
     }
 
+    // Lấy fullname của các quản lý phản hồi từ UserInfo
+    const responderIds = [
+      ...new Set(
+        complaints
+          .map((c) => c.responseBy?._id)
+          .filter(Boolean)
+          .map((id) => id.toString())
+      ),
+    ];
+    const fullnameByResponder = new Map();
+    if (responderIds.length > 0) {
+      const responderInfos = await UserInfo.find({ userId: { $in: responderIds } })
+        .select("userId fullname")
+        .lean();
+      responderInfos.forEach((ui) => {
+        if (ui.userId) fullnameByResponder.set(ui.userId.toString(), ui.fullname);
+      });
+    }
+
     complaints.forEach((c) => {
       if (c.tenantId?._id) {
         const tenantIdStr = c.tenantId._id.toString();
@@ -159,6 +184,11 @@ const getComplaintsList = async (filters = {}, page = 1, limit = 10) => {
         c.tenantId.fullname = fullname || null;
       } else {
         c.room = null;
+      }
+
+      // Gắn fullname của người phản hồi
+      if (c.responseBy?._id) {
+        c.responseBy.fullname = fullnameByResponder.get(c.responseBy._id.toString()) || null;
       }
     });
 
@@ -200,6 +230,12 @@ const updateComplaintRequest = async (id, data) => {
     if (complaint && complaint.tenantId) {
       const userInfo = await UserInfo.findOne({ userId: complaint.tenantId._id }).select("fullname").lean();
       complaint.tenantId.fullname = userInfo?.fullname || null;
+    }
+
+    // Lấy fullname của người phản hồi (quản lý) từ UserInfo
+    if (complaint && complaint.responseBy) {
+      const responderInfo = await UserInfo.findOne({ userId: complaint.responseBy._id }).select("fullname").lean();
+      complaint.responseBy.fullname = responderInfo?.fullname || null;
     }
 
     return complaint;
@@ -249,6 +285,12 @@ const updateComplaintStatus = async (id, status, response, responderId, managerN
     if (complaint && complaint.tenantId) {
       const userInfo = await UserInfo.findOne({ userId: complaint.tenantId._id }).select("fullname").lean();
       complaint.tenantId.fullname = userInfo?.fullname || null;
+    }
+
+    // Lấy fullname của người phản hồi (quản lý) từ UserInfo
+    if (complaint && complaint.responseBy) {
+      const responderInfo = await UserInfo.findOne({ userId: complaint.responseBy._id }).select("fullname").lean();
+      complaint.responseBy.fullname = responderInfo?.fullname || null;
     }
 
     return complaint;
