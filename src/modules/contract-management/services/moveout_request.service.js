@@ -1490,7 +1490,7 @@ class MoveOutRequestService {
       completionContent += `\n\nPhiếu chi đã được tạo. Kế toán sẽ liên hệ chi tiền.`;
     } else if (isDepositForfeited && prepaidAmt > 0) {
       // Case 2: chỉ hoàn tiền phòng trả trước
-      completionContent += `\n\n💰 Tiền phòng trả trước được hoàn: ${prepaidAmt.toLocaleString('vi-VN')} VND (${prepaidMths} tháng).`;
+      completionContent += `\n\nTiền phòng trả trước được hoàn: ${prepaidAmt.toLocaleString('vi-VN')} VND (${prepaidMths} tháng).`;
       completionContent += `\n\nPhiếu chi đã được tạo. Kế toán sẽ liên hệ chi tiền.`;
     } else if (isDepositForfeited) {
       // Case 3: không hoàn gì
@@ -1524,7 +1524,7 @@ class MoveOutRequestService {
           if (prepaidAmt > 0) refundDetails += `<li>Tiền phòng trả trước dư (${prepaidMths} tháng): <strong>${prepaidAmt.toLocaleString("vi-VN")} VND</strong></li>`;
           refundSection = `
             <div style="background:#f0fdf4;border-left:4px solid #22c55e;border-radius:6px;padding:14px 18px;margin:18px 0;">
-              <div style="color:#15803d;font-weight:700;font-size:1.05rem;margin-bottom:8px;">💰 Thông tin hoàn tiền</div>
+              <div style="color:#15803d;font-weight:700;font-size:1.05rem;margin-bottom:8px;">Thông tin hoàn tiền</div>
               <ul style="margin:0;padding-left:18px;color:#166534;">
                 ${refundDetails}
                 <li>Tổng hoàn: <strong>${totalRefund.toLocaleString("vi-VN")} VND</strong></li>
@@ -1534,14 +1534,14 @@ class MoveOutRequestService {
         } else if (isDepositForfeited && prepaidAmt > 0) {
           refundSection = `
             <div style="background:#f0fdf4;border-left:4px solid #22c55e;border-radius:6px;padding:14px 18px;margin:18px 0;">
-              <div style="color:#15803d;font-weight:700;font-size:1.05rem;margin-bottom:8px;">💰 Hoàn tiền phòng trả trước</div>
+              <div style="color:#15803d;font-weight:700;font-size:1.05rem;margin-bottom:8px;">Hoàn tiền phòng trả trước</div>
               <p style="margin:0;color:#166534;">Tiền phòng trả trước dư (<strong>${prepaidMths} tháng</strong>): <strong>${prepaidAmt.toLocaleString("vi-VN")} VND</strong></p>
               <div style="margin-top:10px;color:#166534;font-size:0.95rem;">Kế toán sẽ liên hệ để chi tiền hoàn về cho bạn.</div>
             </div>`;
         } else {
           refundSection = `
             <div style="background:#fff7ed;border-left:4px solid #f97316;border-radius:6px;padding:14px 18px;margin:18px 0;">
-              <div style="color:#9a3412;font-weight:700;font-size:1.05rem;">⚠️ Tiền cọc không được hoàn do không đủ điều kiện.</div>
+              <div style="color:#9a3412;font-weight:700;font-size:1.05rem;">Tiền cọc không được hoàn do không đủ điều kiện.</div>
             </div>`;
         }
 
@@ -1561,7 +1561,7 @@ class MoveOutRequestService {
             <div style="max-width:540px;margin:32px auto;background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.07);overflow:hidden;">
               <div style="background:linear-gradient(90deg,#1e3a8a 0%,#fbbf24 100%);color:#fff;padding:28px 0 18px 0;text-align:center;">
                 <h1 style="margin:0;font-size:1.9rem;letter-spacing:1px;">Hoàng Nam Building</h1>
-                <div style="font-size:1.05rem;margin-top:6px;">✅ Xác nhận hoàn tất trả phòng</div>
+                <div style="font-size:1.05rem;margin-top:6px;">Xác nhận hoàn tất trả phòng</div>
               </div>
               <div style="padding:32px 28px 24px 28px;">
                 <div style="font-size:1.1rem;color:#1e293b;margin-bottom:14px;">Xin chào <strong>${tenantName}</strong>,</div>
@@ -1583,12 +1583,12 @@ class MoveOutRequestService {
           </html>`;
 
         await sendEmail(tenantEmail, "Hoàn tất trả phòng - Hoàng Nam Building", emailHtml);
-        console.log(`[MOVEOUT] ✅ Đã gửi email hoàn tất trả phòng đến: ${tenantEmail}`);
+        console.log(`[MOVEOUT]  Đã gửi email hoàn tất trả phòng đến: ${tenantEmail}`);
       } else {
-        console.warn(`[MOVEOUT] ⚠️ Không tìm thấy email của tenant ${moveOutRequest.tenantId}, bỏ qua gửi email`);
+        console.warn(`[MOVEOUT] Không tìm thấy email của tenant ${moveOutRequest.tenantId}, bỏ qua gửi email`);
       }
     } catch (emailErr) {
-      console.error("[MOVEOUT] ❌ Gửi email hoàn tất trả phòng thất bại:", emailErr.message);
+      console.error("[MOVEOUT] Gửi email hoàn tất trả phòng thất bại:", emailErr.message);
     }
 
     return moveOutRequest;
@@ -1623,7 +1623,7 @@ class MoveOutRequestService {
         ? userIdRaw.toString()
         : String(userIdRaw);
 
-      console.log(`[MOVEOUT] 🔍 result.tenantId._id =`, userIdStr, `| type = ${typeof userIdRaw}`);
+      console.log(`[MOVEOUT]  result.tenantId._id =`, userIdStr, `| type = ${typeof userIdRaw}`);
 
       // Chuyển sang ObjectId nếu cần
       const userIdQuery = (userIdRaw && typeof userIdRaw === 'object')
@@ -1667,7 +1667,7 @@ class MoveOutRequestService {
     const req = await MoveOutRequest.findById(reqRef._id)
       .populate('finalInvoiceId', 'invoiceCode totalAmount status dueDate');
 
-    console.log(`[MOVEOUT] ✅ Tìm thấy: ${req._id}`);
+    console.log(`[MOVEOUT]  Tìm thấy: ${req._id}`);
     return req;
   }
 
