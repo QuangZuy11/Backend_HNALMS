@@ -1575,7 +1575,7 @@ class MoveOutRequestService {
             <div style="max-width:540px;margin:32px auto;background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.07);overflow:hidden;">
               <div style="background:linear-gradient(90deg,#1e3a8a 0%,#fbbf24 100%);color:#fff;padding:28px 0 18px 0;text-align:center;">
                 <h1 style="margin:0;font-size:1.9rem;letter-spacing:1px;">Hoàng Nam Building</h1>
-                <div style="font-size:1.05rem;margin-top:6px;">✅ Xác nhận hoàn tất trả phòng</div>
+                <div style="font-size:1.05rem;margin-top:6px;">Xác nhận hoàn tất trả phòng</div>
               </div>
               <div style="padding:32px 28px 24px 28px;">
                 <div style="font-size:1.1rem;color:#1e293b;margin-bottom:14px;">Xin chào <strong>${tenantName}</strong>,</div>

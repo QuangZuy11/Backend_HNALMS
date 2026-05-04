@@ -501,9 +501,7 @@ async function confirmContractRenewal(contractId, tenantId, extensionMonths) {
         if (conflictStart.getTime() > myCurrentEnd.getTime()) {
             // Hợp đồng này bắt đầu sau endDate hiện tại → gia hạn thêm sẽ gây trùng lặp
             throw new Error(
-                `Không thể gia hạn thêm ${months} tháng vì sẽ trùng với hợp đồng ${
-                    futureConflict.contractCode || "kế tiếp"
-                } bắt đầu ngày ${formatDate(futureConflict.startDate)}. Chỉ được gia hạn tối đa đến trước ngày đó.`
+                `Không thể gia hạn thêm ${months} tháng vì sẽ trùng với hợp đồng trong tương lai. Chỉ được gia hạn tối đa đến trước ngày bắt đầu của hợp đồng trong tương lai.`
             );
         }
     }

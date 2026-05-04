@@ -217,7 +217,7 @@ EMAIL_TEMPLATES.LIQUIDATION_SETTLEMENT = {
           <div class="notice">
             <strong>⚠️ Lưu ý:</strong><br/>
             ${isRefund
-        ? "Số tiền hoàn lại sẽ được Ban quản lý liên hệ và chuyển khoản trong vòng <strong>3 ngày làm việc</strong>."
+        ? "Bạn vui lòng gặp Kế Toán hoặc Quản Lý của Tòa Nhà để nhận số tiền hoàn lại"
         : "Vui lòng thanh toán số tiền còn nợ trong vòng <strong>3 ngày</strong> kể từ ngày thanh lý."
       }
           </div>
