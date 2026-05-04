@@ -212,7 +212,7 @@ exports.createContract = async (req, res) => {
 
     // Xem có nhận được userInfoId cắm cờ "khách cũ" không (từ booking online đã được xác minh)
     const directUserInfoId = req.body.userInfoId || req.body.tenantInfo?.userInfoId;
-    
+
     let existingUserInfoByCCCD = null;
     let existingUserInfoByPhone = null;
     let existingUserInfoByEmail = null;
@@ -329,16 +329,16 @@ exports.createContract = async (req, res) => {
     let existingAccountReused = false; // flag để frontend hiển thị thông báo đặc biệt
     if (allThreeMatch) {
       let existingUser = await User.findById(existingUserInfoByCCCD.userId).session(session);
-      
+
       // FALLBACK BẠO LỰC: Lỡ database cũ lưu userId sai hoặc bị xoá, rà quét lại User theo email / username / phone cũ
       if (!existingUser) {
-         console.log(`[CREATE CONTRACT] WARNING: User ID ${existingUserInfoByCCCD.userId} not found! Aggressively searching for existing user fallback...`);
-         existingUser = await User.findOne({
-            $or: [
-              { email: existingUserInfoByEmail.email },
-              { phoneNumber: existingUserInfoByPhone.phone }
-            ]
-         }).session(session);
+        console.log(`[CREATE CONTRACT] WARNING: User ID ${existingUserInfoByCCCD.userId} not found! Aggressively searching for existing user fallback...`);
+        existingUser = await User.findOne({
+          $or: [
+            { email: existingUserInfoByEmail.email },
+            { phoneNumber: existingUserInfoByPhone.phone }
+          ]
+        }).session(session);
       }
 
       if (existingUser && existingUser.status === "active") {
@@ -647,7 +647,7 @@ exports.createContract = async (req, res) => {
       prepaidFrom.setHours(12, 0, 0, 0);
 
       const isFirstDay = prepaidFrom.getDate() === 1;
-      
+
       let actualPrepaidFrom = new Date(prepaidFrom);
       if (!isFirstDay) {
         // Bắt đầu từ ngày 1 của tháng tiếp theo
@@ -821,12 +821,36 @@ exports.getAllContracts = async (req, res) => {
         populate: { path: "roomTypeId", select: "typeName currentPrice" },
       })
       .populate("tenantId", "username email phoneNumber")
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
+
+    // Collect all unique tenant IDs
+    const tenantIds = [...new Set(contracts.map(c => c.tenantId?._id).filter(id => id))];
+    
+    // Find all UserInfo for these tenants
+    const userInfos = await UserInfo.find({ userId: { $in: tenantIds } }).lean();
+    
+    // Create a map for quick lookup
+    const userInfoMap = {};
+    userInfos.forEach(info => {
+      userInfoMap[info.userId.toString()] = info;
+    });
+
+    // Attach fullName to each contract's tenantId
+    const formattedContracts = contracts.map(contract => {
+      if (contract.tenantId && contract.tenantId._id) {
+        const info = userInfoMap[contract.tenantId._id.toString()];
+        if (info && info.fullname) {
+          contract.tenantId.fullName = info.fullname;
+        }
+      }
+      return contract;
+    });
 
     res.status(200).json({
       success: true,
-      count: contracts.length,
-      data: contracts,
+      count: formattedContracts.length,
+      data: formattedContracts,
     });
   } catch (error) {
     console.error("Get All Contracts Error:", error);
@@ -890,8 +914,8 @@ exports.getContractById = async (req, res) => {
     // Thông tin Bên B: nếu không còn User/UserInfo, lấy từ phiếu cọc (đã nhập lúc đặt cọc)
     let depositSnapshot =
       contractData.depositId &&
-      typeof contractData.depositId === "object" &&
-      contractData.depositId.name
+        typeof contractData.depositId === "object" &&
+        contractData.depositId.name
         ? contractData.depositId
         : null;
     if (!depositSnapshot && rawIds.depositId) {
