@@ -132,7 +132,7 @@ exports.getAllRooms = async (filters) => {
     status: "active",
     roomId: { $in: roomIds },
   })
-    .select("roomId startDate endDate renewalStatus isActivated")
+    .select("_id roomId startDate endDate renewalStatus isActivated")
     .sort({ startDate: -1 }) // ưu tiên HĐ mới nhất (startDate gần nhất)
     .lean();
 
@@ -155,6 +155,7 @@ exports.getAllRooms = async (filters) => {
       // Nếu thời hạn kết thúc xa nhất vẫn <= 1 tháng → phòng sắp trống
       if (c.endDate <= oneMonthFromNow) {
         expiryMap[roomKey] = {
+          contractId: c._id,
           startDate: c.startDate,
           endDate: c.endDate,
           renewalStatus: c.renewalStatus,
@@ -162,6 +163,7 @@ exports.getAllRooms = async (filters) => {
       } else {
         // Có hợp đồng kéo dài hơn 1 tháng (VD: đã ký HĐ mới chờ vào ở hoặc HĐ dài hạn)
         activeContractMap[roomKey] = {
+          contractId: c._id,
           startDate: c.startDate,
           endDate: c.endDate,
           renewalStatus: c.renewalStatus,
@@ -178,7 +180,7 @@ exports.getAllRooms = async (filters) => {
     startDate: { $gt: now },
     roomId: { $in: roomIds },
   })
-    .select("roomId startDate endDate depositId status")
+    .select("_id roomId startDate endDate depositId status")
     .lean()
     .sort({ startDate: 1 });
 
@@ -186,6 +188,7 @@ exports.getAllRooms = async (filters) => {
   const futureContractMap = {};
   futureContracts.forEach((c) => {
     futureContractMap[c.roomId.toString()] = {
+      contractId: c._id,
       startDate: c.startDate,
       endDate: c.endDate,
       depositId: c.depositId?.toString(),
@@ -331,6 +334,7 @@ exports.getAllRooms = async (filters) => {
     if (expiryInfo) {
       // Expiring soon: attach startDate + endDate + renewalStatus
       // startDate cho phép FE hiển thị dải ngày đầy đủ "DD/MM/YY–DD/MM/YY"
+      obj.activeContractId = expiryInfo.contractId;
       obj.contractStartDate = expiryInfo.startDate;
       obj.contractEndDate = expiryInfo.endDate;
       obj.contractRenewalStatus = expiryInfo.renewalStatus || null;
@@ -338,6 +342,7 @@ exports.getAllRooms = async (filters) => {
       const active = activeContractMap[roomKey];
       if (active) {
         // Long-term: attach both dates + renewalStatus
+        obj.activeContractId = active.contractId;
         obj.contractStartDate = active.startDate;
         obj.contractEndDate = active.endDate;
         obj.contractRenewalStatus = active.renewalStatus || null;
@@ -359,6 +364,7 @@ exports.getAllRooms = async (filters) => {
           } else {
             obj.contractStartDate = future.startDate;
             obj.contractEndDate = future.endDate;
+            obj.activeContractId = future.contractId;
           }
         }
       }

@@ -2,6 +2,8 @@ const FinancialTicket = require("../models/financial_tickets");
 const RepairRequest = require("../../request-management/models/repair_requests.model");
 const Contract = require("../../contract-management/models/contract.model");
 const Room = require("../../room-floor-management/models/room.model");
+const ContractLiquidation = require("../../contract-management/models/contract_liquidation.model");
+const Deposit = require("../../contract-management/models/deposit.model");
 
 const buildTodayVoucherPrefix = () => {
   const now = new Date();
@@ -319,6 +321,50 @@ const updatePaymentTicketStatus = async (req, res) => {
       updateQuery,
       { new: true }
     ).lean();
+
+    // ── Xử lý cập nhật ContractLiquidation nếu phiếu chi này thuộc về quá trình thanh lý hợp đồng ──
+    const liquidation = await ContractLiquidation.findOne({ invoiceId: id });
+    if (liquidation) {
+      if (status === "Approved") {
+        liquidation.status = "pending_accountant";
+        await liquidation.save();
+      } else if (status === "Paid") {
+        liquidation.status = "completed";
+        await liquidation.save();
+
+        // Thực hiện chấm dứt hợp đồng và giải phóng phòng (dời từ lúc tạo thanh lý sang đây)
+        const contract = await Contract.findById(liquidation.contractId);
+        if (contract) {
+          contract.status = "terminated";
+          await contract.save();
+
+          if (contract.depositId && liquidation.liquidationType === "force_majeure") {
+            const deposit = await Deposit.findById(contract.depositId._id || contract.depositId);
+            if (deposit && deposit.status !== "Refunded") {
+              deposit.status = "Refunded";
+              deposit.refundDate = new Date();
+              await deposit.save();
+            }
+          }
+
+          const room = await Room.findById(contract.roomId);
+          if (room) {
+            const allRoomContracts = await Contract.find({ roomId: room._id }).select("_id");
+            const boundContractIds = new Set(allRoomContracts.map((c) => c._id.toString()));
+
+            const floatingDeposits = await Deposit.find({ room: room._id, status: "Held" });
+            const hasFloatingDeposit = floatingDeposits.some((d) => {
+              if (!d.contractId) return true;
+              if (!boundContractIds.has(d.contractId.toString())) return true;
+              return false;
+            });
+
+            room.status = hasFloatingDeposit ? "Deposited" : "Available";
+            await room.save();
+          }
+        }
+      }
+    }
 
     return res.status(200).json({
       success: true,

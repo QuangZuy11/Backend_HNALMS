@@ -62,7 +62,7 @@ const EMAIL_TEMPLATES = {
     `
   },
   NEW_CONTRACT_ACCOUNT: {
-    subject: "Thông tin tài khoản - Hợp đồng thuê nhà mới",
+    subject: "Thông tin tài khoản - Hợp đồng thuê căn hộ khép kín mới",
     getHtml: (fullname, username, password, roomName) => `
       <!DOCTYPE html>
       <html>
@@ -235,7 +235,7 @@ EMAIL_TEMPLATES.LIQUIDATION_SETTLEMENT = {
 
 // Template xác nhận hợp đồng (giống form hợp đồng pdf)
 EMAIL_TEMPLATES.ONLINE_BOOKING_CONTRACT = {
-  subject: "Xác nhận & Hợp đồng thuê nhà điện tử - HNALMS",
+  subject: "Xác nhận & Hợp đồng thuê căn hộ khép kín điện tử - HNALMS",
   getHtml: (tenantName, tenantIdCard, roomName, duration, priceStr, startDateStr, endDateStr, prepayMonths, depositAmount) => `
     <!DOCTYPE html>
     <html>
@@ -257,7 +257,7 @@ EMAIL_TEMPLATES.ONLINE_BOOKING_CONTRACT = {
           <h3 style="margin:0; text-decoration: underline;">Độc lập - Tự do - Hạnh phúc</h3>
         </div>
         
-        <div align="center" class="title">HỢP ĐỒNG THUÊ NHÀ</div>
+        <div align="center" class="title">HỢP ĐỒNG THUÊ CĂN HỘ KHÉP KÍN</div>
         
         <div class="section">
           <p>Hôm nay, hai bên chúng tôi gồm:</p>

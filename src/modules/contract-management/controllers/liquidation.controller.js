@@ -134,46 +134,14 @@ exports.createLiquidation = async (req, res) => {
     let rentDebtAmount = null;
     let totalSettlement = 0;
 
-    // Lấy số tiền cọc từ linked deposit
     const isDepositRefunded = contract.depositId && contract.depositId.status === "Refunded";
-    const depositAmount = contract.depositId
-      ? toNumber(contract.depositId.amount)
-      : 0;
+    const depositAmount = contract.depositId ? toNumber(contract.depositId.amount) : 0;
+
+    const preflightData = await calculatePreflightDataForLiquidation(contractId, liqDate);
 
     if (liquidationType === "force_majeure") {
-      // Hoàn tiền cọc (Nếu đã hoàn rồi thì trả 0)
       depositRefundAmount = isDepositRefunded ? 0 : depositAmount;
-
-      // ── Tính tiền thuê còn dư dựa trên ngày khách đã trả trước (rentPaidUntil) ──
-      let remainingDays = 0;
-      let remainingRentLabel = "";
-
-      if (contract.rentPaidUntil) {
-        const rpUntil = new Date(contract.rentPaidUntil);
-        rpUntil.setHours(12, 0, 0, 0);
-        if (rpUntil > liqDate) {
-          remainingDays = Math.round((rpUntil - liqDate) / msPerDay);
-          remainingRentLabel = `${remainingDays} ngày (đã trả trước đến ${rpUntil.toLocaleDateString("vi-VN")})`;
-        } else {
-          remainingRentLabel = `0 ngày (đã quá hạn trả trước: ${rpUntil.toLocaleDateString("vi-VN")})`;
-        }
-      } else if (contract.endDate) {
-        // Fallback: nếu chưa ghi nhận hóa đơn trả trước, dùng endDate làm mốc tối đa
-        const endDateObj = new Date(contract.endDate);
-        endDateObj.setHours(12, 0, 0, 0);
-        if (endDateObj > liqDate) {
-          remainingDays = Math.round((endDateObj - liqDate) / msPerDay);
-          remainingRentLabel = `${remainingDays} ngày (đến ${endDateObj.toLocaleDateString("vi-VN")})`;
-        } else {
-          remainingRentLabel = "0 ngày (hợp đồng đã hết hạn)";
-        }
-      } else {
-        remainingRentLabel = "0 ngày";
-      }
-
-      remainingRentAmount = Math.round((roomPrice / 30) * remainingDays);
-
-      // Tổng hoàn lại = tiền cọc + tiền thuê còn dư - tiền điện nước đã dùng
+      remainingRentAmount = preflightData.totalRentRefund;
       totalSettlement = depositRefundAmount + remainingRentAmount - utilityCost;
 
       // ── 6a. Invoice items cho force_majeure ──
