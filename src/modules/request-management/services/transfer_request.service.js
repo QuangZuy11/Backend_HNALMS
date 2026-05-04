@@ -209,6 +209,8 @@ const getAvailableRoomsForTransfer = async (tenantId) => {
   }
   const contract = activeContracts[0];
 
+
+
   // Lấy danh sách phòng Available (loại trừ phòng hiện tại)
   const rooms = await Room.find({
     status: "Available",
@@ -287,6 +289,13 @@ const createTransferRequest = async (tenantId, body) => {
         message: "Phòng hiện tại (roomId) không thuộc hợp đồng có hiệu lực của bạn (hoặc hợp đồng đã kết thúc).",
       };
     }
+  }
+
+  if (contract.status === "inactive") {
+    throw {
+      status: 400,
+      message: "Hợp đồng của phòng này chưa có hiệu lực (đang chờ ngày bắt đầu). Không thể yêu cầu chuyển phòng.",
+    };
   }
 
   // 2. Kiểm tra phòng này chưa có yêu cầu chuyển phòng đang chờ xử lý
