@@ -14,7 +14,7 @@ const UserInfo = require("../../authentication/models/userInfor.model");
  */
 const createComplaintRequest = async (data) => {
   try {
-    const { tenantId, content, category } = data;
+    const { tenantId, content, category, roomId } = data;
 
     // Validate input
     if (!tenantId || !content || !category) {
@@ -25,14 +25,16 @@ const createComplaintRequest = async (data) => {
       tenantId,
       content,
       category,
+      roomId: roomId || null,
       status: "Pending"
     });
 
     const savedComplaint = await complaint.save();
-    
+
     const populated = await savedComplaint.populate([
       { path: "tenantId", select: "username email phoneNumber" },
-      { path: "responseBy", select: "username email role" }
+      { path: "responseBy", select: "username email role" },
+      { path: "roomId", select: "name roomCode" }
     ]);
 
     // Lấy fullname từ UserInfo
@@ -40,7 +42,7 @@ const createComplaintRequest = async (data) => {
     if (userInfo && populated.tenantId) {
       populated.tenantId.fullname = userInfo.fullname;
     }
-    
+
     return populated;
   } catch (error) {
     throw new Error(`Error creating complaint: ${error.message}`);
@@ -57,6 +59,7 @@ const getComplaintById = async (id) => {
     const complaint = await ComplaintRequest.findById(id)
       .populate("tenantId", "username email phoneNumber")
       .populate("responseBy", "username email role")
+      .populate("roomId", "name roomCode")
       .lean();
 
     if (complaint && complaint.tenantId) {
@@ -100,12 +103,13 @@ const getComplaintsList = async (filters = {}, page = 1, limit = 10) => {
     const complaints = await ComplaintRequest.find(query)
       .populate("tenantId", "username email phoneNumber")
       .populate("responseBy", "username email role")
+      .populate("roomId", "name roomCode")
       .sort({ createdDate: -1 })
       .skip(skip)
       .limit(limit)
       .lean();
 
-    // Gắn thông tin phòng (room) dựa theo hợp đồng đang active của tenant
+    // Không cần lookup room từ contract nữa vì đã lưu roomId trực tiếp trên complaint
     const tenantIds = [
       ...new Set(
         complaints
@@ -176,14 +180,8 @@ const getComplaintsList = async (filters = {}, page = 1, limit = 10) => {
     complaints.forEach((c) => {
       if (c.tenantId?._id) {
         const tenantIdStr = c.tenantId._id.toString();
-        
-        const room = roomByTenant.get(tenantIdStr);
-        c.room = room || null;
-
         const fullname = fullnameByTenant.get(tenantIdStr);
         c.tenantId.fullname = fullname || null;
-      } else {
-        c.room = null;
       }
 
       // Gắn fullname của người phản hồi
@@ -348,8 +346,8 @@ const getComplaintStatistics = async () => {
         done: doneCount
       },
       byCategory,
-      completionRate: totalComplaints > 0 
-        ? ((doneCount / totalComplaints) * 100).toFixed(2) 
+      completionRate: totalComplaints > 0
+        ? ((doneCount / totalComplaints) * 100).toFixed(2)
         : 0
     };
   } catch (error) {
@@ -374,7 +372,7 @@ const getComplaintsByCategory = async (category) => {
       const tenantIds = [...new Set(complaints.map(c => c.tenantId?._id).filter(Boolean))];
       const userInfos = await UserInfo.find({ userId: { $in: tenantIds } }).select("userId fullname").lean();
       const fullnameMap = new Map(userInfos.map(ui => [ui.userId.toString(), ui.fullname]));
-      
+
       complaints.forEach(c => {
         if (c.tenantId?._id) {
           c.tenantId.fullname = fullnameMap.get(c.tenantId._id.toString()) || null;

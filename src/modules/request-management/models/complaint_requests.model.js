@@ -8,6 +8,11 @@ const ComplaintRequestSchema = new Schema({
     required: true,
     index: true
   },
+  roomId: {
+    type: Schema.Types.ObjectId,
+    ref: "Room",
+    default: null
+  },
   content: {
     type: String,
     required: true
