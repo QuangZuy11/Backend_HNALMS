@@ -22,7 +22,7 @@ const validateCreateTransferRequest = (data) => {
     errors.push("targetRoomId không hợp lệ");
   }
 
-  // Validate transferDate
+  // Validate transferDate — phải trong khoảng [ngày mai, hôm nay + 7 ngày]
   if (!data.transferDate) {
     errors.push("Ngày chuyển phòng là bắt buộc (transferDate)");
   } else {
@@ -30,10 +30,17 @@ const validateCreateTransferRequest = (data) => {
     if (isNaN(transferDate.getTime())) {
       errors.push("Ngày chuyển phòng không hợp lệ");
     } else {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      if (transferDate < today) {
-        errors.push("Ngày chuyển phòng không được là ngày trong quá khứ");
+      const transferDateUTCStr = transferDate.toISOString().split('T')[0];
+      const tomorrowUTC = new Date();
+      tomorrowUTC.setUTCDate(tomorrowUTC.getUTCDate() + 1);
+      const tomorrowUTCStr = tomorrowUTC.toISOString().split('T')[0];
+      const maxDateUTC = new Date();
+      maxDateUTC.setUTCDate(maxDateUTC.getUTCDate() + 7);
+      const maxDateUTCStr = maxDateUTC.toISOString().split('T')[0];
+      if (transferDateUTCStr < tomorrowUTCStr) {
+        errors.push("Ngày chuyển phòng không được là hôm nay hoặc trong quá khứ");
+      } else if (transferDateUTCStr > maxDateUTCStr) {
+        errors.push("Ngày chuyển phòng không được vượt quá 7 ngày kể từ hôm nay");
       }
     }
   }
@@ -86,16 +93,23 @@ const validateUpdateTransferRequest = (data) => {
     }
   }
 
-  // Validate transferDate (optional)
+  // Validate transferDate (optional) — phải trong khoảng [ngày mai, hôm nay + 7 ngày]
   if (data.transferDate !== undefined) {
     const transferDate = new Date(data.transferDate);
     if (isNaN(transferDate.getTime())) {
       errors.push("Ngày chuyển phòng không hợp lệ");
     } else {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      if (transferDate < today) {
-        errors.push("Ngày chuyển phòng không được là ngày trong quá khứ");
+      const transferDateUTCStr = transferDate.toISOString().split('T')[0];
+      const tomorrowUTC = new Date();
+      tomorrowUTC.setUTCDate(tomorrowUTC.getUTCDate() + 1);
+      const tomorrowUTCStr = tomorrowUTC.toISOString().split('T')[0];
+      const maxDateUTC = new Date();
+      maxDateUTC.setUTCDate(maxDateUTC.getUTCDate() + 7);
+      const maxDateUTCStr = maxDateUTC.toISOString().split('T')[0];
+      if (transferDateUTCStr < tomorrowUTCStr) {
+        errors.push("Ngày chuyển phòng không được là hôm nay hoặc trong quá khứ");
+      } else if (transferDateUTCStr > maxDateUTCStr) {
+        errors.push("Ngày chuyển phòng không được vượt quá 7 ngày kể từ hôm nay");
       }
     }
   }

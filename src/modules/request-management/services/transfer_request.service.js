@@ -289,29 +289,32 @@ const createTransferRequest = async (tenantId, body) => {
     }
   }
 
-  // 2. Kiểm tra tenant không có yêu cầu chuyển phòng đang Pending
+  // 2. Kiểm tra phòng này chưa có yêu cầu chuyển phòng đang chờ xử lý
+  // Mỗi phòng chỉ được tồn tại 1 yêu cầu active (Pending / Approved / InvoiceReleased / Paid)
+  // → cho phép 1 tài khoản có nhiều phòng gửi yêu cầu độc lập cho từng phòng
+  const currentRoomIdForCheck = contract.roomId;
   const existingPending = await TransferRequest.findOne({
-    tenantId,
+    currentRoomId: currentRoomIdForCheck,
     status: "Pending",
   });
   if (existingPending) {
     throw {
       status: 400,
       message:
-        "Bạn đã có một yêu cầu chuyển phòng đang chờ duyệt. Vui lòng đợi kết quả trước khi tạo yêu cầu mới.",
+        "Phòng này đã có một yêu cầu chuyển phòng đang chờ duyệt. Vui lòng đợi kết quả trước khi tạo yêu cầu mới.",
     };
   }
 
-  // Kiểm tra không có yêu cầu đã Approved chưa Completed
+  // Kiểm tra không có yêu cầu đã Approved / InvoiceReleased / Paid chưa Completed cho phòng này
   const existingApproved = await TransferRequest.findOne({
-    tenantId,
-    status: "Approved",
+    currentRoomId: currentRoomIdForCheck,
+    status: { $in: ["Approved", "InvoiceReleased", "Paid"] },
   });
   if (existingApproved) {
     throw {
       status: 400,
       message:
-        "Bạn đã có yêu cầu chuyển phòng được duyệt đang chờ bàn giao. Vui lòng hoàn tất trước khi tạo yêu cầu mới.",
+        "Phòng này đã có yêu cầu chuyển phòng đang được xử lý (đã duyệt / chờ thanh toán). Vui lòng hoàn tất trước khi tạo yêu cầu mới.",
     };
   }
 
@@ -391,17 +394,26 @@ const createTransferRequest = async (tenantId, body) => {
     };
   }
 
-  // 7. Kiểm tra ngày chuyển phòng hợp lệ (Bắt buộc là ngày mai)
+  // 7. Kiểm tra ngày chuyển phòng hợp lệ (trong khoảng [ngày mai, hôm nay + 7 ngày])
   // Dùng UTC date string để tránh lệch ngày do timezone UTC+7
-  const transferDateUTCStr = new Date(transferDate).toISOString().split('T')[0]; // "2026-05-04"
+  const transferDateUTCStr = new Date(transferDate).toISOString().split('T')[0];
   const tomorrowUTC = new Date();
   tomorrowUTC.setUTCDate(tomorrowUTC.getUTCDate() + 1);
-  const tomorrowUTCStr = tomorrowUTC.toISOString().split('T')[0]; // "2026-05-04"
+  const tomorrowUTCStr = tomorrowUTC.toISOString().split('T')[0];
+  const maxDateUTC = new Date();
+  maxDateUTC.setUTCDate(maxDateUTC.getUTCDate() + 7);
+  const maxDateUTCStr = maxDateUTC.toISOString().split('T')[0];
 
-  if (transferDateUTCStr !== tomorrowUTCStr) {
+  if (transferDateUTCStr < tomorrowUTCStr) {
     throw {
       status: 400,
-      message: "Ngày chuyển phòng bắt buộc phải là ngày mai.",
+      message: "Ngày chuyển phòng không được là hôm nay hoặc trong quá khứ.",
+    };
+  }
+  if (transferDateUTCStr > maxDateUTCStr) {
+    throw {
+      status: 400,
+      message: "Ngày chuyển phòng không được vượt quá 7 ngày kể từ hôm nay.",
     };
   }
 
@@ -421,6 +433,10 @@ const createTransferRequest = async (tenantId, body) => {
   });
 
   await transferRequest.save();
+
+  // Đặt trạng thái phòng đích → Deposited để ngăn người khác đặt cọc / ký HĐ
+  await Room.findByIdAndUpdate(targetRoom._id, { status: "Deposited" });
+  console.log(`[TRANSFER] 🏠 Phòng đích (${targetRoom.name}) → Deposited (có yêu cầu chuyển phòng Pending)`);
 
   // Populate để trả về thông tin đầy đủ
   const populated = await TransferRequest.findById(transferRequest._id)
@@ -671,6 +687,11 @@ const rejectTransferRequest = async (requestId, rejectReason) => {
   request.status = "Rejected";
   request.rejectReason = rejectReason.trim();
   await request.save();
+
+  // Hoàn trả trạng thái phòng đích → Available
+  await Room.findByIdAndUpdate(request.targetRoomId, { status: "Available" });
+  console.log(`[TRANSFER] 🏠 Phòng đích → Available (yêu cầu bị từ chối)`);
+
   return request;
 };
 
@@ -691,6 +712,11 @@ const cancelTransferRequest = async (tenantId, requestId) => {
 
   request.status = "Cancelled";
   await request.save();
+
+  // Hoàn trả trạng thái phòng đích → Available
+  await Room.findByIdAndUpdate(request.targetRoomId, { status: "Available" });
+  console.log(`[TRANSFER] 🏠 Phòng đích → Available (yêu cầu bị hủy bởi cư dân)`);
+
   return request;
 };
 
@@ -1002,15 +1028,21 @@ const updateTransferRequest = async (requestId, tenantId, body) => {
   const newTargetRoomId = targetRoomId || request.targetRoomId.toString();
   const newTransferDate = transferDate ? new Date(transferDate) : request.transferDate;
 
-  // Validate ngày (Bắt buộc là ngày mai) - dùng UTC string tránh lệch timezone
+  // Validate ngày — phải trong khoảng [ngày mai, hôm nay + 7 ngày], dùng UTC string tránh lệch timezone
   if (transferDate) {
     const transferDateUTCStr = new Date(transferDate).toISOString().split('T')[0];
     const tomorrowUTC = new Date();
     tomorrowUTC.setUTCDate(tomorrowUTC.getUTCDate() + 1);
     const tomorrowUTCStr = tomorrowUTC.toISOString().split('T')[0];
+    const maxDateUTC = new Date();
+    maxDateUTC.setUTCDate(maxDateUTC.getUTCDate() + 7);
+    const maxDateUTCStr = maxDateUTC.toISOString().split('T')[0];
 
-    if (transferDateUTCStr !== tomorrowUTCStr) {
-      throw { status: 400, message: "Ngày chuyển phòng bắt buộc phải là ngày mai." };
+    if (transferDateUTCStr < tomorrowUTCStr) {
+      throw { status: 400, message: "Ngày chuyển phòng không được là hôm nay hoặc trong quá khứ." };
+    }
+    if (transferDateUTCStr > maxDateUTCStr) {
+      throw { status: 400, message: "Ngày chuyển phòng không được vượt quá 7 ngày kể từ hôm nay." };
     }
   }
 
@@ -1050,7 +1082,10 @@ const updateTransferRequest = async (requestId, tenantId, body) => {
       if (!targetRoom) {
         throw { status: 404, message: "Phòng muốn chuyển đến không tồn tại." };
       }
-      if (targetRoom.status !== "Available") {
+      // Cho phép giữ nguyên phòng Deposited nếu đó là phòng đích của chính request này.
+      // Nếu là phòng khác thì bắt buộc phải Available.
+      const isSameTargetRoom = request.targetRoomId.toString() === targetRoomId.toString();
+      if (!isSameTargetRoom && targetRoom.status !== "Available") {
         throw { status: 400, message: "Phòng muốn chuyển đến không ở trạng thái Trống (Available)." };
       }
       if (!targetRoom.isActive) {
@@ -1089,6 +1124,14 @@ const updateTransferRequest = async (requestId, tenantId, body) => {
           status: 400,
           message: `Số người hiện tại (${totalPeople}) vượt quá giới hạn phòng mới (tối đa ${personMax} người).`,
         };
+      }
+
+      // Đổi phòng đích: revert phòng cũ → Available, set phòng mới → Deposited
+      const oldTargetRoomId = request.targetRoomId;
+      if (oldTargetRoomId.toString() !== targetRoomId.toString()) {
+        await Room.findByIdAndUpdate(oldTargetRoomId, { status: "Available" });
+        await Room.findByIdAndUpdate(targetRoomId, { status: "Deposited" });
+        console.log(`[TRANSFER] 🔄 Đổi phòng đích: ${oldTargetRoomId} → Available | ${targetRoomId} → Deposited`);
       }
 
       request.targetRoomId = targetRoomId;
