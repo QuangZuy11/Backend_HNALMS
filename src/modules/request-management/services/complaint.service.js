@@ -177,11 +177,31 @@ const getComplaintsList = async (filters = {}, page = 1, limit = 10) => {
       });
     }
 
+    // Gắn thông tin phòng từ contract (ưu tiên roomId đã populate, fallback vào roomByTenant)
+    complaints.forEach((c) => {
+      if (c.roomId) {
+        roomByTenant.set(c.tenantId?._id?.toString() || '', {
+          _id: c.roomId._id,
+          name: c.roomId.name,
+          roomCode: c.roomId.roomCode,
+        });
+      }
+    });
+
     complaints.forEach((c) => {
       if (c.tenantId?._id) {
         const tenantIdStr = c.tenantId._id.toString();
         const fullname = fullnameByTenant.get(tenantIdStr);
         c.tenantId.fullname = fullname || null;
+      }
+
+      // Gắn thông tin phòng từ roomByTenant (nếu complaint.roomId null)
+      if (!c.roomId && c.tenantId?._id) {
+        const tenantIdStr = c.tenantId._id.toString();
+        const roomFromContract = roomByTenant.get(tenantIdStr);
+        if (roomFromContract) {
+          c.roomId = roomFromContract;
+        }
       }
 
       // Gắn fullname của người phản hồi
@@ -278,6 +298,7 @@ const updateComplaintStatus = async (id, status, response, responderId, managerN
     )
       .populate("tenantId", "username email phoneNumber")
       .populate("responseBy", "username email role")
+      .populate("roomId", "name roomCode")
       .lean();
 
     if (complaint && complaint.tenantId) {

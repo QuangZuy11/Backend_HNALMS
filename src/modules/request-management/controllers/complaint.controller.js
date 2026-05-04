@@ -13,7 +13,7 @@ const { successResponse, errorResponse } = require("../../../shared/utils/respon
  */
 exports.createComplaint = async (req, res) => {
   try {
-    const { content, category } = req.body;
+    const { content, category, roomId } = req.body;
     const tenantId = req.user?.userId;
 
     // Validate required fields
@@ -29,7 +29,8 @@ exports.createComplaint = async (req, res) => {
     const complaint = await complaintService.createComplaintRequest({
       tenantId,
       content,
-      category
+      category,
+      roomId: roomId || null
     });
 
     // Tạo thông báo hệ thống cho manager
