@@ -299,7 +299,7 @@ exports.updateBookingRequestStatus = async (req, res) => {
     if (status === "Rejected") {
       let tenantEmail = request.email;
       let tenantName = request.name;
-      
+
       if (!tenantEmail && request.userInfoId) {
         tenantEmail = request.userInfoId.email;
         tenantName = request.userInfoId.fullname || tenantName;
@@ -400,13 +400,13 @@ exports.sendPaymentInfo = async (req, res) => {
       // Cðp nhật lại thông tin tenant từ userInfo mới gán
       const freshUserInfo = await UserInfo.findById(updateData.userInfoId);
       if (freshUserInfo) {
-        tenantName    = freshUserInfo.fullname || tenantName;
-        tenantEmail   = freshUserInfo.email    || tenantEmail;
-        tenantPhone   = freshUserInfo.phone    || tenantPhone;
-        tenantIdCard  = freshUserInfo.cccd     || tenantIdCard;
-        tenantAddress = freshUserInfo.address  || tenantAddress;
-        tenantDob     = freshUserInfo.dob      || tenantDob;
-        tenantGender  = freshUserInfo.gender   || tenantGender;
+        tenantName = freshUserInfo.fullname || tenantName;
+        tenantEmail = freshUserInfo.email || tenantEmail;
+        tenantPhone = freshUserInfo.phone || tenantPhone;
+        tenantIdCard = freshUserInfo.cccd || tenantIdCard;
+        tenantAddress = freshUserInfo.address || tenantAddress;
+        tenantDob = freshUserInfo.dob || tenantDob;
+        tenantGender = freshUserInfo.gender || tenantGender;
       }
     }
 
@@ -490,7 +490,7 @@ exports.sendPaymentInfo = async (req, res) => {
       // Send cancellation email to each loser
       for (const cr of competingRequests) {
         let crEmail = cr.email;
-        let crName  = cr.name;
+        let crName = cr.name;
 
         // Nếu booking chỉ có userInfoId (không có email trực tiếp) → fetch từ UserInfo
         if (!crEmail && cr.userInfoId) {
@@ -498,7 +498,7 @@ exports.sendPaymentInfo = async (req, res) => {
             const crUserInfo = await UserInfo.findById(cr.userInfoId);
             if (crUserInfo) {
               crEmail = crUserInfo.email;
-              crName  = crUserInfo.fullname || crName;
+              crName = crUserInfo.fullname || crName;
             }
           } catch (_) { /* ignore */ }
         }
@@ -627,7 +627,7 @@ exports.sendPaymentInfo = async (req, res) => {
       <div style="font-family: 'Times New Roman', Times, serif; line-height: 1.6; color: #000; max-width: 800px; margin: auto; padding: 20px; border: 1px solid #ddd; font-size: 16px;">
         <h3 style="text-align: center; margin-bottom: 5px; text-transform: uppercase;">Cộng hòa xã hội chủ nghĩa Việt Nam</h3>
         <p style="text-align: center; margin-top: 0; text-decoration: underline; font-weight: bold;">Độc lập - Tự do - Hạnh phúc</p>
-        <h2 style="text-align: center; margin-top: 20px;">HỢP ĐỒNG THUÊ NHÀ</h2>
+        <h2 style="text-align: center; margin-top: 20px;">HỢP ĐỒNG THUÊ CĂN HỘ KHÉP KÍN</h2>
         <p style="text-align: center;">(Số: HĐ-${request.roomId?.name || ""}/...)</p>
         <br/>
         <p>Hôm nay, ngày ${dStr} tháng ${mStr} năm ${yStr}, tại địa chỉ quản lý tòa nhà.</p>
@@ -645,7 +645,7 @@ exports.sendPaymentInfo = async (req, res) => {
         <p><strong>Danh sách người ở cùng trong phòng (tối đa ${maxPersons} người/phòng):</strong></p>
         ${coResHtml}
         
-        <p style="margin-top: 20px;">Hai bên cùng thỏa thuận ký kết hợp đồng thuê nhà với các điều khoản sau:</p>
+        <p style="margin-top: 20px;">Hai bên cùng thỏa thuận ký kết hợp đồng thuê căn hộ khép kín với các điều khoản sau:</p>
         <p><strong>Điều 1: Bên A đồng ý cho Bên B thuê phòng số ${request.roomId?.name || ""}.</strong></p>
         <ul>
           <li>Thời hạn thuê: <strong>${request.duration}</strong> tháng, bắt đầu từ ngày <strong>${startStr}</strong> đến ngày <strong>${endStr}</strong>.</li>
@@ -834,7 +834,7 @@ exports.handleSepayWebhook = async (req, res) => {
     if (contractResponseStatus === 201 || contractResponseStatus === 200) {
       // Successfully converted → update BookingRequest status to Processed
       const contractId = contractResponseData?.data?.contract?._id;
-      await BookingRequest.findByIdAndUpdate(bookingRequest._id, { 
+      await BookingRequest.findByIdAndUpdate(bookingRequest._id, {
         status: "Processed",
         contractId: contractId || null
       });
@@ -1139,7 +1139,7 @@ async function _processBookingPayment(bookingRequest, transferAmount) {
   // Update status to Processed
   if (mockRes._status === 201 || mockRes._status === 200) {
     const contractId = mockRes._data?.data?.contract?._id;
-    await BookingRequest.findByIdAndUpdate(bookingRequest._id, { 
+    await BookingRequest.findByIdAndUpdate(bookingRequest._id, {
       status: "Processed",
       contractId: contractId || null
     });
@@ -1212,7 +1212,7 @@ async function _triggerCreateContract(bookingRequest) {
 
     if (contractResponseStatus === 201 || contractResponseStatus === 200) {
       const contractId = contractResponseData?.data?.contract?._id;
-      await BookingRequest.findByIdAndUpdate(bookingRequest._id, { 
+      await BookingRequest.findByIdAndUpdate(bookingRequest._id, {
         status: "Processed",
         contractId: contractId || null
       });
