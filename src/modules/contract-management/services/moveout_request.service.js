@@ -1439,28 +1439,14 @@ class MoveOutRequestService {
     // ============================================================
     //  🆕 XỬ LÝ ROOM STATUS SAU KHI TERMINATE HỢP ĐỒNG
     // ============================================================
-    // Nếu là gap contract → dùng logic gap (giữ Deposited/Occupied nếu còn primary)
-    // Nếu là primary contract (hoặc hợp đồng thường) → kiểm tra phòng có contract còn lại không
     await this._handleRoomStatusAfterGapMoveOut(contract);
 
-    // Sau khi gap handler chạy xong, kiểm tra thêm:
-    // Nếu trên phòng không còn bất kỳ contract nào active/inactive → set Available
     if (contract.roomId) {
-      const remainingActiveContracts = await Contract.countDocuments({
-        roomId: contract.roomId,
-        _id: { $ne: contract._id },
-        status: { $in: ['active', 'inactive'] },
-      });
-
-      if (remainingActiveContracts === 0) {
-        const room = await Room.findById(contract.roomId);
-        if (room && room.status !== 'Available') {
-          room.status = 'Available';
-          await room.save();
-          console.log(`[MOVEOUT] 🏠 Không còn hợp đồng nào trên phòng → Room ${room.name || room._id}: Available`);
-        }
-      } else {
-        console.log(`[MOVEOUT] ℹ️ Phòng vẫn còn ${remainingActiveContracts} hợp đồng active/inactive → giữ nguyên room status`);
+      const room = await Room.findById(contract.roomId);
+      if (room && room.status !== 'Available') {
+        room.status = 'Available';
+        await room.save();
+        console.log(`[MOVEOUT] 🏠 Trả phòng hoàn tất → Room ${room.name || room._id}: Available`);
       }
     }
     // ============================================================
