@@ -138,7 +138,39 @@ const calculatePreflightDataForLiquidation = async (contractId, liqDate) => {
   }
 
   const totalRentRefund = paidRentPeriods.reduce((sum, p) => sum + p.refundAmount, 0);
-  return { paidRentPeriods, totalRentRefund };
+
+  // ── Tính nợ tiền phòng (dành cho Vi phạm) ──
+  const startDt = new Date(contract.startDate);
+  startDt.setHours(12, 0, 0, 0);
+  const endDt = new Date(liqDate);
+  endDt.setHours(12, 0, 0, 0);
+  const roomPrice = contract.roomId?.roomTypeId?.currentPrice || 0;
+
+  let rentDebtDays = 0;
+  if (endDt >= startDt) {
+    for (let d = new Date(startDt); d <= endDt; d.setDate(d.getDate() + 1)) {
+      const ts = d.getTime();
+      let isPaid = false;
+      
+      for (const p of paidRentPeriods) {
+        const [fD, fM, fY] = p.fromStr.split("/");
+        const [tD, tM, tY] = p.toStr.split("/");
+        const fromDtLk = new Date(Number(fY), Number(fM)-1, Number(fD), 12, 0, 0, 0);
+        const toDtLk = new Date(Number(tY), Number(tM)-1, Number(tD), 12, 0, 0, 0);
+        
+        if (ts >= fromDtLk.getTime() && ts <= toDtLk.getTime()) {
+          isPaid = true;
+          break;
+        }
+      }
+      if (!isPaid) {
+        rentDebtDays++;
+      }
+    }
+  }
+  const rentDebtAmount = rentDebtDays * Math.round(roomPrice / 30);
+
+  return { paidRentPeriods, totalRentRefund, rentDebtDays, rentDebtAmount };
 };
 
 // ─────────────────────────────────────────────
@@ -236,9 +268,11 @@ exports.createLiquidation = async (req, res) => {
     const isDepositRefunded = contract.depositId && contract.depositId.status === "Refunded";
     const depositAmount = contract.depositId ? toNumber(contract.depositId.amount) : 0;
 
+    const preflight = await calculatePreflightDataForLiquidation(contractId, liqDate);
+
     if (liquidationType === "force_majeure") {
       depositRefundAmount = isDepositRefunded ? 0 : depositAmount;
-      const { paidRentPeriods, totalRentRefund } = await calculatePreflightDataForLiquidation(contractId, liqDate);
+      const { paidRentPeriods, totalRentRefund } = preflight;
       remainingRentAmount = totalRentRefund;
       const remainingDays = paidRentPeriods.reduce((sum, p) => sum + p.unusedDays, 0);
       const remainingRentLabel = remainingDays > 0
@@ -343,14 +377,16 @@ exports.createLiquidation = async (req, res) => {
 
     } else {
       // ── violation: tịch thu tiền cọc, thu tiền thuê nợ + tiền điện nước ──
-      rentDebtAmount = Math.round((roomPrice / 30) * daysUsed);
+      const { rentDebtDays, rentDebtAmount: computedRentDebtAmount } = preflight;
+      rentDebtAmount = computedRentDebtAmount;
+      
       // Tổng = tiền thuê còn nợ + tiền điện nước (CỘNG vào vì tenant phải trả)
       totalSettlement = rentDebtAmount + utilityCost;
 
       const invoiceItems = [
         {
-          itemName: `Tiền thuê còn nợ (${daysUsed} ngày trong tháng)`,
-          usage: daysUsed,
+          itemName: `Tiền thuê còn nợ (${rentDebtDays} ngày)`,
+          usage: rentDebtDays,
           unitPrice: Math.round(roomPrice / 30),
           amount: rentDebtAmount,
           isIndex: false,
@@ -458,9 +494,15 @@ exports.getLiquidationByContract = async (req, res) => {
   try {
     const { contractId } = req.params;
     const liquidation = await ContractLiquidation.findOne({ contractId })
-      .populate("contractId", "contractCode roomId tenantId startDate endDate")
-      .populate("invoiceId")
-      .populate("meterReadingIds");
+      .populate({
+        path: "contractId",
+        select: "contractCode roomId tenantId startDate endDate",
+        populate: [
+          { path: "roomId", select: "name roomCode" },
+          { path: "tenantId", select: "username email" },
+        ],
+      })
+      .populate({ path: "meterReadingIds", populate: { path: "utilityId", model: "Service", select: "name" } });
 
     if (!liquidation) {
       return res.status(404).json({
@@ -469,7 +511,29 @@ exports.getLiquidationByContract = async (req, res) => {
       });
     }
 
-    res.status(200).json({ success: true, data: liquidation });
+    // Populate invoiceId với đúng model FinancialTicket
+    if (liquidation.invoiceId) {
+      liquidation._doc.invoiceId = await FinancialTicket.findById(liquidation.invoiceId).lean();
+    }
+
+    // Populate tenant fullName từ UserInfo
+    if (liquidation.contractId?.tenantId) {
+      const tenantId = typeof liquidation.contractId.tenantId === "object"
+        ? liquidation.contractId.tenantId._id
+        : liquidation.contractId.tenantId;
+      console.log("[LIQUIDATION] tenantId:", tenantId);
+      const UserInfo = require("../../authentication/models/userInfor.model");
+      const userInfo = await UserInfo.findOne({ userId: tenantId }).select("fullname").lean();
+      console.log("[LIQUIDATION] userInfo:", userInfo);
+      if (userInfo) {
+        liquidation.contractId._doc.tenantId = {
+          ...(typeof liquidation.contractId.tenantId === "object" ? liquidation.contractId.tenantId : {}),
+          fullName: userInfo.fullname,
+        };
+      }
+    }
+
+    return res.status(200).json({ success: true, data: liquidation });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -489,13 +553,34 @@ exports.getLiquidationById = async (req, res) => {
           { path: "tenantId", select: "username email phoneNumber" },
         ],
       })
-      .populate("invoiceId")
-      .populate("meterReadingIds");
+      .populate({ path: "meterReadingIds", populate: { path: "utilityId", model: "Service", select: "name" } });
 
     if (!liquidation) {
       return res
         .status(404)
         .json({ success: false, message: "Không tìm thấy bản ghi thanh lý." });
+    }
+
+    // Populate invoiceId với đúng model FinancialTicket (schema ghi InvoicePeriodic là sai)
+    if (liquidation.invoiceId) {
+      liquidation._doc.invoiceId = await FinancialTicket.findById(liquidation.invoiceId).lean();
+    }
+
+    // Populate tenant fullName từ UserInfo
+    if (liquidation.contractId?.tenantId) {
+      const tenantId = typeof liquidation.contractId.tenantId === "object"
+        ? liquidation.contractId.tenantId._id
+        : liquidation.contractId.tenantId;
+      const UserInfo = require("../../authentication/models/userInfor.model");
+      const userInfo = await UserInfo.findOne({ userId: tenantId }).select("fullname").lean();
+      if (userInfo) {
+        liquidation._doc.contractId._doc.tenantId = {
+          ...(typeof liquidation.contractId.tenantId === "object"
+            ? liquidation.contractId.tenantId._doc || liquidation.contractId.tenantId.toObject()
+            : {}),
+          fullName: userInfo.fullname,
+        };
+      }
     }
 
     res.status(200).json({ success: true, data: liquidation });
@@ -636,12 +721,48 @@ exports.getAllLiquidations = async (req, res) => {
           { path: "tenantId", select: "username email" },
         ],
       })
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
+
+    // Populate invoiceId với đúng model FinancialTicket
+    const invoiceIds = liquidations
+      .filter((l) => l.invoiceId)
+      .map((l) => l.invoiceId);
+    const invoices = await FinancialTicket.find({ _id: { $in: invoiceIds } }).lean();
+    const invoiceMap = new Map(invoices.map((inv) => [inv._id.toString(), inv]));
+
+    // Populate tenant fullName từ UserInfo
+    const UserInfo = require("../../authentication/models/userInfor.model");
+    const allTenantIds = liquidations
+      .filter((l) => l.contractId?.tenantId)
+      .map((l) => typeof l.contractId.tenantId === "object" ? l.contractId.tenantId._id : l.contractId.tenantId);
+    const userInfos = await UserInfo.find({ userId: { $in: allTenantIds } }).select("userId fullname").lean();
+    const userInfoMap = new Map(userInfos.map((u) => [String(u.userId), u.fullname || ""]));
+
+    const data = liquidations.map((l) => {
+      const tenantId = l.contractId?.tenantId
+        ? (typeof l.contractId.tenantId === "object" ? l.contractId.tenantId._id : l.contractId.tenantId)
+        : null;
+      const fullName = tenantId ? userInfoMap.get(String(tenantId)) || null : null;
+
+      let tenantObj = l.contractId?.tenantId;
+      if (typeof tenantObj === "object" && tenantObj) {
+        tenantObj.fullName = fullName;
+      } else if (fullName) {
+        tenantObj = { _id: tenantId, fullName };
+      }
+
+      return {
+        ...l,
+        invoiceId: l.invoiceId ? invoiceMap.get(l.invoiceId.toString()) || null : null,
+        contractId: l.contractId ? { ...l.contractId, tenantId: tenantObj } : l.contractId,
+      };
+    });
 
     res.status(200).json({
       success: true,
-      count: liquidations.length,
-      data: liquidations,
+      count: data.length,
+      data,
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
