@@ -77,10 +77,29 @@ const contractLiquidationSchema = new Schema(
       default: [],
     },
 
+    // Trạng thái thanh lý: pending_owner → pending_accountant → completed
+    // Chỉ có ở trạng thái completed thì contract/room/deposit mới bị thay đổi
     status: {
       type: String,
       enum: ["pending_owner", "pending_accountant", "completed"],
-      default: "completed",
+      default: "pending_owner",
+    },
+
+    // Thời điểm chủ nhà duyệt thanh lý
+    ownerApprovedAt: {
+      type: Date,
+      default: null,
+    },
+    ownerApprovedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Users",
+      default: null,
+    },
+
+    // Thời điểm kế toán giải ngân / xác nhận thanh toán
+    accountantPaidAt: {
+      type: Date,
+      default: null,
     },
   },
   {

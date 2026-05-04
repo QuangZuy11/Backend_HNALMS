@@ -42,6 +42,105 @@ const getLatestIndex = async (roomId, utilityId) => {
   return latest ? { newIndex: latest.newIndex, reading: latest } : { newIndex: 0, reading: null };
 };
 
+/**
+ * Tính toán preflight data cho thanh lý (internal, không phải HTTP handler).
+ * Tương logic với getPreflightData nhưng trả về kết quả trực tiếp thay vì HTTP response.
+ */
+const calculatePreflightDataForLiquidation = async (contractId, liqDate) => {
+  const msPerDay = 1000 * 60 * 60 * 24;
+
+  const contract = await Contract.findById(contractId)
+    .populate({ path: "roomId", populate: { path: "roomTypeId", select: "currentPrice typeName" } })
+    .populate("depositId", "status amount refundDate forfeitedDate")
+    .lean();
+
+  if (!contract) throw new Error("Không tìm thấy hợp đồng.");
+
+  const paidInvoices = await InvoicePeriodic.find({ contractId, status: "Paid" })
+    .sort({ createdAt: 1 })
+    .lean();
+
+  const parseVNDate = (str) => {
+    const [d, m, y] = str.split("/").map(Number);
+    return new Date(y, m - 1, d, 12, 0, 0);
+  };
+
+  const parsePeriodFromText = (text) => {
+    const match = text.match(/từ (\d{2}\/\d{2}\/\d{4}) đến (\d{2}\/\d{2}\/\d{4})/i);
+    if (!match) return null;
+    return { from: parseVNDate(match[1]), to: parseVNDate(match[2]), fromStr: match[1], toStr: match[2] };
+  };
+
+  const paidRentPeriods = [];
+
+  for (const invoice of paidInvoices) {
+    for (const item of invoice.items) {
+      const nameLC = item.itemName.toLowerCase();
+      if (!nameLC.includes("tiền thuê") && !nameLC.includes("tiền phòng")) continue;
+      if (item.amount <= 0) continue;
+
+      let period = parsePeriodFromText(item.itemName);
+
+      if (!period &&
+         (invoice.invoiceCode?.includes("PREPAID") || invoice.title?.toLowerCase().includes("trả trước") || item.usage > 1)) {
+        const isFirstDay = new Date(contract.startDate).getDate() === 1;
+        let fromDt = new Date(contract.startDate);
+        fromDt.setHours(12, 0, 0, 0);
+
+        if (!isFirstDay) {
+          fromDt = new Date(fromDt.getFullYear(), fromDt.getMonth() + 1, 1);
+          fromDt.setHours(12, 0, 0, 0);
+        }
+
+        const toDt = new Date(fromDt.getFullYear(), fromDt.getMonth() + (item.usage >= 1 ? item.usage : 1), 0);
+        toDt.setHours(12, 0, 0, 0);
+
+        const fmt = (d) => `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
+
+        period = { from: fromDt, to: toDt, fromStr: fmt(fromDt), toStr: fmt(toDt) };
+      }
+
+      if (!period) {
+        const fromDt = new Date(invoice.dueDate || invoice.createdAt);
+        fromDt.setHours(12, 0, 0, 0);
+        const toDt = new Date(fromDt);
+        toDt.setMonth(toDt.getMonth() + 1);
+        toDt.setDate(toDt.getDate() - 1);
+        toDt.setHours(12, 0, 0, 0);
+
+        const fmt = (d) => `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
+
+        period = { from: fromDt, to: toDt, fromStr: fmt(fromDt), toStr: fmt(toDt) };
+      }
+
+      const { from, to, fromStr, toStr } = period;
+      const totalDays = Math.round((to - from) / msPerDay) + 1;
+      const dailyRate = totalDays > 0 ? item.amount / totalDays : 0;
+
+      let usedDays = 0;
+      let unusedDays = 0;
+
+      if (liqDate >= to) {
+        usedDays = totalDays;
+        unusedDays = 0;
+      } else if (liqDate < from) {
+        usedDays = 0;
+        unusedDays = totalDays;
+      } else {
+        usedDays = Math.round((liqDate - from) / msPerDay) + 1;
+        unusedDays = totalDays - usedDays;
+      }
+
+      const refundAmount = Math.round(dailyRate * unusedDays);
+
+      paidRentPeriods.push({ fromStr, toStr, totalDays, usedDays, unusedDays, refundAmount });
+    }
+  }
+
+  const totalRentRefund = paidRentPeriods.reduce((sum, p) => sum + p.refundAmount, 0);
+  return { paidRentPeriods, totalRentRefund };
+};
+
 // ─────────────────────────────────────────────
 // POST /liquidations/create
 // ─────────────────────────────────────────────
@@ -137,11 +236,14 @@ exports.createLiquidation = async (req, res) => {
     const isDepositRefunded = contract.depositId && contract.depositId.status === "Refunded";
     const depositAmount = contract.depositId ? toNumber(contract.depositId.amount) : 0;
 
-    const preflightData = await calculatePreflightDataForLiquidation(contractId, liqDate);
-
     if (liquidationType === "force_majeure") {
       depositRefundAmount = isDepositRefunded ? 0 : depositAmount;
-      remainingRentAmount = preflightData.totalRentRefund;
+      const { paidRentPeriods, totalRentRefund } = await calculatePreflightDataForLiquidation(contractId, liqDate);
+      remainingRentAmount = totalRentRefund;
+      const remainingDays = paidRentPeriods.reduce((sum, p) => sum + p.unusedDays, 0);
+      const remainingRentLabel = remainingDays > 0
+        ? `${remainingDays} ngày chưa dùng`
+        : "Không có ngày chưa dùng";
       totalSettlement = depositRefundAmount + remainingRentAmount - utilityCost;
 
       // ── 6a. Invoice items cho force_majeure ──
@@ -191,11 +293,12 @@ exports.createLiquidation = async (req, res) => {
         items: invoiceItems,
         totalAmount: totalSettlement,
         amount: Math.abs(totalSettlement),
-        status: "Unpaid",
+        status: "Pending",
         dueDate: new Date(liqDate.getTime() + 3 * 24 * 60 * 60 * 1000),
       });
       await settlement.save({ session });
 
+      // KHÔNG cập nhật contract/room/deposit ở đây — chờ chủ nhà duyệt
       const liquidation = new ContractLiquidation({
         contractId: contract._id,
         liquidationType,
@@ -208,48 +311,14 @@ exports.createLiquidation = async (req, res) => {
         totalSettlement,
         invoiceId: settlement._id,
         meterReadingIds: [mrElectric._id, mrWater._id],
+        status: "pending_owner", // Bước 1: chờ chủ nhà duyệt
       });
       await liquidation.save({ session });
-
-      // Cập nhật các bảng liên quan
-      contract.status = "terminated";
-      await contract.save({ session });
-
-      if (contract.depositId) {
-        const deposit = await Deposit.findById(contract.depositId._id || contract.depositId).session(session);
-        if (deposit) {
-          deposit.status = "Refunded";
-          deposit.refundDate = liqDate;
-          await deposit.save({ session });
-        }
-      }
-
-      // ── Kiểm tra floating deposit trước khi set trạng thái phòng ──
-      // Nếu phòng đang có cọc lẻ (chưa bind contract) → giữ là Deposited
-      const allRoomContracts = await Contract.find({
-        roomId: room._id,
-      }).select("_id").session(session);
-      const boundContractIds = new Set(allRoomContracts.map((c) => c._id.toString()));
-
-      const floatingDeposits = await Deposit.find({
-        room: room._id,
-        status: "Held",
-      }).session(session);
-
-      const hasFloatingDeposit = floatingDeposits.some((d) => {
-        if (!d.contractId) return true; // chưa bind contract nào → floating
-        if (!boundContractIds.has(d.contractId.toString())) return true; // bind contract đã bị thanh lý/xóa
-        return false;
-      });
-
-      room.status = hasFloatingDeposit ? "Deposited" : "Available";
-      await room.save({ session });
-      // Removed: await User.findByIdAndUpdate(contract.tenantId._id || contract.tenantId, { status: "inactive" }, { session });
 
       await session.commitTransaction();
       session.endSession();
 
-      // Email
+      // Email thông báo đã tạo yêu cầu thanh lý
       try {
         const tenantEmail = contract.tenantId?.email;
         if (tenantEmail && EMAIL_TEMPLATES.LIQUIDATION_SETTLEMENT) {
@@ -268,7 +337,7 @@ exports.createLiquidation = async (req, res) => {
 
       return res.status(201).json({
         success: true,
-        message: "Thanh lý hợp đồng (Bất khả kháng) thành công.",
+        message: "Đã tạo yêu cầu thanh lý. Chờ chủ nhà duyệt.",
         data: { liquidation, invoice: settlement, totalSettlement, meterReadings: [mrElectric, mrWater] },
       });
 
@@ -324,11 +393,12 @@ exports.createLiquidation = async (req, res) => {
         items: invoiceItems,
         totalAmount: totalSettlement,
         amount: Math.abs(totalSettlement),
-        status: "Unpaid",
+        status: "Pending",
         dueDate: new Date(liqDate.getTime() + 3 * 24 * 60 * 60 * 1000),
       });
       await settlement.save({ session });
 
+      // KHÔNG cập nhật contract/room/deposit ở đây — chờ chủ nhà duyệt
       const liquidation = new ContractLiquidation({
         contractId: contract._id,
         liquidationType,
@@ -341,42 +411,9 @@ exports.createLiquidation = async (req, res) => {
         totalSettlement,
         invoiceId: settlement._id,
         meterReadingIds: [mrElectric._id, mrWater._id],
+        status: "pending_owner", // Bước 1: chờ chủ nhà duyệt
       });
       await liquidation.save({ session });
-
-      contract.status = "terminated";
-      await contract.save({ session });
-
-      if (contract.depositId) {
-        const deposit = await Deposit.findById(contract.depositId._id || contract.depositId).session(session);
-        if (deposit) {
-          deposit.status = "Forfeited";
-          deposit.forfeitedDate = liqDate;
-          await deposit.save({ session });
-        }
-      }
-
-      // ── Kiểm tra floating deposit trước khi set trạng thái phòng ──
-      // Nếu phòng đang có cọc lẻ (chưa bind contract) → giữ là Deposited
-      const allRoomContracts = await Contract.find({
-        roomId: room._id,
-      }).select("_id").session(session);
-      const boundContractIds = new Set(allRoomContracts.map((c) => c._id.toString()));
-
-      const floatingDeposits = await Deposit.find({
-        room: room._id,
-        status: "Held",
-      }).session(session);
-
-      const hasFloatingDeposit = floatingDeposits.some((d) => {
-        if (!d.contractId) return true;
-        if (!boundContractIds.has(d.contractId.toString())) return true;
-        return false;
-      });
-
-      room.status = hasFloatingDeposit ? "Deposited" : "Available";
-      await room.save({ session });
-      // Removed: await User.findByIdAndUpdate(contract.tenantId._id || contract.tenantId, { status: "inactive" }, { session });
 
       await session.commitTransaction();
       session.endSession();
@@ -399,7 +436,7 @@ exports.createLiquidation = async (req, res) => {
 
       return res.status(201).json({
         success: true,
-        message: "Thanh lý hợp đồng (Vi phạm) thành công.",
+        message: "Đã tạo yêu cầu thanh lý. Chờ chủ nhà duyệt.",
         data: { liquidation, invoice: settlement, totalSettlement, meterReadings: [mrElectric, mrWater] },
       });
     }
@@ -497,14 +534,15 @@ exports.restoreLiquidation = async (req, res) => {
       throw new Error("Không tìm thấy hợp đồng liên kết.");
     }
 
-    // Chỉ cho phép hoàn tác nếu hợp đồng đang ở trạng thái terminated
-    if (contract.status !== "terminated") {
+    // Chỉ cấm hoàn tác nếu đã hoàn tất (completed)
+    if (liquidation.status === "completed" && contract.status !== "terminated") {
       throw new Error(
         `Hợp đồng đang ở trạng thái "${contract.status}", không thể hoàn tác thanh lý.`
       );
     }
 
     const room = contract.roomId;
+    const wasCompleted = liquidation.status === "completed";
 
     // ── 1. Xóa FinancialTicket liên quan ──
     if (liquidation.invoiceId) {
@@ -516,31 +554,29 @@ exports.restoreLiquidation = async (req, res) => {
       await MeterReading.deleteMany({ _id: { $in: liquidation.meterReadingIds } }, { session });
     }
 
-    // ── 3. Khôi phục trạng thái hợp đồng → active ──
-    contract.status = "active";
-    await contract.save({ session });
+    // ── 3a. Nếu đã completed → cần khôi phục contract/room/deposit về trạng thái active ──
+    if (wasCompleted) {
+      contract.status = "active";
+      await contract.save({ session });
 
-    // ── 4. Khôi phục trạng thái phòng → Occupied ──
-    if (room) {
-      await Room.findByIdAndUpdate(room._id, { status: "Occupied" }, { session });
-    }
+      if (room) {
+        await Room.findByIdAndUpdate(room._id, { status: "Occupied" }, { session });
+      }
 
-    // ── 5. Khôi phục trạng thái đặt cọc ──
-    if (contract.depositId) {
-      const deposit = await Deposit.findById(contract.depositId._id || contract.depositId).session(session);
-      if (deposit) {
-        if (liquidation.liquidationType === "force_majeure") {
+      if (contract.depositId) {
+        const deposit = await Deposit.findById(contract.depositId._id || contract.depositId).session(session);
+        if (deposit) {
           deposit.status = "Held";
           deposit.refundDate = null;
-        } else {
-          deposit.status = "Held";
           deposit.forfeitedDate = null;
+          await deposit.save({ session });
         }
-        await deposit.save({ session });
       }
     }
+    // ── 3b. Nếu chưa completed (pending_owner / pending_accountant) → chỉ cần xóa liquidation ──
+    // Contract/room/deposit chưa bị thay đổi, không cần khôi phục
 
-    // ── 6. Xóa bản ghi liquidation ──
+    // ── 4. Xóa bản ghi liquidation ──
     await ContractLiquidation.findByIdAndDelete(id, { session });
 
     await session.commitTransaction();
@@ -583,6 +619,9 @@ exports.restoreLiquidation = async (req, res) => {
   }
 };
 
+// ─────────────────────────────────────────────
+// POST /liquidations/approve-owner/:id — Chủ nhà duyệt thanh lý
+// ─────────────────────────────────────────────
 // ─────────────────────────────────────────────
 // GET /liquidations — Lấy tất cả liquidations
 // ─────────────────────────────────────────────

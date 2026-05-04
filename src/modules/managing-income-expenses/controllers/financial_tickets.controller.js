@@ -129,7 +129,8 @@ const getPaymentTickets = async (req, res) => {
   try {
     const { from, to, keyword, roomSearch } = req.query || {};
 
-    const filter = {};
+    // Chỉ lấy các ticket có referenceId là RepairRequest (phiếu chi thường) HOẶC là contract liquidation
+    const filter = { referenceId: { $exists: true } };
 
     if (from || to) {
       filter.transactionDate = {};
@@ -147,12 +148,8 @@ const getPaymentTickets = async (req, res) => {
       filter.title = { $regex: keyword, $options: "i" };
     }
 
+    // Sử dụng conditional select để populate đúng model theo loại ticket
     let tickets = await FinancialTicket.find(filter)
-      .populate({
-        path: "referenceId",
-        model: RepairRequest,
-        select: "tenantId",
-      })
       .sort({ transactionDate: -1 })
       .lean();
 
@@ -161,24 +158,40 @@ const getPaymentTickets = async (req, res) => {
       const filteredTickets = [];
 
       for (const ticket of tickets) {
-        if (ticket.referenceId && ticket.referenceId.tenantId) {
-          // eslint-disable-next-line no-await-in-loop
-          const activeContract = await Contract.findOne({
-            tenantId: ticket.referenceId.tenantId,
+        if (!ticket.referenceId) continue;
+        let roomMatched = false;
+
+        const refId = typeof ticket.referenceId === "object" ? ticket.referenceId._id : ticket.referenceId;
+
+        // Thử tìm contract trực tiếp
+        const ContractModel = require("../../contract-management/models/contract.model");
+        let contract = await ContractModel.findById(refId)
+          .populate({ path: "roomId", select: "_id name roomCode", model: Room })
+          .lean();
+
+        if (contract && contract.roomId) {
+          const roomName = (contract.roomId.name || "").toLowerCase();
+          const roomCode = (contract.roomId.roomCode || "").toLowerCase();
+          if (roomName.includes(searchTerm) || roomCode.includes(searchTerm)) {
+            filteredTickets.push(ticket);
+            continue;
+          }
+        }
+
+        // Thử tìm qua RepairRequest → contract active
+        const RepairRequestModel = require("../../request-management/models/repair_requests.model");
+        const repair = await RepairRequestModel.findById(refId).select("tenantId").lean();
+        if (repair && repair.tenantId) {
+          const activeContract = await ContractModel.findOne({
+            tenantId: repair.tenantId,
             status: "active",
           })
-            .populate({
-              path: "roomId",
-              select: "_id name roomCode",
-              model: Room,
-            })
+            .populate({ path: "roomId", select: "_id name roomCode", model: Room })
             .lean();
 
           if (activeContract && activeContract.roomId) {
-            const room = activeContract.roomId;
-            const roomName = (room.name || "").toLowerCase();
-            const roomCode = (room.roomCode || "").toLowerCase();
-
+            const roomName = (activeContract.roomId.name || "").toLowerCase();
+            const roomCode = (activeContract.roomId.roomCode || "").toLowerCase();
             if (roomName.includes(searchTerm) || roomCode.includes(searchTerm)) {
               filteredTickets.push(ticket);
             }
@@ -189,35 +202,56 @@ const getPaymentTickets = async (req, res) => {
       tickets = filteredTickets;
     }
 
+    // Helper: lấy room info từ ticket
+    // referenceId có thể là Contract (_id) hoặc RepairRequest (có tenantId)
+    const getRoomFromTicket = async (ticket) => {
+      if (!ticket.referenceId) return null;
+
+      // referenceId là string (ObjectId) khi dùng lean()
+      const refId = typeof ticket.referenceId === "object" ? ticket.referenceId._id : ticket.referenceId;
+
+      // Thử populate referenceId với cả Contract và RepairRequest
+      const ContractModel = require("../../contract-management/models/contract.model");
+      let contract = await ContractModel.findById(refId)
+        .populate({ path: "roomId", select: "_id name roomCode", model: Room })
+        .lean();
+
+      // Nếu tìm được contract → đây là liquidation ticket
+      if (contract && contract.roomId) {
+        return {
+          _id: contract.roomId._id,
+          name: contract.roomId.name,
+          roomCode: contract.roomId.roomCode,
+        };
+      }
+
+      // Ngược lại → có thể là RepairRequest, tìm contract qua tenantId
+      const RepairRequestModel = require("../../request-management/models/repair_requests.model");
+      const repair = await RepairRequestModel.findById(refId).select("tenantId").lean();
+      if (repair && repair.tenantId) {
+        const activeContract = await ContractModel.findOne({
+          tenantId: repair.tenantId,
+          status: "active",
+        })
+          .populate({ path: "roomId", select: "_id name roomCode", model: Room })
+          .lean();
+
+        if (activeContract && activeContract.roomId) {
+          return {
+            _id: activeContract.roomId._id,
+            name: activeContract.roomId.name,
+            roomCode: activeContract.roomId.roomCode,
+          };
+        }
+      }
+
+      return null;
+    };
+
     const ticketsWithRoom = await Promise.all(
       tickets.map(async (ticket) => {
-        let roomInfo = null;
-
-        if (ticket.referenceId && ticket.referenceId.tenantId) {
-          const activeContract = await Contract.findOne({
-            tenantId: ticket.referenceId.tenantId,
-            status: "active",
-          })
-            .populate({
-              path: "roomId",
-              select: "_id name roomCode",
-              model: Room,
-            })
-            .lean();
-
-          if (activeContract && activeContract.roomId) {
-            roomInfo = {
-              _id: activeContract.roomId._id,
-              name: activeContract.roomId.name,
-              roomCode: activeContract.roomId.roomCode,
-            };
-          }
-        }
-
-        return {
-          ...ticket,
-          room: roomInfo,
-        };
+        const room = await getRoomFromTicket(ticket);
+        return { ...ticket, room };
       })
     );
 
@@ -322,27 +356,40 @@ const updatePaymentTicketStatus = async (req, res) => {
       { new: true }
     ).lean();
 
-    // ── Xử lý cập nhật ContractLiquidation nếu phiếu chi này thuộc về quá trình thanh lý hợp đồng ──
+    // ── Xử lý ContractLiquidation liên quan đến phiếu chi thanh lý ──
+    // Luồng: pending_owner (owner duyệt) → pending_accountant (accountant giải ngân) → completed
     const liquidation = await ContractLiquidation.findOne({ invoiceId: id });
     if (liquidation) {
       if (status === "Approved") {
+        // Owner duyệt → chuyển sang chờ kế toán giải ngân
         liquidation.status = "pending_accountant";
+        liquidation.ownerApprovedAt = new Date();
+        liquidation.ownerApprovedBy = req.user?._id || null;
         await liquidation.save();
       } else if (status === "Paid") {
+        // Accountant giải ngân → hoàn tất thanh lý
         liquidation.status = "completed";
+        liquidation.accountantPaidAt = new Date();
         await liquidation.save();
 
-        // Thực hiện chấm dứt hợp đồng và giải phóng phòng (dời từ lúc tạo thanh lý sang đây)
+        // Thực hiện chấm dứt hợp đồng và cập nhật phòng/cọc
         const contract = await Contract.findById(liquidation.contractId);
         if (contract) {
           contract.status = "terminated";
           await contract.save();
 
-          if (contract.depositId && liquidation.liquidationType === "force_majeure") {
-            const deposit = await Deposit.findById(contract.depositId._id || contract.depositId);
-            if (deposit && deposit.status !== "Refunded") {
-              deposit.status = "Refunded";
-              deposit.refundDate = new Date();
+          if (contract.depositId) {
+            const deposit = await Deposit.findById(
+              contract.depositId._id || contract.depositId
+            );
+            if (deposit) {
+              if (liquidation.liquidationType === "force_majeure") {
+                deposit.status = "Refunded";
+                deposit.refundDate = new Date();
+              } else {
+                deposit.status = "Forfeited";
+                deposit.forfeitedDate = new Date();
+              }
               await deposit.save();
             }
           }
@@ -363,6 +410,8 @@ const updatePaymentTicketStatus = async (req, res) => {
             await room.save();
           }
         }
+      } else if (status === "Rejected") {
+        // Owner từ chối → liquidation vẫn giữ pending_owner, không làm gì thêm
       }
     }
 
