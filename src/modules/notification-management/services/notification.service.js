@@ -633,7 +633,7 @@ class NotificationService {
 
             if (invoiceType === 'periodic') {
                 title = `[QUÁ HẠN] Hóa Đơn Định Kỳ ${invoiceCode}`;
-                content = `⚠️ CẢNH BÁO: Hóa đơn định kỳ đã quá hạn thanh toán!\n\n` +
+                content = `CẢNH BÁO: Hóa đơn định kỳ đã quá hạn thanh toán!\n\n` +
                     `Mã hóa đơn: ${invoiceCode}\n` +
                     `Tiêu đề: ${invoiceTitle}\n` +
                     `Số tiền: ${totalAmount} đ\n` +
@@ -644,9 +644,9 @@ class NotificationService {
             } else if (invoiceType === 'incurred') {
                 const typeLabel = invoiceData?.type === 'repair' ? 'Sửa Chữa'
                     : invoiceData?.type === 'violation' ? 'Vi Phạm'
-                    : invoiceData?.type === 'prepaid' ? 'Cọc' : 'Phát Sinh';
+                        : invoiceData?.type === 'prepaid' ? 'Cọc' : 'Phát Sinh';
                 title = `[QUÁ HẠN] Hóa Đơn ${typeLabel} ${invoiceCode}`;
-                content = `⚠️ CẢNH BÁO: Hóa đơn ${typeLabel.toLowerCase()} đã quá hạn thanh toán!\n\n` +
+                content = `CẢNH BÁO: Hóa đơn ${typeLabel.toLowerCase()} đã quá hạn thanh toán!\n\n` +
                     `Mã hóa đơn: ${invoiceCode}\n` +
                     `Tiêu đề: ${invoiceTitle}\n` +
                     `Số tiền: ${totalAmount} đ\n` +
