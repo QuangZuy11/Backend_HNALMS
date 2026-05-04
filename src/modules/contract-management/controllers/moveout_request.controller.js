@@ -309,6 +309,23 @@ class MoveOutRequestController {
     }
   }
 
+  // ============================================================
+  //  MANAGER – Lấy chỉ số điện nước gần nhất + kiểm tra HĐ định kỳ
+  // ============================================================
+  /**
+   * GET /api/move-outs/:moveOutRequestId/latest-meter
+   */
+  async getLatestMeterReadingForMoveOut(req, res) {
+    try {
+      const { moveOutRequestId } = req.params;
+      const data = await moveOutRequestService.getLatestMeterReadingForMoveOut(moveOutRequestId);
+      return res.status(200).json({ success: true, data });
+    } catch (error) {
+      console.error(`[MOVEOUT CTRL] ❌ Lỗi lấy chỉ số điện nước:`, error.message);
+      return res.status(400).json({ success: false, message: error.message });
+    }
+  }
+
 }
 
 module.exports = new MoveOutRequestController();

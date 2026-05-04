@@ -392,19 +392,21 @@ const createTransferRequest = async (tenantId, body) => {
   }
 
   // 7. Kiểm tra ngày chuyển phòng hợp lệ (Bắt buộc là ngày mai)
-  const transferDateObj = new Date(transferDate);
-  transferDateObj.setHours(0, 0, 0, 0);
+  // Dùng UTC date string để tránh lệch ngày do timezone UTC+7
+  const transferDateUTCStr = new Date(transferDate).toISOString().split('T')[0]; // "2026-05-04"
+  const tomorrowUTC = new Date();
+  tomorrowUTC.setUTCDate(tomorrowUTC.getUTCDate() + 1);
+  const tomorrowUTCStr = tomorrowUTC.toISOString().split('T')[0]; // "2026-05-04"
 
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  tomorrow.setHours(0, 0, 0, 0);
-
-  if (transferDateObj.getTime() !== tomorrow.getTime()) {
+  if (transferDateUTCStr !== tomorrowUTCStr) {
     throw {
       status: 400,
       message: "Ngày chuyển phòng bắt buộc phải là ngày mai.",
     };
   }
+
+  // Lưu transferDate dưới dạng midnight UTC của ngày đã chọn
+  const transferDateObj = new Date(`${transferDateUTCStr}T00:00:00.000Z`);
 
   // 8. Tạo yêu cầu
   const transferRequest = new TransferRequest({
@@ -453,14 +455,13 @@ const createTransferRequest = async (tenantId, body) => {
  */
 const _syncPendingTransferRequestsWithPaidInvoices = async () => {
   const pendingRequests = await TransferRequest.find({
-    status: "InvoiceReleased",
-    transferInvoiceId: { $ne: null }
+    status: "InvoiceReleased"
   })
     .populate('transferInvoiceId', 'status')
     .populate('prepaidInvoiceId', 'status');
 
   for (const req of pendingRequests) {
-    const serviceInvoicePaid = req.transferInvoiceId?.status === "Paid";
+    const serviceInvoicePaid = req.transferInvoiceId ? req.transferInvoiceId.status === "Paid" : true;
     // Nếu có hóa đơn đóng thêm thì phải Paid cả hai, nếu không có thì chỉ cần hóa đơn dịch vụ
     const prepaidInvoicePaid = req.prepaidInvoiceId
       ? req.prepaidInvoiceId.status === "Paid"
@@ -723,197 +724,153 @@ const releaseTransferInvoice = async (requestId, managerInvoiceNotes = "", elect
   const now = new Date();
   const month = now.getMonth() + 1;
   const year = now.getFullYear();
+
+  let finalInvoice = null;
+  const periodicInvoiceCode = `INV-${contract.contractCode}-${month}${year}`;
+  const periodicInvoice = await InvoicePeriodic.findOne({ invoiceCode: periodicInvoiceCode, contractId: contract._id });
+
   const dueDate = new Date(year, month, 5);
-  const invoiceCode = `INV-TR-${contract.contractCode}-${month}${year}`;
-  const invoiceTitle = `Hóa đơn điện, nước, dịch vụ tới ngày chuyển phòng tháng ${month}/${year}`;
 
-  const existingInvoice = await InvoicePeriodic.findOne({ invoiceCode, contractId: contract._id });
-  if (existingInvoice?.status === 'Paid') {
-    throw { status: 400, message: 'Hóa đơn đã được thanh toán, không thể cập nhật.' };
-  }
-
-  const invoiceItems = [];
-  let totalAmount = 0;
-
-  const startOfMonth = new Date(year, month - 1, 1);
-  const endOfMonth = new Date(year, month, 0, 23, 59, 59);
-  const METER_MAX = 99999;
-
-  const [electricService, waterService] = await Promise.all([
-    Service.findOne({ name: { $regex: /^(điện|dien)$/i } }),
-    Service.findOne({ name: { $regex: /^(nước|nuoc)$/i } }),
-  ]);
-  const electricServiceId = electricService?._id?.toString();
-  const waterServiceId = waterService?._id?.toString();
-
-  // Nhập chỉ số đồng hồ mới nếu có
-  if (parsedElectricIndex !== undefined || parsedWaterIndex !== undefined) {
-    const manualInputs = [
-      { type: 'electric', label: 'điện', inputIndex: parsedElectricIndex, utilityDoc: electricService },
-      { type: 'water', label: 'nước', inputIndex: parsedWaterIndex, utilityDoc: waterService },
-    ].filter(item => item.inputIndex !== undefined && item.utilityDoc?._id);
-
-    for (const manualInput of manualInputs) {
-      const latestUtilityReading = await MeterReading.findOne({ roomId: room._id, utilityId: manualInput.utilityDoc._id })
-        .sort({ readingDate: -1, createdAt: -1 }).populate('utilityId');
-
-      const previousIndex = Number(latestUtilityReading?.newIndex) || 0;
-      const finalNewIndex = Number(manualInput.inputIndex);
-
-      const TWO_MINUTES = 2 * 60 * 1000;
-      const isRecentReading = latestUtilityReading?.createdAt && (Date.now() - new Date(latestUtilityReading.createdAt).getTime()) < TWO_MINUTES;
-
-      if (isRecentReading) {
-        latestUtilityReading.newIndex = finalNewIndex;
-        latestUtilityReading.usageAmount = finalNewIndex - previousIndex;
-        await latestUtilityReading.save();
-        console.log(`[TRANSFER] 🔄 Sửa chỉ số ${manualInput.label}: ${previousIndex} → ${finalNewIndex}`);
-      } else {
-        const usage = finalNewIndex - previousIndex;
-        await MeterReading.create({
-          roomId: room._id,
-          utilityId: manualInput.utilityDoc._id,
-          oldIndex: previousIndex,
-          newIndex: finalNewIndex,
-          usageAmount: Math.max(0, usage),
-          readingDate: new Date()
-        });
-        console.log(`[TRANSFER] 📝 Ghi chỉ số ${manualInput.label} mới: ${previousIndex} → ${finalNewIndex}`);
-      }
-    }
-  }
-
-  // Tính tiền điện nước từ MeterReading
-  const recentReadingsForAll = await MeterReading.find({
-    roomId: room._id,
-    createdAt: { $gte: startOfMonth, $lte: endOfMonth }
-  }).sort({ createdAt: -1 }).populate('utilityId');
-
-  const allReadings = recentReadingsForAll.length > 0
-    ? recentReadingsForAll
-    : await MeterReading.find({ roomId: room._id }).sort({ createdAt: -1 }).limit(20).populate('utilityId');
-
-  const latestReadings = {};
-  allReadings.forEach((reading) => {
-    if (!reading.utilityId) return;
-    const uId = reading.utilityId._id.toString();
-    if (!latestReadings[uId]) {
-      latestReadings[uId] = { current: reading, previous: null, count: 1 };
-    } else if (latestReadings[uId].count === 1) {
-      latestReadings[uId].previous = reading;
-      latestReadings[uId].count = 2;
-    }
-  });
-
-  Object.values(latestReadings).forEach(({ current, previous }) => {
-    const newIndex = Number(current.newIndex) || 0;
-    let oldIndex, usage;
-
-    if (previous) {
-      oldIndex = Number(previous.newIndex) || 0;
-      usage = newIndex - oldIndex;
-      if (usage < 0) usage = (METER_MAX - oldIndex) + newIndex;
-    } else {
-      oldIndex = Number(current.oldIndex) || 0;
-      usage = newIndex - oldIndex;
-      if (usage < 0) usage = (METER_MAX - oldIndex) + newIndex;
-    }
-
-    if (usage <= 0) return;
-
-    let servicePrice = current.utilityId.currentPrice || current.utilityId.price || 0;
-    servicePrice = typeof servicePrice === 'object' && servicePrice.$numberDecimal ? parseFloat(servicePrice.$numberDecimal) : Number(servicePrice) || 0;
-
-    const amount = usage * servicePrice;
-    totalAmount += amount;
-    const serviceName = current.utilityId.name || current.utilityId.serviceName || "Dịch vụ";
-
-    invoiceItems.push({
-      itemName: `Tiền ${serviceName.toLowerCase()}`,
-      oldIndex,
-      newIndex,
-      usage,
-      unitPrice: servicePrice,
-      amount,
-      isIndex: true
-    });
-  });
-
-  // Tính tiền dịch vụ mở rộng từ BookService của phòng cũ
-  const contractBookServices = await BookService.find({ contractId: contract._id }).populate('services.serviceId');
-  const bookServiceItems = contractBookServices.flatMap(doc => Array.isArray(doc.services) ? doc.services : []);
-
-  let bookServiceCount = 0;
-  if (bookServiceItems.length > 0) {
-    const transferDay = new Date(request.transferDate || now);
-    transferDay.setHours(23, 59, 59, 999);
-
-    bookServiceItems.forEach((srvItem) => {
-      if (!srvItem?.serviceId) return;
-
-      const startDate = srvItem.startDate ? new Date(srvItem.startDate) : null;
-      const endDateRaw = srvItem.endDate ? new Date(srvItem.endDate) : null;
-
-      // Bỏ qua dịch vụ chưa bắt đầu tính đến ngày chuyển phòng
-      if (startDate) {
-        startDate.setHours(0, 0, 0, 0);
-        if (startDate > transferDay) return;
-      }
-      // Bỏ qua dịch vụ đã kết thúc trước đầu tháng (giống invoice_periodic)
-      if (endDateRaw && endDateRaw < startOfMonth) return;
-
-      const srvItemName = srvItem.serviceId.name || srvItem.serviceId.serviceName || "Dịch vụ";
-      const srvItemId = srvItem.serviceId._id?.toString();
-      // Bỏ qua điện/nước (đã tính qua MeterReading)
-      if (srvItemId === electricServiceId || srvItemId === waterServiceId) return;
-
-      // Kiểm tra thêm theo tên (dự phòng nếu ID không khớp)
-      const nameCheck = srvItemName.toLowerCase().trim();
-      if (nameCheck === 'điện' || nameCheck === 'dien' || nameCheck === 'nước' || nameCheck === 'nuoc') return;
-
-      let srvPrice = srvItem.serviceId.currentPrice || srvItem.serviceId.price || 0;
-      srvPrice = typeof srvPrice === 'object' && srvPrice.$numberDecimal
-        ? parseFloat(srvPrice.$numberDecimal)
-        : Number(srvPrice) || 0;
-      if (!Number.isFinite(srvPrice) || srvPrice < 0) return;
-
-      const finalQty = Number(srvItem.quantity) || 1;
-      if (!Number.isFinite(finalQty) || finalQty <= 0) return;
-
-      const amount = finalQty * srvPrice;
-      totalAmount += amount;
-      invoiceItems.push({
-        itemName: `Dịch vụ ${srvItemName}`,
-        oldIndex: 0,
-        newIndex: 0,
-        usage: finalQty,
-        unitPrice: srvPrice,
-        amount,
-        isIndex: false
-      });
-      bookServiceCount++;
-      console.log(`[TRANSFER] 📦 Dịch vụ: ${srvItemName} x${finalQty} × ${srvPrice.toLocaleString('vi-VN')} = ${amount.toLocaleString('vi-VN')} VND`);
-    });
-  }
-  console.log(`[TRANSFER] 📦 Đã thêm ${bookServiceCount} item dịch vụ từ BookService (tổng raw: ${bookServiceItems.length})`);
-
-  // Lưu hóa đơn dịch vụ
-  let finalInvoice;
-  if (existingInvoice) {
-    existingInvoice.title = invoiceTitle;
-    existingInvoice.items = invoiceItems;
-    existingInvoice.totalAmount = totalAmount;
-    existingInvoice.dueDate = dueDate;
-    existingInvoice.status = 'Unpaid';
-    await existingInvoice.save();
-    finalInvoice = existingInvoice;
+  if (periodicInvoice) {
+    finalInvoice = periodicInvoice;
+    console.log(`[TRANSFER] 📄 Sử dụng hóa đơn định kỳ đã có: ${finalInvoice.invoiceCode}, bỏ qua tạo HĐ chuyển phòng.`);
   } else {
-    finalInvoice = await InvoicePeriodic.create({
-      invoiceCode, contractId: contract._id, title: invoiceTitle,
-      items: invoiceItems, totalAmount, dueDate, status: 'Unpaid',
+    const invoiceCode = `INV-TR-${contract.contractCode}-${month}${year}`;
+    const invoiceTitle = `Hóa đơn điện, nước, dịch vụ tới ngày chuyển phòng tháng ${month}/${year}`;
+
+    const existingInvoice = await InvoicePeriodic.findOne({ invoiceCode, contractId: contract._id });
+    if (existingInvoice?.status === 'Paid') {
+      throw { status: 400, message: 'Hóa đơn đã được thanh toán, không thể cập nhật.' };
+    }
+
+    const invoiceItems = [];
+    let totalAmount = 0;
+
+    const startOfMonth = new Date(year, month - 1, 1);
+    const endOfMonth = new Date(year, month, 0, 23, 59, 59);
+    const METER_MAX = 99999;
+
+    const [electricService, waterService] = await Promise.all([
+      Service.findOne({ name: { $regex: /^(điện|dien)$/i } }),
+      Service.findOne({ name: { $regex: /^(nước|nuoc)$/i } }),
+    ]);
+    const electricServiceId = electricService?._id?.toString();
+    const waterServiceId = waterService?._id?.toString();
+
+    // Nhập chỉ số đồng hồ mới nếu có
+    if (parsedElectricIndex !== undefined || parsedWaterIndex !== undefined) {
+      const manualInputs = [
+        { type: 'electric', label: 'điện', inputIndex: parsedElectricIndex, utilityDoc: electricService },
+        { type: 'water', label: 'nước', inputIndex: parsedWaterIndex, utilityDoc: waterService },
+      ].filter(item => item.inputIndex !== undefined && item.utilityDoc?._id);
+
+      for (const manualInput of manualInputs) {
+        const latestUtilityReading = await MeterReading.findOne({ roomId: room._id, utilityId: manualInput.utilityDoc._id })
+          .sort({ readingDate: -1, createdAt: -1 }).populate('utilityId');
+
+        const previousIndex = Number(latestUtilityReading?.newIndex) || 0;
+        const finalNewIndex = Number(manualInput.inputIndex);
+
+        const TWO_MINUTES = 2 * 60 * 1000;
+        const isRecentReading = latestUtilityReading?.createdAt && (Date.now() - new Date(latestUtilityReading.createdAt).getTime()) < TWO_MINUTES;
+
+        if (isRecentReading) {
+          latestUtilityReading.newIndex = finalNewIndex;
+          latestUtilityReading.usageAmount = finalNewIndex - previousIndex;
+          await latestUtilityReading.save();
+          console.log(`[TRANSFER] 🔄 Sửa chỉ số ${manualInput.label}: ${previousIndex} → ${finalNewIndex}`);
+        } else {
+          const usage = finalNewIndex - previousIndex;
+          await MeterReading.create({
+            roomId: room._id,
+            utilityId: manualInput.utilityDoc._id,
+            oldIndex: previousIndex,
+            newIndex: finalNewIndex,
+            usageAmount: Math.max(0, usage),
+            readingDate: new Date()
+          });
+          console.log(`[TRANSFER] 📝 Ghi chỉ số ${manualInput.label} mới: ${previousIndex} → ${finalNewIndex}`);
+        }
+      }
+    }
+
+    // Tính tiền điện nước từ MeterReading
+    const recentReadingsForAll = await MeterReading.find({
+      roomId: room._id,
+      createdAt: { $gte: startOfMonth, $lte: endOfMonth }
+    }).sort({ createdAt: -1 }).populate('utilityId');
+
+    const allReadings = recentReadingsForAll.length > 0
+      ? recentReadingsForAll
+      : await MeterReading.find({ roomId: room._id }).sort({ createdAt: -1 }).limit(20).populate('utilityId');
+
+    const latestReadings = {};
+    allReadings.forEach((reading) => {
+      if (!reading.utilityId) return;
+      const uId = reading.utilityId._id.toString();
+      if (!latestReadings[uId]) {
+        latestReadings[uId] = { current: reading, previous: null, count: 1 };
+      } else if (latestReadings[uId].count === 1) {
+        latestReadings[uId].previous = reading;
+        latestReadings[uId].count = 2;
+      }
     });
+
+    Object.values(latestReadings).forEach(({ current, previous }) => {
+      const newIndex = Number(current.newIndex) || 0;
+      let oldIndex, usage;
+
+      if (previous) {
+        oldIndex = Number(previous.newIndex) || 0;
+        usage = newIndex - oldIndex;
+        if (usage < 0) usage = (METER_MAX - oldIndex) + newIndex;
+      } else {
+        oldIndex = Number(current.oldIndex) || 0;
+        usage = newIndex - oldIndex;
+        if (usage < 0) usage = (METER_MAX - oldIndex) + newIndex;
+      }
+
+      if (usage <= 0) return;
+
+      let servicePrice = current.utilityId.currentPrice || current.utilityId.price || 0;
+      servicePrice = typeof servicePrice === 'object' && servicePrice.$numberDecimal ? parseFloat(servicePrice.$numberDecimal) : Number(servicePrice) || 0;
+
+      const amount = usage * servicePrice;
+      totalAmount += amount;
+      const serviceName = current.utilityId.name || current.utilityId.serviceName || "Dịch vụ";
+
+      invoiceItems.push({
+        itemName: `Tiền ${serviceName.toLowerCase()}`,
+        oldIndex,
+        newIndex,
+        usage,
+        unitPrice: servicePrice,
+        amount,
+        isIndex: true
+      });
+    });
+
+    // Đã bỏ tính tiền dịch vụ mở rộng từ BookService (như rác, internet, xe máy...) 
+    // vì các dịch vụ này sẽ được mang sang hợp đồng mới và tính trọn gói 1 tháng trong hóa đơn định kỳ cuối tháng,
+    // tránh tình trạng thu 2 lần (double billing) gây thiệt thòi cho cư dân.
+
+    // Lưu hóa đơn dịch vụ
+    if (existingInvoice) {
+      existingInvoice.title = invoiceTitle;
+      existingInvoice.items = invoiceItems;
+      existingInvoice.totalAmount = totalAmount;
+      existingInvoice.dueDate = dueDate;
+      existingInvoice.status = 'Unpaid';
+      await existingInvoice.save();
+      finalInvoice = existingInvoice;
+    } else {
+      finalInvoice = await InvoicePeriodic.create({
+        invoiceCode, contractId: contract._id, title: invoiceTitle,
+        items: invoiceItems, totalAmount, dueDate, status: 'Unpaid',
+      });
+    }
+    console.log(`[TRANSFER] ✅ Hóa đơn dịch vụ: ${finalInvoice._id} | Tổng: ${totalAmount}`);
   }
-  console.log(`[TRANSFER] ✅ Hóa đơn dịch vụ: ${finalInvoice._id} | Tổng: ${totalAmount}`);
 
   // ─── TÍNH CHÊNH LỆCH TIỀN TRẢ TRƯỚC ────────────────────────────────────
   const targetRoomDoc = await Room.findById(request.targetRoomId).populate('roomTypeId', 'currentPrice typeName');
@@ -929,7 +886,9 @@ const releaseTransferInvoice = async (requestId, managerInvoiceNotes = "", elect
 
   // Cập nhật proration vào request
   request.proration = { oldRoomPrice, newRoomPrice, availableMonths, availableOldAmount, availableNewAmount, difference };
-  request.transferInvoiceId = finalInvoice._id;
+  if (finalInvoice) {
+    request.transferInvoiceId = finalInvoice._id;
+  }
   request.prorationNote = managerInvoiceNotes;
 
   let prepaidInvoice = null;
@@ -1005,7 +964,10 @@ const releaseTransferInvoice = async (requestId, managerInvoiceNotes = "", elect
     }
   }
 
-  request.status = "InvoiceReleased";
+  const isServicePaid = finalInvoice ? finalInvoice.status === 'Paid' : true;
+  const isPrepaidPaid = prepaidInvoice ? prepaidInvoice.status === 'Paid' : true;
+
+  request.status = (isServicePaid && isPrepaidPaid) ? "Paid" : "InvoiceReleased";
   await request.save();
 
   return { request, invoice: finalInvoice, prepaidInvoice, refundTicket, proration: request.proration };
@@ -1040,16 +1002,14 @@ const updateTransferRequest = async (requestId, tenantId, body) => {
   const newTargetRoomId = targetRoomId || request.targetRoomId.toString();
   const newTransferDate = transferDate ? new Date(transferDate) : request.transferDate;
 
-  // Validate ngày (Bắt buộc là ngày mai)
+  // Validate ngày (Bắt buộc là ngày mai) - dùng UTC string tránh lệch timezone
   if (transferDate) {
-    const transferDateObj = new Date(transferDate);
-    transferDateObj.setHours(0, 0, 0, 0);
+    const transferDateUTCStr = new Date(transferDate).toISOString().split('T')[0];
+    const tomorrowUTC = new Date();
+    tomorrowUTC.setUTCDate(tomorrowUTC.getUTCDate() + 1);
+    const tomorrowUTCStr = tomorrowUTC.toISOString().split('T')[0];
 
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    tomorrow.setHours(0, 0, 0, 0);
-
-    if (transferDateObj.getTime() !== tomorrow.getTime()) {
+    if (transferDateUTCStr !== tomorrowUTCStr) {
       throw { status: 400, message: "Ngày chuyển phòng bắt buộc phải là ngày mai." };
     }
   }
@@ -1265,17 +1225,16 @@ const completeTransferRequest = async (requestId) => {
       }
     }
 
-    // 2. Kiểm tra ngày hợp lệ (Cho phép hoàn tất từ ngày tạo yêu cầu trở đi)
-    const transferDate = new Date(request.transferDate);
-    const createdAtDate = new Date(request.createdAt);
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    createdAtDate.setHours(0, 0, 0, 0);
+    // 2. Kiểm tra ngày hợp lệ (Thực hiện khi transfer date đã tới)
+    // Dùng UTC date string để so sánh, tránh lệch ngày do timezone UTC+7
+    const todayUTCStr = new Date().toISOString().split('T')[0];       // "2026-05-03"
+    const transferUTCStr = new Date(request.transferDate).toISOString().split('T')[0]; // "2026-05-03"
 
-    if (today < createdAtDate) {
+    if (todayUTCStr < transferUTCStr) {
+      const [tYear, tMonth, tDay] = transferUTCStr.split('-');
       throw {
         status: 400,
-        message: `Chưa tới ngày hợp lệ để hoàn tất.`,
+        message: `Chưa tới ngày chuyển phòng (${tDay}/${tMonth}/${tYear}). Không thể bàn giao phòng sớm.`,
       };
     }
 
@@ -1310,8 +1269,12 @@ const completeTransferRequest = async (requestId) => {
     );
     console.log(`✅ Phòng mới (${newRoom.name}) → Occupied`);
 
+    // Lưu lại ngày kết thúc gốc của hợp đồng cũ trước khi ghi đè
+    const originalEndDate = new Date(oldContract.endDate);
+
     // 6. ĐÓNG HỢP ĐỒNG CŨ - Đặt endDate = ngày chuyển phòng - 1 (23h59p)
     oldContract.status = "terminated";
+    const transferDate = new Date(request.transferDate);
     const endDateForOldContract = new Date(transferDate.getTime() - 24 * 60 * 60 * 1000);
     endDateForOldContract.setHours(23, 59, 59, 999); // ✅ Đặt thời gian thành 23:59:59
     oldContract.endDate = endDateForOldContract; // ✅ Update ngày chuyển phòng - 1 vào endDate
@@ -1338,9 +1301,8 @@ const completeTransferRequest = async (requestId) => {
     const newContractCode = generateNewContractCode(newRoom.name);
     const newStartDate = new Date(request.transferDate);
 
-    // Tính ngày kết thúc mới dựa trên duration của hợp đồng cũ
-    const newEndDate = new Date(newStartDate);
-    newEndDate.setMonth(newEndDate.getMonth() + oldContract.duration);
+    // Hợp đồng mới kế thừa thời gian còn lại của hợp đồng cũ
+    const newEndDate = new Date(originalEndDate);
 
     const newContract = new Contract({
       contractCode: newContractCode,
@@ -1603,6 +1565,8 @@ const completeTransferRequest = async (requestId) => {
 
 /**
  * [MANAGER] Lấy chỉ số điện nước gần nhất của phòng trong yêu cầu chuyển phòng
+ * Đồng thời kiểm tra xem tháng hiện tại đã có hóa đơn định kỳ (invoice_periodic) chưa.
+ * Nếu đã có → hasPeriodicInvoice = true → frontend ẩn form nhập điện nước.
  * @param {string} requestId - ID yêu cầu chuyển phòng
  */
 const getLatestMeterReadingForTransfer = async (requestId) => {
@@ -1615,12 +1579,24 @@ const getLatestMeterReadingForTransfer = async (requestId) => {
   const roomId = contract.roomId;
   if (!roomId) throw { status: 404, message: "Hợp đồng không có thông tin phòng." };
 
+  // ── Kiểm tra hóa đơn định kỳ tháng hiện tại ────────────────────────────
+  const now = new Date();
+  const month = now.getMonth() + 1;
+  const year = now.getFullYear();
+  const periodicInvoiceCode = `INV-${contract.contractCode}-${month}${year}`;
+  const periodicInvoice = await InvoicePeriodic.findOne({
+    invoiceCode: periodicInvoiceCode,
+    contractId: contract._id,
+  }).lean();
+  const hasPeriodicInvoice = !!periodicInvoice;
+  // ────────────────────────────────────────────────────────────────────────
+
   const [electricService, waterService] = await Promise.all([
     Service.findOne({ name: { $regex: /^(điện|dien)$/i } }).lean(),
     Service.findOne({ name: { $regex: /^(nước|nuoc)$/i } }).lean(),
   ]);
 
-  const results = { electric: null, water: null };
+  const results = { electric: null, water: null, hasPeriodicInvoice };
 
   if (electricService?._id) {
     const latestElectric = await MeterReading.findOne({ roomId, utilityId: electricService._id })
