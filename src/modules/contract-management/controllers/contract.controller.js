@@ -643,20 +643,48 @@ exports.createContract = async (req, res) => {
         return `${dd}/${mm}/${yyyy}`;
       };
 
-      const prepaidFrom = new Date(contractDetails.startDate);
-      prepaidFrom.setHours(12, 0, 0, 0);
+      // Quy tắc: dựa vào startDate của hợp đồng
+      //   - startDate là mùng 1 → prepaid tính từ tháng đó (startDate's month)
+      //   - startDate là mùng 2 trở đi → prepaid tính từ ngày 1 của tháng tiếp theo
+      //
+      // Trường hợp đặc biệt - Hợp đồng 1 tháng:
+      //   - startDate mùng 1 (VD: 01/05, endDate 31/05) → prepaid từ 01/05 đến 31/05 (= endDate)
+      //   - startDate mùng 2+ (VD: 10/05, endDate 09/06) → prepaid = endDate (09/06), không phải cuối tháng 6
+      const startDateObj2 = new Date(contractDetails.startDate);
+      const isStartFirstDay = startDateObj2.getDate() === 1;
+      const contractDuration = Number(contractDetails.duration);
 
-      const isFirstDay = prepaidFrom.getDate() === 1;
+      // Tính endDate của hợp đồng
+      const contractEndDate = new Date(startDateObj2);
+      contractEndDate.setMonth(contractEndDate.getMonth() + contractDuration);
+      contractEndDate.setDate(contractEndDate.getDate() - 1);
+      contractEndDate.setHours(12, 0, 0, 0);
 
-      let actualPrepaidFrom = new Date(prepaidFrom);
-      if (!isFirstDay) {
-        // Bắt đầu từ ngày 1 của tháng tiếp theo
-        actualPrepaidFrom = new Date(prepaidFrom.getFullYear(), prepaidFrom.getMonth() + 1, 1);
-        actualPrepaidFrom.setHours(12, 0, 0, 0);
+      let actualPrepaidFrom;
+      if (isStartFirstDay) {
+        // startDate mùng 1: prepaid bắt đầu từ tháng của startDate
+        actualPrepaidFrom = new Date(startDateObj2.getFullYear(), startDateObj2.getMonth(), 1);
+      } else {
+        // startDate mùng 2+: prepaid bắt đầu từ ngày 1 tháng tiếp theo của startDate
+        actualPrepaidFrom = new Date(startDateObj2.getFullYear(), startDateObj2.getMonth() + 1, 1);
       }
+      actualPrepaidFrom.setHours(12, 0, 0, 0);
 
-      const prepaidTo = new Date(actualPrepaidFrom.getFullYear(), actualPrepaidFrom.getMonth() + prepayMonths, 0);
-      prepaidTo.setHours(12, 0, 0, 0);
+      // Trường hợp đặc biệt: hợp đồng 1 tháng VÀ startDate không phải mùng 1
+      // → rentPaidUntil = endDate của hợp đồng (không phải cuối tháng tiếp theo)
+      // Tương tự nếu prepayMonths >= duration → luôn dùng endDate hợp đồng
+      let prepaidTo;
+      const isSingleMonthNonFirst = contractDuration === 1 && !isStartFirstDay;
+      const isFullPayment = prepayMonths >= contractDuration;
+
+      if (isSingleMonthNonFirst || isFullPayment) {
+        // Dùng endDate hợp đồng làm mốc kết thúc trả trước
+        prepaidTo = new Date(contractEndDate);
+      } else {
+        // Trường hợp bình thường: cuối tháng thứ N kể từ actualPrepaidFrom
+        prepaidTo = new Date(actualPrepaidFrom.getFullYear(), actualPrepaidFrom.getMonth() + prepayMonths, 0);
+        prepaidTo.setHours(12, 0, 0, 0);
+      }
 
       const totalAmount = prepayMonths * roomPrice;
       const itemNameDesc = `Tiền thuê phòng trả trước ${prepayMonths} tháng (từ ${formatVN(actualPrepaidFrom)} đến ${formatVN(prepaidTo)})`;
