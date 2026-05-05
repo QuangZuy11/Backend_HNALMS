@@ -63,10 +63,26 @@ const contractLiquidationSchema = new Schema(
       required: true,
     },
 
-    // FK → invoice_periodics (hóa đơn tất toán)
+    // FK → invoice_periodics (hóa đơn tất toán — dùng khi cần thu tiền, A < 0 hoặc vi phạm)
     invoiceId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "InvoicePeriodic",
+      default: null,
+    },
+
+    // FK → financial_tickets (phiếu chi hoàn tiền — dùng khi A >= 0, force_majeure)
+    financialTicketId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "FinancialTicket",
+      default: null,
+    },
+
+    // Loại kết quả tài chính:
+    //   'refund'  → tenant nhận hoàn tiền (phiếu chi, màu xanh)
+    //   'collect' → tenant phải trả thêm (hóa đơn, màu đỏ)
+    settlementType: {
+      type: String,
+      enum: ["refund", "collect"],
       default: null,
     },
 
@@ -80,7 +96,7 @@ const contractLiquidationSchema = new Schema(
     status: {
       type: String,
       enum: ["pending_owner", "pending_accountant", "completed"],
-      default: "completed",
+      default: "pending_owner",
     },
   },
   {

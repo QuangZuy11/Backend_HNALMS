@@ -52,17 +52,17 @@ exports.createLiquidation = async (req, res) => {
   try {
     const {
       contractId,
-      liquidationType,         // 'force_majeure' | 'violation'
+      liquidationType,       // 'force_majeure' | 'violation'
       liquidationDate,
       note,
       images,
-      electricServiceId,       // ObjectId của Service điện
-      waterServiceId,          // ObjectId của Service nước
-      electricNewIndex,        // Số điện cuối
-      waterNewIndex,           // Số nước cuối
+      electricServiceId,
+      waterServiceId,
+      electricNewIndex,
+      waterNewIndex,
     } = req.body;
 
-    // ── 1. Validate contract ──────────────────
+    // ── 1. Validate contract ──────────────────────────────────────────────
     const contract = await Contract.findById(contractId)
       .populate({ path: "roomId", populate: { path: "roomTypeId" } })
       .populate("tenantId", "email username phoneNumber status")
@@ -73,20 +73,12 @@ exports.createLiquidation = async (req, res) => {
     if (contract.status !== "active")
       throw new Error("Hợp đồng phải đang ở trạng thái active mới có thể thanh lý.");
 
-    // ── 2. Xác định thông tin tài chính cơ bản ──
     const room = contract.roomId;
     const roomPrice = toNumber(room?.roomTypeId?.currentPrice);
     const liqDate = new Date(liquidationDate);
-    liqDate.setHours(12, 0, 0, 0); // Normalize giữa ngày
+    liqDate.setHours(12, 0, 0, 0);
 
-    const msPerDay = 1000 * 60 * 60 * 24;
-
-    // Số ngày đã ở trong tháng — dùng cho violation (rent_debt)
-    const startOfMonth = new Date(liqDate.getFullYear(), liqDate.getMonth(), 1);
-    const daysUsed = Math.round((liqDate - startOfMonth) / msPerDay) + 1;
-
-    // ── 3. Tạo MeterReading records ──────────
-    // Lấy oldIndex từ lần đọc mới nhất (sắp xếp readingDate DESC)
+    // ── 2. Tạo MeterReading records ───────────────────────────────────────
     const { newIndex: electricOldIndex } = await getLatestIndex(room._id, electricServiceId);
     const { newIndex: waterOldIndex } = await getLatestIndex(room._id, waterServiceId);
 
@@ -113,296 +105,351 @@ exports.createLiquidation = async (req, res) => {
     });
     await mrWater.save({ session });
 
-    // ── 4. Lấy đơn giá điện/nước thực tế từ bảng services ─────────────
+    // ── 3. Lấy đơn giá điện/nước ─────────────────────────────────────────
     const electricService = await Service.findById(electricServiceId).session(session);
     const waterService = await Service.findById(waterServiceId).session(session);
-
     if (!electricService) throw new Error("Không tìm thấy dịch vụ điện trong hệ thống.");
     if (!waterService) throw new Error("Không tìm thấy dịch vụ nước trong hệ thống.");
 
     const electricUnitPrice = toNumber(electricService.currentPrice);
     const waterUnitPrice = toNumber(waterService.currentPrice);
-
-    // Tiền điện/nước thực tế = số dùng × đơn giá (đây là khoản TRỪ với force_majeure, CỘNG với violation)
     const electricCost = electricUsage * electricUnitPrice;
     const waterCost = waterUsage * waterUnitPrice;
     const utilityCost = electricCost + waterCost;
 
-    // ── 5. Tính toán tài chính theo loại ─────
-    let depositRefundAmount = null;
-    let remainingRentAmount = null;
-    let rentDebtAmount = null;
-    let totalSettlement = 0;
-
+    // ── 4. Tính tiền hoàn thuê còn dư (chỉ dùng cho force_majeure) ────────
+    // Tái sử dụng logic từ getPreflightData: quét paid invoices, tính ngày chưa dùng
+    const msPerDay = 1000 * 60 * 60 * 24;
     const isDepositRefunded = contract.depositId && contract.depositId.status === "Refunded";
     const depositAmount = contract.depositId ? toNumber(contract.depositId.amount) : 0;
 
-    const preflightData = await calculatePreflightDataForLiquidation(contractId, liqDate);
+    let remainingRentAmount = 0;
+    if (liquidationType === "force_majeure") {
+      const paidInvoices = await InvoicePeriodic.find({ contractId, status: "Paid" })
+        .sort({ createdAt: 1 })
+        .session(session)
+        .lean();
+
+      const parseVNDate = (str) => {
+        const [d, m, y] = str.split("/").map(Number);
+        return new Date(y, m - 1, d, 12, 0, 0);
+      };
+      const parsePeriodFromText = (text) => {
+        const match = text.match(/từ (\d{2}\/\d{2}\/\d{4}) đến (\d{2}\/\d{2}\/\d{4})/i);
+        if (!match) return null;
+        return { from: parseVNDate(match[1]), to: parseVNDate(match[2]) };
+      };
+
+      for (const invoice of paidInvoices) {
+        for (const item of invoice.items) {
+          const nameLC = item.itemName.toLowerCase();
+          if (!nameLC.includes("tiền thuê") && !nameLC.includes("tiền phòng")) continue;
+          if (item.amount <= 0) continue;
+
+          const period = parsePeriodFromText(item.itemName);
+          if (!period) continue;
+
+          const { from, to } = period;
+          const totalDays = Math.round((to - from) / msPerDay) + 1;
+          const dailyRate = totalDays > 0 ? item.amount / totalDays : 0;
+
+          let unusedDays = 0;
+          if (liqDate >= to) {
+            unusedDays = 0;
+          } else if (liqDate < from) {
+            unusedDays = totalDays;
+          } else {
+            const usedDays = Math.round((liqDate - from) / msPerDay) + 1;
+            unusedDays = totalDays - usedDays;
+          }
+          remainingRentAmount += Math.round(dailyRate * unusedDays);
+        }
+      }
+    }
+
+    // ── 5. Tính A theo loại thanh lý ──────────────────────────────────────
+    // force_majeure: A = (hoàn cọc + hoàn thuê còn dư) - (điện + nước)
+    // violation:     cọc = 0, thuê còn dư = 0, A = -(điện + nước) [tenant luôn phải trả]
+    let depositRefundAmount = 0;
+    let totalSettlement = 0;
 
     if (liquidationType === "force_majeure") {
       depositRefundAmount = isDepositRefunded ? 0 : depositAmount;
-      remainingRentAmount = preflightData.totalRentRefund;
+      // A = hoàn cọc + hoàn thuê còn dư - tiền điện nước
       totalSettlement = depositRefundAmount + remainingRentAmount - utilityCost;
+    } else {
+      // violation: cọc bị tịch thu, không hoàn thuê
+      depositRefundAmount = 0;
+      remainingRentAmount = 0;
+      // Tenant phải trả tiền điện nước cuối kỳ
+      totalSettlement = -utilityCost; // âm = tenant phải trả
+    }
 
-      // ── 6a. Invoice items cho force_majeure ──
-      const invoiceItems = [
-        {
-          itemName: isDepositRefunded ? "Hoàn tiền cọc (Đã được hoàn từ trước)" : "Hoàn tiền cọc (100%)",
+    // ── 6. Xác định loại tài chính & tạo chứng từ ────────────────────────
+    //   A >= 0 (chỉ xảy ra với force_majeure): tenant nhận hoàn tiền
+    //           → tạo Phiếu Chi (financial_tickets), status "Pending"
+    //           → Chủ duyệt → Kế toán xác nhận chi → Done (màu xanh)
+    //
+    //   A < 0  : tenant phải thanh toán thêm
+    //           → tạo Hóa Đơn (invoice_periodics), status "Unpaid"
+    //           → Kế toán xác nhận đã thu → Done (màu đỏ)
+
+    const typeLabel = liquidationType === "force_majeure" ? "Bất khả kháng" : "Vi phạm hợp đồng";
+    const invoiceCode = generateSettlementInvoiceCode();
+    const dueDate = new Date(liqDate.getTime() + 3 * 24 * 60 * 60 * 1000);
+
+    let financialTicketDoc = null;  // phiếu chi (A >= 0)
+    let invoicePeriodicDoc = null;  // hóa đơn thu (A < 0)
+    let settlementType = "";
+
+    if (totalSettlement >= 0) {
+      // ── HOÀN TIỀN: Phiếu chi ─────────────────────────────────────────
+      settlementType = "refund";
+
+      const items = [];
+      if (liquidationType === "force_majeure") {
+        items.push({
+          itemName: isDepositRefunded
+            ? "Hoàn tiền cọc (Đã được hoàn từ trước)"
+            : "Hoàn tiền cọc (100%)",
           usage: 1,
           unitPrice: depositRefundAmount,
           amount: depositRefundAmount,
           isIndex: false,
-        },
-        {
-          itemName: `Hoàn tiền thuê còn dư (${remainingRentLabel})`,
-          usage: remainingDays,
-          unitPrice: Math.round(roomPrice / 30),
+        });
+        items.push({
+          itemName: "Hoàn tiền thuê còn dư",
+          usage: 1,
+          unitPrice: remainingRentAmount,
           amount: remainingRentAmount,
           isIndex: false,
-        },
-        {
-          // TRỪ tiền điện: số điện đã dùng phải trừ vào tiền hoàn
+        });
+        items.push({
           itemName: `Trừ tiền ${electricService.name} cuối kỳ`,
           oldIndex: electricOldIndex,
           newIndex: Number(electricNewIndex),
           usage: electricUsage,
           unitPrice: electricUnitPrice,
-          amount: -electricCost,   // ÂM: trừ vào tổng hoàn
+          amount: -electricCost,
           isIndex: true,
-        },
-        {
-          // TRỪ tiền nước: số nước đã dùng phải trừ vào tiền hoàn
+        });
+        items.push({
           itemName: `Trừ tiền ${waterService.name} cuối kỳ`,
           oldIndex: waterOldIndex,
           newIndex: Number(waterNewIndex),
           usage: waterUsage,
           unitPrice: waterUnitPrice,
-          amount: -waterCost,      // ÂM: trừ vào tổng hoàn
+          amount: -waterCost,
           isIndex: true,
-        },
-      ];
-
-      const typeLabel = "Bất khả kháng";
-      const settlement = new FinancialTicket({
-        invoiceCode: generateSettlementInvoiceCode(),
-        contractId: contract._id,
-        referenceId: contract._id,
-        title: `Hóa đơn tất toán - ${typeLabel} - ${room.name}`,
-        items: invoiceItems,
-        totalAmount: totalSettlement,
-        amount: Math.abs(totalSettlement),
-        status: "Unpaid",
-        dueDate: new Date(liqDate.getTime() + 3 * 24 * 60 * 60 * 1000),
-      });
-      await settlement.save({ session });
-
-      const liquidation = new ContractLiquidation({
-        contractId: contract._id,
-        liquidationType,
-        liquidationDate: liqDate,
-        note,
-        images,
-        depositRefundAmount,
-        remainingRentAmount,
-        rentDebtAmount: null,
-        totalSettlement,
-        invoiceId: settlement._id,
-        meterReadingIds: [mrElectric._id, mrWater._id],
-      });
-      await liquidation.save({ session });
-
-      // Cập nhật các bảng liên quan
-      contract.status = "terminated";
-      await contract.save({ session });
-
-      if (contract.depositId) {
-        const deposit = await Deposit.findById(contract.depositId._id || contract.depositId).session(session);
-        if (deposit) {
-          deposit.status = "Refunded";
-          deposit.refundDate = liqDate;
-          await deposit.save({ session });
-        }
+        });
       }
 
-      // ── Kiểm tra floating deposit trước khi set trạng thái phòng ──
-      // Nếu phòng đang có cọc lẻ (chưa bind contract) → giữ là Deposited
-      const allRoomContracts = await Contract.find({
-        roomId: room._id,
-      }).select("_id").session(session);
-      const boundContractIds = new Set(allRoomContracts.map((c) => c._id.toString()));
-
-      const floatingDeposits = await Deposit.find({
-        room: room._id,
-        status: "Held",
-      }).session(session);
-
-      const hasFloatingDeposit = floatingDeposits.some((d) => {
-        if (!d.contractId) return true; // chưa bind contract nào → floating
-        if (!boundContractIds.has(d.contractId.toString())) return true; // bind contract đã bị thanh lý/xóa
-        return false;
+      // Phiếu chi lưu vào financial_tickets
+      // Phiếu chi lưu vào financial_tickets
+      // strict: false nên có thể lưu thêm items, contractId
+      financialTicketDoc = new FinancialTicket({
+        paymentVoucher: invoiceCode,
+        contractId: contract._id,
+        title: `Phiếu hoàn tiền thanh lý - ${typeLabel} - ${room.name}`,
+        items,
+        totalAmount: totalSettlement,
+        amount: totalSettlement,          // số tiền hoàn (dương)
+        status: "Pending",                // chờ chủ duyệt
+        dueDate,
+        transactionDate: liqDate,
       });
-
-      room.status = hasFloatingDeposit ? "Deposited" : "Available";
-      await room.save({ session });
-      // Removed: await User.findByIdAndUpdate(contract.tenantId._id || contract.tenantId, { status: "inactive" }, { session });
-
-      await session.commitTransaction();
-      session.endSession();
-
-      // Email
-      try {
-        const tenantEmail = contract.tenantId?.email;
-        if (tenantEmail && EMAIL_TEMPLATES.LIQUIDATION_SETTLEMENT) {
-          await sendEmail(
-            tenantEmail,
-            EMAIL_TEMPLATES.LIQUIDATION_SETTLEMENT.subject,
-            EMAIL_TEMPLATES.LIQUIDATION_SETTLEMENT.getHtml(
-              contract.tenantId?.username || "Quý khách",
-              room.name, typeLabel,
-              liqDate.toLocaleDateString("vi-VN"),
-              totalSettlement, liquidationType
-            )
-          );
-        }
-      } catch (e) { console.error("[LIQUIDATION] Email error:", e.message); }
-
-      return res.status(201).json({
-        success: true,
-        message: "Thanh lý hợp đồng (Bất khả kháng) thành công.",
-        data: { liquidation, invoice: settlement, totalSettlement, meterReadings: [mrElectric, mrWater] },
-      });
+      await financialTicketDoc.save({ session });
 
     } else {
-      // ── violation: tịch thu tiền cọc, thu tiền thuê nợ + tiền điện nước ──
-      rentDebtAmount = Math.round((roomPrice / 30) * daysUsed);
-      // Tổng = tiền thuê còn nợ + tiền điện nước (CỘNG vào vì tenant phải trả)
-      totalSettlement = rentDebtAmount + utilityCost;
+      // ── CẦN THU: Hóa đơn invoice_periodics ───────────────────────────
+      settlementType = "collect";
+      const amountToPay = Math.abs(totalSettlement); // số tiền tenant phải trả
 
-      const invoiceItems = [
-        {
-          itemName: `Tiền thuê còn nợ (${daysUsed} ngày trong tháng)`,
-          usage: daysUsed,
-          unitPrice: Math.round(roomPrice / 30),
-          amount: rentDebtAmount,
+      const items = [];
+      if (liquidationType === "force_majeure") {
+        // A < 0: tiền điện nước > hoàn cọc + hoàn thuê còn dư
+        items.push({
+          itemName: isDepositRefunded
+            ? "Hoàn tiền cọc (Đã được hoàn từ trước)"
+            : "Hoàn tiền cọc (100%)",
+          usage: 1,
+          unitPrice: depositRefundAmount,
+          amount: depositRefundAmount,
           isIndex: false,
-        },
-        {
-          // Cộng tiền điện: tenant nợ khoản này
+        });
+        items.push({
+          itemName: "Hoàn tiền thuê còn dư",
+          usage: 1,
+          unitPrice: remainingRentAmount,
+          amount: remainingRentAmount,
+          isIndex: false,
+        });
+        items.push({
           itemName: `Tiền ${electricService.name} cuối kỳ`,
           oldIndex: electricOldIndex,
           newIndex: Number(electricNewIndex),
           usage: electricUsage,
           unitPrice: electricUnitPrice,
-          amount: electricCost,   // DƯƠNG: tenant phải trả
+          amount: electricCost,
           isIndex: true,
-        },
-        {
-          // Cộng tiền nước: tenant nợ khoản này
+        });
+        items.push({
           itemName: `Tiền ${waterService.name} cuối kỳ`,
           oldIndex: waterOldIndex,
           newIndex: Number(waterNewIndex),
           usage: waterUsage,
           unitPrice: waterUnitPrice,
-          amount: waterCost,      // DƯƠNG: tenant phải trả
+          amount: waterCost,
           isIndex: true,
-        },
-        {
+        });
+      } else {
+        // violation: cọc tịch thu, không hoàn thuê, chỉ thu điện nước
+        items.push({
           itemName: "Tiền cọc bị tịch thu (vi phạm nội quy)",
           usage: 1,
           unitPrice: depositAmount,
-          amount: 0, // Ghi nhận nhưng = 0 vì đã bị giữ lại, không tính vào hóa đơn thu thêm
+          amount: 0, // ghi nhận nhưng không tính vào hóa đơn thu (đã giữ lại)
           isIndex: false,
-        },
-      ];
-
-      const typeLabel = "Vi phạm hợp đồng";
-      const settlement = new FinancialTicket({
-        invoiceCode: generateSettlementInvoiceCode(),
-        contractId: contract._id,
-        referenceId: contract._id,
-        title: `Hóa đơn tất toán - ${typeLabel} - ${room.name}`,
-        items: invoiceItems,
-        totalAmount: totalSettlement,
-        amount: Math.abs(totalSettlement),
-        status: "Unpaid",
-        dueDate: new Date(liqDate.getTime() + 3 * 24 * 60 * 60 * 1000),
-      });
-      await settlement.save({ session });
-
-      const liquidation = new ContractLiquidation({
-        contractId: contract._id,
-        liquidationType,
-        liquidationDate: liqDate,
-        note,
-        images,
-        depositRefundAmount: null,
-        remainingRentAmount: null,
-        rentDebtAmount,
-        totalSettlement,
-        invoiceId: settlement._id,
-        meterReadingIds: [mrElectric._id, mrWater._id],
-      });
-      await liquidation.save({ session });
-
-      contract.status = "terminated";
-      await contract.save({ session });
-
-      if (contract.depositId) {
-        const deposit = await Deposit.findById(contract.depositId._id || contract.depositId).session(session);
-        if (deposit) {
-          deposit.status = "Forfeited";
-          deposit.forfeitedDate = liqDate;
-          await deposit.save({ session });
-        }
+        });
+        items.push({
+          itemName: `Tiền ${electricService.name} cuối kỳ`,
+          oldIndex: electricOldIndex,
+          newIndex: Number(electricNewIndex),
+          usage: electricUsage,
+          unitPrice: electricUnitPrice,
+          amount: electricCost,
+          isIndex: true,
+        });
+        items.push({
+          itemName: `Tiền ${waterService.name} cuối kỳ`,
+          oldIndex: waterOldIndex,
+          newIndex: Number(waterNewIndex),
+          usage: waterUsage,
+          unitPrice: waterUnitPrice,
+          amount: waterCost,
+          isIndex: true,
+        });
       }
 
-      // ── Kiểm tra floating deposit trước khi set trạng thái phòng ──
-      // Nếu phòng đang có cọc lẻ (chưa bind contract) → giữ là Deposited
-      const allRoomContracts = await Contract.find({
-        roomId: room._id,
-      }).select("_id").session(session);
-      const boundContractIds = new Set(allRoomContracts.map((c) => c._id.toString()));
-
-      const floatingDeposits = await Deposit.find({
-        room: room._id,
-        status: "Held",
-      }).session(session);
-
-      const hasFloatingDeposit = floatingDeposits.some((d) => {
-        if (!d.contractId) return true;
-        if (!boundContractIds.has(d.contractId.toString())) return true;
-        return false;
+      invoicePeriodicDoc = new InvoicePeriodic({
+        invoiceCode,
+        contractId: contract._id,
+        title: `Hóa đơn tất toán - ${typeLabel} - ${room.name}`,
+        items,
+        totalAmount: amountToPay,
+        status: "Unpaid",               // chờ kế toán xác nhận đã thu
+        dueDate,
       });
-
-      room.status = hasFloatingDeposit ? "Deposited" : "Available";
-      await room.save({ session });
-      // Removed: await User.findByIdAndUpdate(contract.tenantId._id || contract.tenantId, { status: "inactive" }, { session });
-
-      await session.commitTransaction();
-      session.endSession();
-
-      try {
-        const tenantEmail = contract.tenantId?.email;
-        if (tenantEmail && EMAIL_TEMPLATES.LIQUIDATION_SETTLEMENT) {
-          await sendEmail(
-            tenantEmail,
-            EMAIL_TEMPLATES.LIQUIDATION_SETTLEMENT.subject,
-            EMAIL_TEMPLATES.LIQUIDATION_SETTLEMENT.getHtml(
-              contract.tenantId?.username || "Quý khách",
-              room.name, typeLabel,
-              liqDate.toLocaleDateString("vi-VN"),
-              totalSettlement, liquidationType
-            )
-          );
-        }
-      } catch (e) { console.error("[LIQUIDATION] Email error:", e.message); }
-
-      return res.status(201).json({
-        success: true,
-        message: "Thanh lý hợp đồng (Vi phạm) thành công.",
-        data: { liquidation, invoice: settlement, totalSettlement, meterReadings: [mrElectric, mrWater] },
-      });
+      await invoicePeriodicDoc.save({ session });
     }
+
+    // ── 7. Tạo bản ghi ContractLiquidation ───────────────────────────────
+    const liquidation = new ContractLiquidation({
+      contractId: contract._id,
+      liquidationType,
+      liquidationDate: liqDate,
+      note,
+      images,
+      depositRefundAmount,
+      remainingRentAmount: liquidationType === "force_majeure" ? remainingRentAmount : null,
+      rentDebtAmount: null,
+      totalSettlement,
+      settlementType,
+      // invoiceId:
+      //   - refund  → lưu FinancialTicket._id (để financial_tickets.controller gốc
+      //               query { invoiceId: id } vẫn tìm được và tự update status)
+      //   - collect → lưu InvoicePeriodic._id
+      invoiceId: financialTicketDoc ? financialTicketDoc._id : (invoicePeriodicDoc ? invoicePeriodicDoc._id : null),
+      financialTicketId: financialTicketDoc ? financialTicketDoc._id : null,
+      meterReadingIds: [mrElectric._id, mrWater._id],
+      // Trạng thái ban đầu:
+      //   refund  → pending_owner  (chờ chủ duyệt phiếu chi)
+      //   collect → pending_accountant (chờ kế toán xác nhận đã thu hóa đơn)
+      status: settlementType === "refund" ? "pending_owner" : "pending_accountant",
+    });
+    await liquidation.save({ session });
+
+    // ── 8. Kết thúc hợp đồng & cập nhật deposit / phòng ─────────────────
+    contract.status = "terminated";
+    await contract.save({ session });
+
+    if (contract.depositId) {
+      const deposit = await Deposit.findById(
+        contract.depositId._id || contract.depositId
+      ).session(session);
+      if (deposit) {
+        if (liquidationType === "force_majeure") {
+          deposit.status = "Refunded";
+          deposit.refundDate = liqDate;
+        } else {
+          deposit.status = "Forfeited";
+          deposit.forfeitedDate = liqDate;
+        }
+        await deposit.save({ session });
+      }
+    }
+
+    // Kiểm tra floating deposit trước khi set trạng thái phòng
+    const allRoomContracts = await Contract.find({ roomId: room._id })
+      .select("_id")
+      .session(session);
+    const boundContractIds = new Set(allRoomContracts.map((c) => c._id.toString()));
+
+    const floatingDeposits = await Deposit.find({
+      room: room._id,
+      status: "Held",
+    }).session(session);
+
+    const hasFloatingDeposit = floatingDeposits.some((d) => {
+      if (!d.contractId) return true;
+      if (!boundContractIds.has(d.contractId.toString())) return true;
+      return false;
+    });
+
+    room.status = hasFloatingDeposit ? "Deposited" : "Available";
+    await room.save({ session });
+
+    await session.commitTransaction();
+    session.endSession();
+
+    // ── 9. Gửi email thông báo cho tenant ────────────────────────────────
+    try {
+      const tenantEmail = contract.tenantId?.email;
+      if (tenantEmail && EMAIL_TEMPLATES.LIQUIDATION_SETTLEMENT) {
+        // Với collect (A<0): dùng liquidationType "violation" để email hiện "cần thanh toán thêm"
+        // Với refund (A>=0): dùng "force_majeure" để email hiện "số tiền được hoàn lại"
+        const emailType = settlementType === "refund" ? "force_majeure" : "violation";
+        await sendEmail(
+          tenantEmail,
+          EMAIL_TEMPLATES.LIQUIDATION_SETTLEMENT.subject,
+          EMAIL_TEMPLATES.LIQUIDATION_SETTLEMENT.getHtml(
+            contract.tenantId?.username || "Quý khách",
+            room.name,
+            typeLabel,
+            liqDate.toLocaleDateString("vi-VN"),
+            Math.abs(totalSettlement),
+            emailType
+          )
+        );
+      }
+    } catch (e) {
+      console.error("[LIQUIDATION] Email error:", e.message);
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: `Thanh lý hợp đồng (${typeLabel}) thành công.`,
+      data: {
+        liquidation,
+        settlementType,
+        totalSettlement,
+        ...(financialTicketDoc
+          ? { financialTicket: financialTicketDoc }
+          : { invoice: invoicePeriodicDoc }),
+        meterReadings: [mrElectric, mrWater],
+      },
+    });
+
   } catch (error) {
     await session.abortTransaction();
     session.endSession();
@@ -414,7 +461,9 @@ exports.createLiquidation = async (req, res) => {
   }
 };
 
-// ─────────────────────────────────────────────
+
+
+
 // GET /liquidations/contract/:contractId
 // ─────────────────────────────────────────────
 exports.getLiquidationByContract = async (req, res) => {
