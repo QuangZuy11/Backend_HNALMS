@@ -88,7 +88,7 @@ const EMAIL_TEMPLATES = {
           <div class="content">
             <h2>Xin chào ${fullname},</h2>
             <p>Hợp đồng thuê phòng <strong>${roomName}</strong> của bạn đã được tạo thành công.</p>
-            <p>Dưới đây là thông tin tài khoản để bạn đăng nhập vào hệ thống và quản lý dịch vụ:</p>
+            <p>Dưới đây là thông tin tài khoản để bạn đăng nhập vào hệ thống và quản lý dịch vụ: </p>
             
             <div class="credentials-box">
               <div class="credential-item">
@@ -206,11 +206,11 @@ EMAIL_TEMPLATES.LIQUIDATION_SETTLEMENT = {
           <h2>Xin chào ${tenantName},</h2>
           <p>Hợp đồng thuê phòng <strong>${roomName}</strong> của bạn đã được chính thức thanh lý theo lý do: <strong>${liquidationType}</strong>.</p>
           <div class="info-box">
-            <div class="info-row"><span class="label">Phòng</span><span class="value">${roomName}</span></div>
-            <div class="info-row"><span class="label">Loại thanh lý</span><span class="value">${liquidationType}</span></div>
-            <div class="info-row"><span class="label">Ngày thanh lý</span><span class="value">${liquidationDate}</span></div>
+            <div class="info-row"><span class="label">Phòng </span><span class="value">${roomName}</span></div>
+            <div class="info-row"><span class="label">Loại thanh lý </span><span class="value">${liquidationType}</span></div>
+            <div class="info-row"><span class="label">Ngày thanh lý </span><span class="value">${liquidationDate}</span></div>
             <div class="info-row">
-              <span class="label">${isRefund ? "Số tiền được hoàn lại" : "Số tiền cần thanh toán thêm"}</span>
+              <span class="label">${isRefund ? "Số tiền được hoàn lại " : "Số tiền cần thanh toán thêm"}</span>
               <span class="value total">${totalFormatted} đ</span>
             </div>
           </div>
@@ -218,7 +218,7 @@ EMAIL_TEMPLATES.LIQUIDATION_SETTLEMENT = {
             <strong>⚠️ Lưu ý:</strong><br/>
             ${isRefund
         ? "Bạn vui lòng gặp Kế Toán hoặc Quản Lý của Tòa Nhà để nhận số tiền hoàn lại"
-        : "Vui lòng thanh toán số tiền còn nợ trong vòng <strong>3 ngày</strong> kể từ ngày thanh lý."
+        : "Bạn vui lòng gặp Kế Toán hoặc Quản Lý của Tòa Nhà thanh toán số tiền tất toán"
       }
           </div>
           <p style="margin-top: 20px;">Trân trọng,<br><strong>Ban Quản Lý Tòa Nhà</strong></p>

@@ -6,7 +6,7 @@ const User = require("../../authentication/models/user.model");
 const MoveOutRequest = require("../models/moveout_request.model");
 
 const contractRenewalJob = () => {
-    cron.schedule("0 9 * * *", async () => {
+    cron.schedule("* * * * *", async () => {
         console.log("[CONTRACT RENEWAL JOB] ⏱️ Bắt đầu job gửi thông báo gia hạn...");
         try {
             await checkAndSendRenewalNotifications();
@@ -37,7 +37,7 @@ const contractRenewalJob = () => {
     });
 
     console.log("[CONTRACT RENEWAL JOB] ✅ Cron jobs đã được lên lịch:");
-    console.log("  - Gửi thông báo: Mỗi ngày lúc 9:00 AM");
+    console.log("  - Gửi thông báo: Mỗi phút (debug)");
     console.log("  - Xử lý hết hạn: Mỗi ngày lúc 00:05");
     console.log("  - Tự động từ chối gia hạn hết cửa sổ: Mỗi ngày lúc 00:00");
 };
