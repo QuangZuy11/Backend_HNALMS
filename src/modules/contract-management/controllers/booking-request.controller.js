@@ -650,7 +650,7 @@ exports.sendPaymentInfo = async (req, res) => {
         <ul>
           <li>Thời hạn thuê: <strong>${request.duration}</strong> tháng, bắt đầu từ ngày <strong>${startStr}</strong> đến ngày <strong>${endStr}</strong>.</li>
           <li>Trả trước tiền phòng: <strong>${prepayMonthsNum}</strong> tháng.</li>
-          <li style="list-style: none;"><em>*Lưu ý: Thời hạn tính tiền phòng đã trả sẽ bắt đầu từ ngày đầu tiên của tháng tiếp theo (nếu tạo hợp đồng vào ngày lẻ trong tháng).</em></li>
+          <li style="list-style: none;"><em>*Lưu ý: Nếu ngày bắt đầu hợp đồng là mùng 1, tiền trả trước tính từ tháng đó. Nếu ngày bắt đầu là mùng 2 trở đi, tiền trả trước tính từ tháng tiếp theo.</em></li>
           <li>Giá thuê phòng là: <strong>${roomPrice.toLocaleString("vi-VN")}</strong> VNĐ/tháng. (Giá này cố định theo loại phòng).</li>
           <li>Tiền đặt cọc: <strong>${depositAmount.toLocaleString("vi-VN")}</strong> VNĐ <em>(Tương đương 01 tháng tiền phòng). Chưa cọc (Thanh toán để xác nhận)</em></li>
         </ul>
