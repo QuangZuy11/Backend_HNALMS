@@ -389,25 +389,9 @@ exports.createLiquidation = async (req, res) => {
       }
     }
 
-    // Kiểm tra floating deposit trước khi set trạng thái phòng
-    const allRoomContracts = await Contract.find({ roomId: room._id })
-      .select("_id")
-      .session(session);
-    const boundContractIds = new Set(allRoomContracts.map((c) => c._id.toString()));
-
-    const floatingDeposits = await Deposit.find({
-      room: room._id,
-      status: "Held",
-    }).session(session);
-
-    const hasFloatingDeposit = floatingDeposits.some((d) => {
-      if (!d.contractId) return true;
-      if (!boundContractIds.has(d.contractId.toString())) return true;
-      return false;
-    });
-
-    room.status = hasFloatingDeposit ? "Deposited" : "Available";
-    await room.save({ session });
+    // Room giữ nguyên trạng thái Occupied trong khi liquidation đang chờ xử lý.
+    // Room chỉ chuyển → Available khi liquidation.status = "completed"
+    // (xử lý tại financial_tickets.controller.js khi phiếu chi/hóa đơn được xác nhận thanh toán)
 
     await session.commitTransaction();
     session.endSession();
@@ -712,10 +696,10 @@ exports.getPreflightData = async (req, res) => {
 
         // ── Helper: Cố gắng parse ngày, nếu thất bại (VD: format cũ chỉ ghi "Tiền thuê phòng"), fallback tính theo số tháng ──
         let period = parsePeriodFromText(item.itemName);
-        
+
         // Nếu không có ngày trong tex nhưng hóa đơn này là "PREPAID" hoặc "trả trước"
-        if (!period && 
-           (invoice.invoiceCode?.includes("PREPAID") || invoice.title?.toLowerCase().includes("trả trước") || item.usage > 1)) {
+        if (!period &&
+          (invoice.invoiceCode?.includes("PREPAID") || invoice.title?.toLowerCase().includes("trả trước") || item.usage > 1)) {
           // Fallback: dùng startDate của hợp đồng và usage để tính
           const isFirstDay = new Date(contract.startDate).getDate() === 1;
           let fromDt = new Date(contract.startDate);
@@ -725,12 +709,12 @@ exports.getPreflightData = async (req, res) => {
             fromDt = new Date(fromDt.getFullYear(), fromDt.getMonth() + 1, 1);
             fromDt.setHours(12, 0, 0, 0);
           }
-          
+
           const toDt = new Date(fromDt.getFullYear(), fromDt.getMonth() + (item.usage >= 1 ? item.usage : 1), 0);
           toDt.setHours(12, 0, 0, 0);
 
-          const fmt = (d) => `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
-          
+          const fmt = (d) => `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+
           period = {
             from: fromDt,
             to: toDt,
@@ -747,9 +731,9 @@ exports.getPreflightData = async (req, res) => {
           toDt.setMonth(toDt.getMonth() + 1);
           toDt.setDate(toDt.getDate() - 1);
           toDt.setHours(12, 0, 0, 0);
-          
-          const fmt = (d) => `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
-          
+
+          const fmt = (d) => `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+
           period = {
             from: fromDt,
             to: toDt,
@@ -816,14 +800,14 @@ exports.getPreflightData = async (req, res) => {
       for (let d = new Date(startDt); d <= endDt; d.setDate(d.getDate() + 1)) {
         const ts = d.getTime();
         let isPaid = false;
-        
+
         // Cần parse lại từ fromStr/toStr do mảng paidRentPeriods không lưu object Date
         for (const p of paidRentPeriods) {
           const [fD, fM, fY] = p.fromStr.split("/");
           const [tD, tM, tY] = p.toStr.split("/");
-          const fromDtLk = new Date(Number(fY), Number(fM)-1, Number(fD), 12, 0, 0, 0);
-          const toDtLk = new Date(Number(tY), Number(tM)-1, Number(tD), 12, 0, 0, 0);
-          
+          const fromDtLk = new Date(Number(fY), Number(fM) - 1, Number(fD), 12, 0, 0, 0);
+          const toDtLk = new Date(Number(tY), Number(tM) - 1, Number(tD), 12, 0, 0, 0);
+
           if (ts >= fromDtLk.getTime() && ts <= toDtLk.getTime()) {
             isPaid = true;
             break;
