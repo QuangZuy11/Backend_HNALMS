@@ -578,8 +578,8 @@ async function declineContractRenewal(contractId, tenantId) {
     const msg = `Bạn đã từ chối gia hạn hợp đồng ${contract.contractCode} (phòng ${roomName}). Bạn vẫn ở đến hết ngày ${formatDate(contract.endDate)}. Vui lòng trả phòng khi hết hạn.`;
 
     await notifyManagersAndTenant({
-        managerTitle: `Từ chối gia hạn — ${roomName}`,
-        managerContent: `Người thuê đã từ chối gia hạn hợp đồng ${contract.contractCode} (phòng ${roomName}). Ngày kết thúc: ${formatDate(contract.endDate)}. Phòng có thể mở đặt cọc sớm cho khách mới.`,
+        managerTitle: `Từ chối gia hạn`,
+        managerContent: `Người thuê đã từ chối gia hạn hợp đồng ${contract.contractCode} ( ${roomName}). Ngày kết thúc: ${formatDate(contract.endDate)}. Phòng đã được mở đặt cọc sớm cho khách mới.`,
         tenantId,
         tenantTitle: `Từ chối gia hạn hợp đồng — ${roomName}`,
         tenantContent: msg
