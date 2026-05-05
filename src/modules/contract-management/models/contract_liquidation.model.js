@@ -63,10 +63,26 @@ const contractLiquidationSchema = new Schema(
       required: true,
     },
 
-    // FK → invoice_periodics (hóa đơn tất toán)
+    // FK → invoice_periodics (hóa đơn tất toán — dùng khi cần thu tiền, A < 0 hoặc vi phạm)
     invoiceId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "InvoicePeriodic",
+      default: null,
+    },
+
+    // FK → financial_tickets (phiếu chi hoàn tiền — dùng khi A >= 0, force_majeure)
+    financialTicketId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "FinancialTicket",
+      default: null,
+    },
+
+    // Loại kết quả tài chính:
+    //   'refund'  → tenant nhận hoàn tiền (phiếu chi, màu xanh)
+    //   'collect' → tenant phải trả thêm (hóa đơn, màu đỏ)
+    settlementType: {
+      type: String,
+      enum: ["refund", "collect"],
       default: null,
     },
 
@@ -77,29 +93,10 @@ const contractLiquidationSchema = new Schema(
       default: [],
     },
 
-    // Trạng thái thanh lý: pending_owner → pending_accountant → completed
-    // Chỉ có ở trạng thái completed thì contract/room/deposit mới bị thay đổi
     status: {
       type: String,
       enum: ["pending_owner", "pending_accountant", "completed"],
       default: "pending_owner",
-    },
-
-    // Thời điểm chủ nhà duyệt thanh lý
-    ownerApprovedAt: {
-      type: Date,
-      default: null,
-    },
-    ownerApprovedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Users",
-      default: null,
-    },
-
-    // Thời điểm kế toán giải ngân / xác nhận thanh toán
-    accountantPaidAt: {
-      type: Date,
-      default: null,
     },
   },
   {
