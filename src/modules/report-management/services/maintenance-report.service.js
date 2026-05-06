@@ -8,6 +8,10 @@ const RepairRequest = require("../../request-management/models/repair_requests.m
  * @param {string} params.startMonth - Format: "YYYY-MM"
  * @param {string} params.endMonth   - Format: "YYYY-MM"
  * @returns {Array} [{ month, total, repairs, maintenance, pending, processing, done, unpaid, paid }, ...]
+ *
+ * Phân loại theo paymentType thay vì type:
+ *   - "Sửa chữa"  : paymentType === 'REVENUE'  (cư dân thanh toán)
+ *   - "Bảo trì"   : paymentType === 'EXPENSE' || paymentType === null (kế toán thanh toán / chưa phân loại)
  */
 exports.getMaintenanceByMonth = async ({ startMonth, endMonth } = {}) => {
   // Default: 6 tháng gần nhất
@@ -34,8 +38,9 @@ exports.getMaintenanceByMonth = async ({ startMonth, endMonth } = {}) => {
       createdDate: { $gte: monthStart, $lt: monthEnd },
     }).lean();
 
-    const repairs = requests.filter((r) => r.type === "Sửa chữa").length;
-    const maintenance = requests.filter((r) => r.type === "Bảo trì").length;
+    // Phân loại theo paymentType: REVENUE = Sửa chữa, EXPENSE/null = Bảo trì
+    const repairs = requests.filter((r) => r.paymentType === "REVENUE").length;
+    const maintenance = requests.filter((r) => !r.paymentType || r.paymentType === "EXPENSE").length;
     const pending = requests.filter((r) => r.status === "Pending").length;
     const processing = requests.filter((r) => r.status === "Processing").length;
     const done = requests.filter((r) => r.status === "Done").length;
@@ -67,9 +72,12 @@ exports.getMaintenanceByMonth = async ({ startMonth, endMonth } = {}) => {
 /**
  * Thống kê tổng quan cho một tháng cụ thể
  * @param {string} month - Format: "YYYY-MM"
+ *
+ * Phân loại theo paymentType:
+ *   - "Sửa chữa"  : paymentType === 'REVENUE'  (cư dân thanh toán)
+ *   - "Bảo trì"   : paymentType === 'EXPENSE' || paymentType === null (kế toán thanh toán / chưa phân loại)
  */
 exports.getSnapshotByMonth = async (month) => {
-  console.log("[getSnapshotByMonth] called with month:", month);
   let monthStart, monthEnd;
   if (month) {
     const [y, mo] = month.split("-").map(Number);
@@ -80,15 +88,14 @@ exports.getSnapshotByMonth = async (month) => {
     monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
     monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
   }
-  console.log("[getSnapshotByMonth] range:", monthStart.toISOString(), "to", monthEnd.toISOString());
 
   const requests = await RepairRequest.find({
     createdDate: { $gte: monthStart, $lt: monthEnd },
   }).lean();
-  console.log("[getSnapshotByMonth] found:", requests.length, "requests");
 
-  const repairs = requests.filter((r) => r.type === "Sửa chữa").length;
-  const maintenance = requests.filter((r) => r.type === "Bảo trì").length;
+  // Phân loại theo paymentType: REVENUE = Sửa chữa, EXPENSE/null = Bảo trì
+  const repairs = requests.filter((r) => r.paymentType === "REVENUE").length;
+  const maintenance = requests.filter((r) => !r.paymentType || r.paymentType === "EXPENSE").length;
   const pending = requests.filter((r) => r.status === "Pending").length;
   const processing = requests.filter((r) => r.status === "Processing").length;
   const done = requests.filter((r) => r.status === "Done").length;
