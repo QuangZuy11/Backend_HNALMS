@@ -21,19 +21,31 @@ class FinanceService {
   _getDistributedAmount(amount, text, reportStart, reportEnd, createdAt) {
     const range = this._parseRange(text);
     if (range) {
-      const itemStart = range.start;
-      const itemEnd = range.end;
+      const { start: itemStart, end: itemEnd } = range;
 
-      // Tổng số ngày của kỳ hạn này
-      const totalDays = Math.max(1, Math.ceil((itemEnd - itemStart) / (1000 * 60 * 60 * 24)) + 1);
-
-      // Số ngày giao thoa với kỳ báo cáo
+      // Mốc thực tế giao thoa
       const overlapS = new Date(Math.max(itemStart, reportStart));
       const overlapE = new Date(Math.min(itemEnd, reportEnd));
-
       if (overlapS > overlapE) return 0;
 
-      const overlapDays = Math.ceil((overlapE - overlapS) / (1000 * 60 * 60 * 24)) + 1;
+      // --- PHÂN BỔ THEO THÁNG (Ưu tiên nếu cả kỳ hạn và báo cáo đều tròn tháng) ---
+      const isStartOfMonth = itemStart.getDate() === 1;
+      const isEndOfMonth = new Date(itemEnd.getFullYear(), itemEnd.getMonth(), itemEnd.getDate() + 1).getDate() === 1;
+      const isReportStartOfMonth = reportStart.getDate() === 1;
+      const isReportEndOfMonth = new Date(reportEnd.getFullYear(), reportEnd.getMonth(), reportEnd.getDate() + 1).getDate() === 1;
+
+      if (isStartOfMonth && isEndOfMonth && isReportStartOfMonth && isReportEndOfMonth) {
+        const totalMonths = (itemEnd.getFullYear() - itemStart.getFullYear()) * 12 + (itemEnd.getMonth() - itemStart.getMonth()) + 1;
+        const monthsInOverlap = (overlapE.getFullYear() - overlapS.getFullYear()) * 12 + (overlapE.getMonth() - overlapS.getMonth()) + 1;
+
+        if (totalMonths > 0) {
+          return (amount / totalMonths) * monthsInOverlap;
+        }
+      }
+
+      // --- PHÂN BỔ THEO NGÀY (Dùng cho các trường hợp lẻ ngày) ---
+      const totalDays = Math.max(1, Math.round((itemEnd - itemStart) / (1000 * 60 * 60 * 24)));
+      const overlapDays = Math.round((overlapE - overlapS) / (1000 * 60 * 60 * 24));
       return (amount * overlapDays) / totalDays;
     }
 
@@ -158,7 +170,7 @@ class FinanceService {
       inv.items.forEach(item => {
         const name = item.itemName.toLowerCase();
         const distAmt = this._getDistributedAmount(item.amount, item.itemName || inv.title, startOfMonth, endOfMonth, created);
-        
+
         if (distAmt <= 0) return;
 
         if (name.includes("phòng")) {
@@ -205,9 +217,9 @@ class FinanceService {
     const chartData = [];
     // Lấy dữ liệu chi và cọc cho 6 tháng
     const sixMonthsStart = new Date(targetYear, targetMonth - 6, 1);
-    const tixForChart = await FinancialTicket.find({ 
-      transactionDate: { $gte: sixMonthsStart, $lte: endOfMonth }, 
-      status: { $in: ["Completed", "Paid", "Approved"] } 
+    const tixForChart = await FinancialTicket.find({
+      transactionDate: { $gte: sixMonthsStart, $lte: endOfMonth },
+      status: { $in: ["Completed", "Paid", "Approved"] }
     });
     const incDepsForChart = await Deposit.find({ createdAt: { $gte: sixMonthsStart, $lte: endOfMonth } });
     const refDepsForChart = await Deposit.find({ status: "Refunded", refundDate: { $gte: sixMonthsStart, $lte: endOfMonth } });
@@ -236,12 +248,12 @@ class FinanceService {
         if (inv.status !== "Paid") return;
         rev += this._getDistributedAmount(inv.totalAmount, inv.title, sDate, eDate, new Date(inv.createdAt));
       });
-      
+
       // Cộng cọc giữ chỗ (thu trong tháng này)
       rev += incDepsForChart.filter(d => d.createdAt >= sDate && d.createdAt <= eDate).reduce((s, x) => s + x.amount, 0);
 
       const exp = tixForChart.filter(t => t.transactionDate >= sDate && t.transactionDate <= eDate).reduce((s, x) => s + x.amount, 0) +
-                  refDepsForChart.filter(d => d.refundDate >= sDate && d.refundDate <= eDate).reduce((s, x) => s + x.amount, 0);
+        refDepsForChart.filter(d => d.refundDate >= sDate && d.refundDate <= eDate).reduce((s, x) => s + x.amount, 0);
 
       chartData.push({
         month: `T${m}/${y.toString().slice(-2)}`,
@@ -272,11 +284,11 @@ class FinanceService {
       }));
 
     return {
-      summary: { 
-        totalInflow: totalRevenue, 
-        totalOutflow: totalExpense, 
-        netCashFlow: netProfit, 
-        totalDebt 
+      summary: {
+        totalInflow: totalRevenue,
+        totalOutflow: totalExpense,
+        netCashFlow: netProfit,
+        totalDebt
       },
       revenueBreakdown,
       chartData,
@@ -333,7 +345,7 @@ class FinanceService {
     // --- Bóc tách Định kỳ & Trả trước ---
     periodicInvoices.forEach(inv => {
       const isPrepaid = inv.title && inv.title.toLowerCase().includes("trả trước");
-      
+
       summary.expectedRevenue += inv.totalAmount;
       if (inv.status === "Paid") summary.actualCollected += inv.totalAmount;
       if (inv.status === "Unpaid") summary.totalDebt += inv.totalAmount;
