@@ -42,6 +42,70 @@ const getLatestIndex = async (roomId, utilityId) => {
   return latest ? { newIndex: latest.newIndex, reading: latest } : { newIndex: 0, reading: null };
 };
 
+const getEffectiveSettlementType = (liquidation) => {
+  if (liquidation?.settlementType) return liquidation.settlementType;
+  return liquidation?.totalSettlement >= 0 ? "refund" : "collect";
+};
+
+const isSettlementPaid = async (liquidation) => {
+  if (!liquidation) return false;
+  const settlementType = getEffectiveSettlementType(liquidation);
+
+  if (settlementType === "collect") {
+    if (liquidation.invoiceId?.status) return liquidation.invoiceId.status === "Paid";
+    if (!liquidation.invoiceId) return false;
+    const invoice = await InvoicePeriodic.findById(liquidation.invoiceId).select("status");
+    return invoice?.status === "Paid";
+  }
+
+  if (settlementType === "refund") {
+    if (liquidation.financialTicketId?.status) return liquidation.financialTicketId.status === "Paid";
+    if (!liquidation.financialTicketId) return false;
+    const ticket = await FinancialTicket.findById(liquidation.financialTicketId).select("status");
+    return ticket?.status === "Paid";
+  }
+
+  return false;
+};
+
+const completeLiquidation = async (liquidation) => {
+  if (!liquidation || liquidation.status === "completed") return;
+
+  liquidation.status = "completed";
+  await liquidation.save();
+
+  const contract = await Contract.findById(liquidation.contractId);
+  if (contract && contract.status !== "terminated") {
+    contract.status = "terminated";
+    await contract.save();
+  }
+
+  if (contract?.roomId) {
+    const room = await Room.findById(contract.roomId);
+    if (room) {
+      const allRoomContracts = await Contract.find({ roomId: room._id }).select("_id");
+      const boundContractIds = new Set(allRoomContracts.map((c) => c._id.toString()));
+
+      const floatingDeposits = await Deposit.find({ room: room._id, status: "Held" });
+      const hasFloatingDeposit = floatingDeposits.some((d) => {
+        if (!d.contractId) return true;
+        if (!boundContractIds.has(d.contractId.toString())) return true;
+        return false;
+      });
+
+      room.status = hasFloatingDeposit ? "Deposited" : "Available";
+      await room.save();
+    }
+  }
+};
+
+const syncLiquidationCompletion = async (liquidation) => {
+  if (!liquidation || liquidation.status === "completed") return liquidation;
+  const paid = await isSettlementPaid(liquidation);
+  if (paid) await completeLiquidation(liquidation);
+  return liquidation;
+};
+
 // ─────────────────────────────────────────────
 // POST /liquidations/create
 // ─────────────────────────────────────────────
@@ -395,16 +459,24 @@ exports.createLiquidation = async (req, res) => {
 
     // ── 9. Gửi email thông báo cho tenant ────────────────────────────────
     try {
-      const tenantEmail = contract.tenantId?.email;
+      let tenantEmail = contract.tenantId?.email;
+      let tenantName = contract.tenantId?.username;
+
+      if (!tenantEmail && contract.tenantId) {
+        const tenantId = contract.tenantId._id || contract.tenantId;
+        const tenant = await User.findById(tenantId).select("email username").lean();
+        tenantEmail = tenant?.email || tenantEmail;
+        tenantName = tenant?.username || tenantName;
+      }
+
       if (tenantEmail && EMAIL_TEMPLATES.LIQUIDATION_SETTLEMENT) {
-        // Với collect (A<0): dùng liquidationType "violation" để email hiện "cần thanh toán thêm"
-        // Với refund (A>=0): dùng "force_majeure" để email hiện "số tiền được hoàn lại"
-        const emailType = settlementType === "refund" ? "force_majeure" : "violation";
+        // Dùng liquidationType để phân biệt thông báo vi phạm / bất khả kháng
+        const emailType = liquidationType;
         await sendEmail(
           tenantEmail,
           EMAIL_TEMPLATES.LIQUIDATION_SETTLEMENT.subject,
           EMAIL_TEMPLATES.LIQUIDATION_SETTLEMENT.getHtml(
-            contract.tenantId?.username || "Quý khách",
+            tenantName || "Quý khách",
             room.name,
             typeLabel,
             liqDate.toLocaleDateString("vi-VN"),
@@ -452,8 +524,8 @@ exports.getLiquidationByContract = async (req, res) => {
     const { contractId } = req.params;
     const liquidation = await ContractLiquidation.findOne({ contractId })
       .populate("contractId", "contractCode roomId tenantId startDate endDate")
-      .populate("invoiceId")
-      .populate("financialTicketId")
+      .populate("invoiceId", "status")
+      .populate("financialTicketId", "status")
       .populate({
         path: "meterReadingIds",
         populate: { path: "utilityId", select: "name serviceName" },
@@ -466,6 +538,7 @@ exports.getLiquidationByContract = async (req, res) => {
       });
     }
 
+    await syncLiquidationCompletion(liquidation);
     res.status(200).json({ success: true, data: liquidation });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -486,8 +559,8 @@ exports.getLiquidationById = async (req, res) => {
           { path: "tenantId", select: "username email phoneNumber" },
         ],
       })
-      .populate("invoiceId")
-      .populate("financialTicketId")
+      .populate("invoiceId", "status")
+      .populate("financialTicketId", "status")
       .populate({
         path: "meterReadingIds",
         populate: { path: "utilityId", select: "name serviceName" },
@@ -499,6 +572,7 @@ exports.getLiquidationById = async (req, res) => {
         .json({ success: false, message: "Không tìm thấy bản ghi thanh lý." });
     }
 
+    await syncLiquidationCompletion(liquidation);
     res.status(200).json({ success: true, data: liquidation });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -704,7 +778,14 @@ exports.getAllLiquidations = async (req, res) => {
           { path: "tenantId", select: "username email" },
         ],
       })
+      .populate("invoiceId", "status")
+      .populate("financialTicketId", "status")
       .sort({ createdAt: -1 });
+
+    for (const liquidation of liquidations) {
+      // eslint-disable-next-line no-await-in-loop
+      await syncLiquidationCompletion(liquidation);
+    }
 
     res.status(200).json({
       success: true,
