@@ -369,10 +369,7 @@ exports.createLiquidation = async (req, res) => {
     });
     await liquidation.save({ session });
 
-    // ── 8. Kết thúc hợp đồng & cập nhật deposit / phòng ─────────────────
-    contract.status = "terminated";
-    await contract.save({ session });
-
+    // ── 8. Cập nhật deposit ─────────────────
     if (contract.depositId) {
       const deposit = await Deposit.findById(
         contract.depositId._id || contract.depositId
@@ -456,7 +453,11 @@ exports.getLiquidationByContract = async (req, res) => {
     const liquidation = await ContractLiquidation.findOne({ contractId })
       .populate("contractId", "contractCode roomId tenantId startDate endDate")
       .populate("invoiceId")
-      .populate("meterReadingIds");
+      .populate("financialTicketId")
+      .populate({
+        path: "meterReadingIds",
+        populate: { path: "utilityId", select: "name serviceName" },
+      });
 
     if (!liquidation) {
       return res.status(404).json({
@@ -486,7 +487,11 @@ exports.getLiquidationById = async (req, res) => {
         ],
       })
       .populate("invoiceId")
-      .populate("meterReadingIds");
+      .populate("financialTicketId")
+      .populate({
+        path: "meterReadingIds",
+        populate: { path: "utilityId", select: "name serviceName" },
+      });
 
     if (!liquidation) {
       return res
@@ -497,6 +502,75 @@ exports.getLiquidationById = async (req, res) => {
     res.status(200).json({ success: true, data: liquidation });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ─────────────────────────────────────────────
+// PATCH /liquidations/:id/status — Cập nhật trạng thái thanh lý
+// ─────────────────────────────────────────────
+exports.updateLiquidationStatus = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { id } = req.params;
+    const { status } = req.body || {};
+
+    if (!status || !["pending_owner", "pending_accountant", "completed"].includes(status)) {
+      throw new Error("Trạng thái không hợp lệ.");
+    }
+
+    const liquidation = await ContractLiquidation.findById(id).session(session);
+    if (!liquidation) throw new Error("Không tìm thấy bản ghi thanh lý.");
+
+    liquidation.status = status;
+    await liquidation.save({ session });
+
+    if (status === "completed") {
+      const contract = await Contract.findById(liquidation.contractId).session(session);
+      if (contract && contract.status !== "terminated") {
+        contract.status = "terminated";
+        await contract.save({ session });
+      }
+
+      if (contract?.roomId) {
+        const room = await Room.findById(contract.roomId).session(session);
+        if (room) {
+          const allRoomContracts = await Contract.find({ roomId: room._id })
+            .select("_id")
+            .session(session);
+          const boundContractIds = new Set(allRoomContracts.map((c) => c._id.toString()));
+
+          const floatingDeposits = await Deposit.find({ room: room._id, status: "Held" })
+            .session(session);
+          const hasFloatingDeposit = floatingDeposits.some((d) => {
+            if (!d.contractId) return true;
+            if (!boundContractIds.has(d.contractId.toString())) return true;
+            return false;
+          });
+
+          room.status = hasFloatingDeposit ? "Deposited" : "Available";
+          await room.save({ session });
+        }
+      }
+    }
+
+    await session.commitTransaction();
+    session.endSession();
+
+    res.status(200).json({
+      success: true,
+      message: "Cập nhật trạng thái thanh lý thành công.",
+      data: liquidation,
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
+    console.error("[UPDATE_LIQUIDATION_STATUS] Error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Lỗi server khi cập nhật trạng thái thanh lý.",
+    });
   }
 };
 
@@ -530,8 +604,8 @@ exports.restoreLiquidation = async (req, res) => {
       throw new Error("Không tìm thấy hợp đồng liên kết.");
     }
 
-    // Chỉ cho phép hoàn tác nếu hợp đồng đang ở trạng thái terminated
-    if (contract.status !== "terminated") {
+    // Cho phép hoàn tác nếu hợp đồng đang active (chưa kết thúc) hoặc terminated
+    if (!["active", "terminated"].includes(contract.status)) {
       throw new Error(
         `Hợp đồng đang ở trạng thái "${contract.status}", không thể hoàn tác thanh lý.`
       );
