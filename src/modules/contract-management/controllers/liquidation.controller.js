@@ -188,6 +188,8 @@ exports.createLiquidation = async (req, res) => {
     const depositAmount = contract.depositId ? toNumber(contract.depositId.amount) : 0;
 
     let remainingRentAmount = 0;
+    let rentDebtAmount = 0;
+    let rentDebtDays = 0;
     if (liquidationType === "force_majeure") {
       const paidInvoices = await InvoicePeriodic.find({ contractId, status: "Paid" })
         .sort({ createdAt: 1 })
@@ -231,9 +233,95 @@ exports.createLiquidation = async (req, res) => {
       }
     }
 
+    if (liquidationType === "violation") {
+      const paidInvoices = await InvoicePeriodic.find({ contractId, status: "Paid" })
+        .sort({ createdAt: 1 })
+        .session(session)
+        .lean();
+
+      const parseVNDate = (str) => {
+        const [d, m, y] = str.split("/").map(Number);
+        return new Date(y, m - 1, d, 12, 0, 0);
+      };
+
+      const parsePeriodFromText = (text) => {
+        const match = text.match(/từ (\d{2}\/\d{2}\/\d{4}) đến (\d{2}\/\d{2}\/\d{4})/i);
+        if (!match) return null;
+        return { from: parseVNDate(match[1]), to: parseVNDate(match[2]) };
+      };
+
+      const paidRentPeriods = [];
+
+      for (const invoice of paidInvoices) {
+        for (const item of invoice.items) {
+          const nameLC = item.itemName.toLowerCase();
+          if (!nameLC.includes("tiền thuê") && !nameLC.includes("tiền phòng")) continue;
+          if (item.amount <= 0) continue;
+
+          let period = parsePeriodFromText(item.itemName);
+
+          if (!period &&
+            (invoice.invoiceCode?.includes("PREPAID") || invoice.title?.toLowerCase().includes("trả trước") || item.usage > 1)) {
+            const isFirstDay = new Date(contract.startDate).getDate() === 1;
+            let fromDt = new Date(contract.startDate);
+            fromDt.setHours(12, 0, 0, 0);
+
+            if (!isFirstDay) {
+              fromDt = new Date(fromDt.getFullYear(), fromDt.getMonth() + 1, 1);
+              fromDt.setHours(12, 0, 0, 0);
+            }
+
+            const toDt = new Date(fromDt.getFullYear(), fromDt.getMonth() + (item.usage >= 1 ? item.usage : 1), 0);
+            toDt.setHours(12, 0, 0, 0);
+
+            period = { from: fromDt, to: toDt };
+          }
+
+          if (!period) {
+            const fromDt = new Date(invoice.dueDate || invoice.createdAt);
+            fromDt.setHours(12, 0, 0, 0);
+            const toDt = new Date(fromDt);
+            toDt.setMonth(toDt.getMonth() + 1);
+            toDt.setDate(toDt.getDate() - 1);
+            toDt.setHours(12, 0, 0, 0);
+
+            period = { from: fromDt, to: toDt };
+          }
+
+          const { from, to } = period;
+          paidRentPeriods.push({ from, to });
+        }
+      }
+
+      const startDt = new Date(contract.startDate);
+      startDt.setHours(12, 0, 0, 0);
+      const endDt = new Date(liqDate);
+      endDt.setHours(12, 0, 0, 0);
+
+      if (endDt >= startDt) {
+        for (let d = new Date(startDt); d <= endDt; d.setDate(d.getDate() + 1)) {
+          const ts = d.getTime();
+          let isPaid = false;
+
+          for (const p of paidRentPeriods) {
+            if (ts >= p.from.getTime() && ts <= p.to.getTime()) {
+              isPaid = true;
+              break;
+            }
+          }
+
+          if (!isPaid) {
+            rentDebtDays++;
+          }
+        }
+      }
+
+      rentDebtAmount = rentDebtDays * Math.round(roomPrice / 30);
+    }
+
     // ── 5. Tính A theo loại thanh lý ──────────────────────────────────────
     // force_majeure: A = (hoàn cọc + hoàn thuê còn dư) - (điện + nước)
-    // violation:     cọc = 0, thuê còn dư = 0, A = -(điện + nước) [tenant luôn phải trả]
+    // violation:     cọc = 0, thuê còn dư = 0, A = -(tiền thuê còn nợ + điện + nước) [tenant luôn phải trả]
     let depositRefundAmount = 0;
     let totalSettlement = 0;
 
@@ -246,7 +334,7 @@ exports.createLiquidation = async (req, res) => {
       depositRefundAmount = 0;
       remainingRentAmount = 0;
       // Tenant phải trả tiền điện nước cuối kỳ
-      totalSettlement = -utilityCost; // âm = tenant phải trả
+      totalSettlement = -(rentDebtAmount + utilityCost); // âm = tenant phải trả
     }
 
     // ── 6. Xác định loại tài chính & tạo chứng từ ────────────────────────
@@ -367,7 +455,16 @@ exports.createLiquidation = async (req, res) => {
           isIndex: true,
         });
       } else {
-        // violation: cọc tịch thu, không hoàn thuê, chỉ thu điện nước
+        // violation: cọc tịch thu, thu tiền thuê còn nợ + điện nước
+        if (rentDebtDays > 0) {
+          items.push({
+            itemName: `Tiền thuê còn nợ (${rentDebtDays} ngày)`,
+            usage: rentDebtDays,
+            unitPrice: Math.round(roomPrice / 30),
+            amount: rentDebtAmount,
+            isIndex: false,
+          });
+        }
         items.push({
           itemName: "Tiền cọc bị tịch thu (vi phạm nội quy)",
           usage: 1,
@@ -416,7 +513,7 @@ exports.createLiquidation = async (req, res) => {
       images,
       depositRefundAmount,
       remainingRentAmount: liquidationType === "force_majeure" ? remainingRentAmount : null,
-      rentDebtAmount: null,
+      rentDebtAmount: liquidationType === "violation" ? rentDebtAmount : null,
       totalSettlement,
       settlementType,
       // invoiceId:
@@ -524,8 +621,8 @@ exports.getLiquidationByContract = async (req, res) => {
     const { contractId } = req.params;
     const liquidation = await ContractLiquidation.findOne({ contractId })
       .populate("contractId", "contractCode roomId tenantId startDate endDate")
-      .populate("invoiceId", "status")
-      .populate("financialTicketId", "status")
+      .populate("invoiceId", "status items totalAmount")
+      .populate("financialTicketId", "status items amount totalAmount")
       .populate({
         path: "meterReadingIds",
         populate: { path: "utilityId", select: "name serviceName" },
@@ -559,8 +656,8 @@ exports.getLiquidationById = async (req, res) => {
           { path: "tenantId", select: "username email phoneNumber" },
         ],
       })
-      .populate("invoiceId", "status")
-      .populate("financialTicketId", "status")
+      .populate("invoiceId", "status items totalAmount")
+      .populate("financialTicketId", "status items amount totalAmount")
       .populate({
         path: "meterReadingIds",
         populate: { path: "utilityId", select: "name serviceName" },
@@ -778,8 +875,8 @@ exports.getAllLiquidations = async (req, res) => {
           { path: "tenantId", select: "username email" },
         ],
       })
-      .populate("invoiceId", "status")
-      .populate("financialTicketId", "status")
+      .populate("invoiceId", "status items totalAmount")
+      .populate("financialTicketId", "status items amount totalAmount")
       .sort({ createdAt: -1 });
 
     for (const liquidation of liquidations) {
