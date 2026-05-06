@@ -21,19 +21,31 @@ class FinanceService {
   _getDistributedAmount(amount, text, reportStart, reportEnd, createdAt) {
     const range = this._parseRange(text);
     if (range) {
-      const itemStart = range.start;
-      const itemEnd = range.end;
+      const { start: itemStart, end: itemEnd } = range;
 
-      // Tổng số ngày của kỳ hạn này
-      const totalDays = Math.max(1, Math.ceil((itemEnd - itemStart) / (1000 * 60 * 60 * 24)) + 1);
-
-      // Số ngày giao thoa với kỳ báo cáo
+      // Mốc thực tế giao thoa
       const overlapS = new Date(Math.max(itemStart, reportStart));
       const overlapE = new Date(Math.min(itemEnd, reportEnd));
-
       if (overlapS > overlapE) return 0;
 
-      const overlapDays = Math.ceil((overlapE - overlapS) / (1000 * 60 * 60 * 24)) + 1;
+      // --- PHÂN BỔ THEO THÁNG (Ưu tiên nếu cả kỳ hạn và báo cáo đều tròn tháng) ---
+      const isStartOfMonth = itemStart.getDate() === 1;
+      const isEndOfMonth = new Date(itemEnd.getFullYear(), itemEnd.getMonth(), itemEnd.getDate() + 1).getDate() === 1;
+      const isReportStartOfMonth = reportStart.getDate() === 1;
+      const isReportEndOfMonth = new Date(reportEnd.getFullYear(), reportEnd.getMonth(), reportEnd.getDate() + 1).getDate() === 1;
+
+      if (isStartOfMonth && isEndOfMonth && isReportStartOfMonth && isReportEndOfMonth) {
+        const totalMonths = (itemEnd.getFullYear() - itemStart.getFullYear()) * 12 + (itemEnd.getMonth() - itemStart.getMonth()) + 1;
+        const monthsInOverlap = (overlapE.getFullYear() - overlapS.getFullYear()) * 12 + (overlapE.getMonth() - overlapS.getMonth()) + 1;
+        
+        if (totalMonths > 0) {
+          return (amount / totalMonths) * monthsInOverlap;
+        }
+      }
+
+      // --- PHÂN BỔ THEO NGÀY (Dùng cho các trường hợp lẻ ngày) ---
+      const totalDays = Math.max(1, Math.round((itemEnd - itemStart) / (1000 * 60 * 60 * 24)));
+      const overlapDays = Math.round((overlapE - overlapS) / (1000 * 60 * 60 * 24));
       return (amount * overlapDays) / totalDays;
     }
 
